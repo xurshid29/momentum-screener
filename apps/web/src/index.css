@@ -1,0 +1,37 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  background: #0a0a0a;
+  color: #e0e0e0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Fresh-news row highlight (matches the bash script's bold-yellow row). */
+.screener-row-fresh > td {
+  background: rgba(250, 173, 20, 0.12) !important;
+  font-weight: 600;
+}
+
+/* react-resizable-panels handles — make them discoverable on hover. */
+[data-panel-resize-handle-enabled]:hover,
+[data-panel-resize-handle-enabled][data-resize-handle-active] {
+  background: #1890ff !important;
+}
+
+/* Prevent the white flash when TradingView's iframe mounts before its dark
+   theme paints. The iframe defaults to white (its <body> bg) before TV's
+   internal CSS loads. */
+.tv-slot iframe {
+  background: #1a1a1a !important;
+}

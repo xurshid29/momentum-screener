@@ -1,0 +1,22 @@
+{
+  "name": "trading",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Stock analysis and trading tool",
+  "type": "module",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=apps/api & npm run dev --workspace=apps/web",
+    "dev:api": "npm run dev --workspace=apps/api",
+    "dev:web": "npm run dev --workspace=apps/web",
+    "build": "npm run build --workspaces",
+    "db:up": "dbmate up",
+    "db:down": "dbmate down",
+    "db:status": "dbmate status"
+  },
+  "engines": {
+    "node": ">=25.0.0"
+  }
+}
