@@ -1,15 +1,18 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { ChartSlot } from './ChartSlot';
 import { useSelection } from '../../context/SelectionContext';
+import { useLayout, type ChartCount } from '../../context/LayoutContext';
 import { prefsApi } from '../../api/prefs';
 import type { ChartPref } from '../../api/types';
 
 const DEFAULT_INTERVALS = ['1', '5', '15', '60'];
+const SLOT_INDICES = [1, 2, 3, 4] as const;
 
 export function ChartGrid() {
   const { selected } = useSelection();
+  const { chartCount } = useLayout();
   const { data: serverPrefs } = useQuery({
     queryKey: ['prefs', 'charts'],
     queryFn: () => prefsApi.getCharts(),
@@ -22,11 +25,11 @@ export function ChartGrid() {
     4: { slot: 4, ticker: null, interval: DEFAULT_INTERVALS[3], follow_selection: true },
   }));
 
-  const hydrated = useRef(false);
+  const hydratedPrefs = useRef(false);
   useEffect(() => {
-    if (hydrated.current || !serverPrefs) return;
+    if (hydratedPrefs.current || !serverPrefs) return;
     if (serverPrefs.length === 0) {
-      hydrated.current = true;
+      hydratedPrefs.current = true;
       return;
     }
     setPrefs((prev) => {
@@ -41,15 +44,17 @@ export function ChartGrid() {
       }
       return next;
     });
-    hydrated.current = true;
+    hydratedPrefs.current = true;
   }, [serverPrefs]);
 
+  // Selection follow — only update visible slots so hidden slots keep state.
   useEffect(() => {
     if (!selected) return;
     setPrefs((prev) => {
       const next = { ...prev };
       let changed = false;
-      for (const slot of [1, 2, 3, 4]) {
+      for (const slot of SLOT_INDICES) {
+        if (slot > chartCount) continue;
         if (next[slot].follow_selection && next[slot].ticker !== selected) {
           next[slot] = { ...next[slot], ticker: selected };
           changed = true;
@@ -57,13 +62,13 @@ export function ChartGrid() {
       }
       return changed ? next : prev;
     });
-  }, [selected]);
+  }, [selected, chartCount]);
 
   const saveTimer = useRef<number | null>(null);
-  const queueSave = (latest: typeof prefs) => {
+  const queueSavePrefs = (latest: typeof prefs) => {
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => {
-      const arr = [1, 2, 3, 4].map((s) => latest[s]);
+      const arr = SLOT_INDICES.map((s) => latest[s]);
       prefsApi.putCharts(arr).catch(() => {});
     }, 500);
   };
@@ -71,39 +76,89 @@ export function ChartGrid() {
   const onIntervalChange = (slot: number, interval: string) => {
     setPrefs((prev) => {
       const next = { ...prev, [slot]: { ...prev[slot], interval } };
-      queueSave(next);
+      queueSavePrefs(next);
       return next;
     });
   };
 
-  const slot = (n: number) => (
-    <ChartSlot
-      slotIndex={n}
-      ticker={prefs[n].ticker}
-      interval={prefs[n].interval}
-      onIntervalChange={(i) => onIntervalChange(n, i)}
-    />
+  const slot = useMemo(
+    () => (n: number) => (
+      <ChartSlot
+        slotIndex={n}
+        ticker={prefs[n].ticker}
+        interval={prefs[n].interval}
+        onIntervalChange={(i) => onIntervalChange(n, i)}
+      />
+    ),
+    [prefs],
   );
 
   return (
     <div style={{ width: '100%', height: '100%' }}>
-      <PanelGroup direction="vertical" autoSaveId="ms-charts-v">
+      <ChartLayout count={chartCount} renderSlot={slot} />
+    </div>
+  );
+}
+
+interface ChartLayoutProps {
+  count: ChartCount;
+  renderSlot: (n: number) => React.ReactNode;
+}
+
+// react-resizable-panels persists sizes by autoSaveId — suffixing the count
+// makes each layout remember its own pane sizes independently.
+function ChartLayout({ count, renderSlot }: ChartLayoutProps) {
+  const HHandle = <PanelResizeHandle style={{ width: 4, background: '#0a0a0a' }} />;
+  const VHandle = <PanelResizeHandle style={{ height: 4, background: '#0a0a0a' }} />;
+
+  if (count === 1) {
+    return <div style={{ width: '100%', height: '100%' }}>{renderSlot(1)}</div>;
+  }
+
+  if (count === 2) {
+    return (
+      <PanelGroup direction="horizontal" autoSaveId="ms-charts-h-2">
+        <Panel defaultSize={50} minSize={20}>{renderSlot(1)}</Panel>
+        {HHandle}
+        <Panel defaultSize={50} minSize={20}>{renderSlot(2)}</Panel>
+      </PanelGroup>
+    );
+  }
+
+  if (count === 3) {
+    return (
+      <PanelGroup direction="vertical" autoSaveId="ms-charts-v-3">
+        <Panel defaultSize={50} minSize={20}>{renderSlot(1)}</Panel>
+        {VHandle}
         <Panel defaultSize={50} minSize={20}>
-          <PanelGroup direction="horizontal" autoSaveId="ms-charts-h-top">
-            <Panel defaultSize={50} minSize={20}>{slot(1)}</Panel>
-            <PanelResizeHandle style={{ width: 4, background: '#0a0a0a' }} />
-            <Panel defaultSize={50} minSize={20}>{slot(2)}</Panel>
-          </PanelGroup>
-        </Panel>
-        <PanelResizeHandle style={{ height: 4, background: '#0a0a0a' }} />
-        <Panel defaultSize={50} minSize={20}>
-          <PanelGroup direction="horizontal" autoSaveId="ms-charts-h-bottom">
-            <Panel defaultSize={50} minSize={20}>{slot(3)}</Panel>
-            <PanelResizeHandle style={{ width: 4, background: '#0a0a0a' }} />
-            <Panel defaultSize={50} minSize={20}>{slot(4)}</Panel>
+          <PanelGroup direction="horizontal" autoSaveId="ms-charts-h-3-bottom">
+            <Panel defaultSize={50} minSize={20}>{renderSlot(2)}</Panel>
+            {HHandle}
+            <Panel defaultSize={50} minSize={20}>{renderSlot(3)}</Panel>
           </PanelGroup>
         </Panel>
       </PanelGroup>
-    </div>
+    );
+  }
+
+  // count === 4
+  return (
+    <PanelGroup direction="vertical" autoSaveId="ms-charts-v-4">
+      <Panel defaultSize={50} minSize={20}>
+        <PanelGroup direction="horizontal" autoSaveId="ms-charts-h-4-top">
+          <Panel defaultSize={50} minSize={20}>{renderSlot(1)}</Panel>
+          {HHandle}
+          <Panel defaultSize={50} minSize={20}>{renderSlot(2)}</Panel>
+        </PanelGroup>
+      </Panel>
+      {VHandle}
+      <Panel defaultSize={50} minSize={20}>
+        <PanelGroup direction="horizontal" autoSaveId="ms-charts-h-4-bottom">
+          <Panel defaultSize={50} minSize={20}>{renderSlot(3)}</Panel>
+          {HHandle}
+          <Panel defaultSize={50} minSize={20}>{renderSlot(4)}</Panel>
+        </PanelGroup>
+      </Panel>
+    </PanelGroup>
   );
 }

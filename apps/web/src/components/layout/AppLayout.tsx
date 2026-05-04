@@ -1,15 +1,17 @@
 import { Outlet, useNavigate } from 'react-router-dom';
-import { Layout, Dropdown, Space, Avatar, Typography } from 'antd';
+import { Layout, Dropdown, Space, Avatar, Typography, Segmented } from 'antd';
 import { UserOutlined, LogoutOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { useAuth } from '../../context/AuthContext';
 import { AlertsToggle } from './AlertsToggle';
+import { useLayout, type ChartCount } from '../../context/LayoutContext';
 
 const { Header, Content } = Layout;
 const { Text } = Typography;
 
 export function AppLayout() {
   const { user, logout } = useAuth();
+  const { chartCount, setChartCount } = useLayout();
   const navigate = useNavigate();
 
   const handleLogout = () => {
@@ -37,6 +39,15 @@ export function AppLayout() {
       >
         <Text strong style={{ color: '#e0e0e0', letterSpacing: 1 }}>MOMENTUM SCREENER</Text>
         <Space size="middle">
+          <Space size={6}>
+            <Text type="secondary" style={{ fontSize: 11 }}>Charts</Text>
+            <Segmented<ChartCount>
+              size="small"
+              value={chartCount}
+              options={[1, 2, 3, 4].map((v) => ({ label: String(v), value: v as ChartCount }))}
+              onChange={setChartCount}
+            />
+          </Space>
           <AlertsToggle />
           <Dropdown menu={{ items: menuItems }} placement="bottomRight">
           <Space style={{ cursor: 'pointer', color: '#e0e0e0' }}>

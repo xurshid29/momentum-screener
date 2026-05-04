@@ -202,16 +202,35 @@ function DetailsTab({ ticker, meta, news }: DetailsTabProps) {
       </div>
 
       {sub && (
-        <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 12 }}>{sub}</Text>
+        <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 20 }}>{sub}</Text>
       )}
 
-      {/* Today's news headlines */}
-      <div style={{ marginBottom: 12 }}>
-        <Text strong style={{ color: '#e0e0e0', fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.5 }}>
-          News Headline
-        </Text>
+      {/* 6 columns × 2 rows. Items listed top-to-bottom within each column,
+          then left-to-right across columns. Shs Out intentionally omitted —
+          Float carries the same trading signal. */}
+      <StatsGrid
+        items={[
+          { label: 'Market Cap',    value: fmtMcap(meta?.mcap_m) },
+          { label: 'Float',         value: fmtFloat(meta?.float_m) },
+          { label: 'Volume',        value: fmtVolume(meta?.volume) },
+          { label: 'Avg Vol',       value: fmtVolume(meta?.avg_volume) },
+          { label: 'Short Float',   value: <Coloured color={colorShortFloat(num(meta?.short_float_pct))}>{fmtPct(meta?.short_float_pct)}</Coloured> },
+          { label: 'Short Ratio',   value: fmtNumber(meta?.short_ratio, 2) },
+          { label: 'RVol Day',      value: fmtRelVol(meta?.rel_volume) },
+          { label: 'RVol 5m',       value: fmtBigPct(meta?.rel_vol_5min) },
+          { label: 'Insider Own',   value: fmtPct(meta?.insider_own_pct) },
+          { label: 'Insider Trans', value: <Coloured color={colorInsiderTrans(num(meta?.insider_trans_pct))}>{fmtPct(meta?.insider_trans_pct)}</Coloured> },
+          { label: 'Inst Own',      value: fmtPct(meta?.inst_own_pct) },
+          { label: 'Inst Trans',    value: <Coloured color={colorInstTrans(num(meta?.inst_trans_pct))}>{fmtPct(meta?.inst_trans_pct)}</Coloured> },
+        ]}
+      />
+
+      {/* Today's news headlines — placed below stats so the price/structural
+          numbers are immediately visible without scrolling. */}
+      <div style={{ marginTop: 20 }}>
+        <SectionTitle>News Headline</SectionTitle>
         {news.length === 0 ? (
-          <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
+          <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
             No news yet
           </Text>
         ) : (
@@ -246,39 +265,6 @@ function DetailsTab({ ticker, meta, news }: DetailsTabProps) {
           />
         )}
       </div>
-
-      {/* Side-by-side at content width; flex-wrap stacks them when the panel
-          narrows below the combined natural width. */}
-      <div style={{ display: 'flex', gap: 48, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-        <div>
-          <SectionTitle>Stats</SectionTitle>
-          <StatsGrid
-            items={[
-              // Row-major order — index modulo COLUMNS picks the column group.
-              { label: 'Market Cap', value: fmtMcap(meta?.mcap_m) },
-              { label: 'Volume',     value: fmtVolume(meta?.volume) },
-              { label: 'RVol Day',   value: fmtRelVol(meta?.rel_volume) },
-              { label: 'Shs Out',    value: fmtFloat(meta?.shares_out_m) },
-              { label: 'Avg Vol',    value: fmtVolume(meta?.avg_volume) },
-              { label: 'RVol 5m',    value: fmtBigPct(meta?.rel_vol_5min) },
-              { label: 'Float',      value: fmtFloat(meta?.float_m) },
-            ]}
-          />
-        </div>
-        <div>
-          <SectionTitle>Sentiment</SectionTitle>
-          <StatsGrid
-            items={[
-              { label: 'Short Float',   value: <Coloured color={colorShortFloat(num(meta?.short_float_pct))}>{fmtPct(meta?.short_float_pct)}</Coloured> },
-              { label: 'Insider Own',   value: fmtPct(meta?.insider_own_pct) },
-              { label: 'Inst Own',      value: fmtPct(meta?.inst_own_pct) },
-              { label: 'Short Ratio',   value: fmtNumber(meta?.short_ratio, 2) },
-              { label: 'Insider Trans', value: <Coloured color={colorInsiderTrans(num(meta?.insider_trans_pct))}>{fmtPct(meta?.insider_trans_pct)}</Coloured> },
-              { label: 'Inst Trans',    value: <Coloured color={colorInstTrans(num(meta?.inst_trans_pct))}>{fmtPct(meta?.inst_trans_pct)}</Coloured> },
-            ]}
-          />
-        </div>
-      </div>
     </div>
   );
 }
@@ -293,7 +279,7 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
         textTransform: 'uppercase',
         letterSpacing: 0.5,
         display: 'block',
-        marginTop: 14,
+        marginTop: 0,
         marginBottom: 6,
       }}
     >
@@ -343,17 +329,24 @@ interface StatsGridProps {
 }
 
 function StatsGrid({ items }: StatsGridProps) {
-  // Three label/value pairs per row. Columns 1+2 hold pair A, 4+5 pair B,
-  // 7+8 pair C. Columns 3 and 6 are fixed-width spacers between groups so the
-  // gap between pairs is wider than the gap within a pair. The 1fr filler at
-  // the end (col 9) absorbs any leftover panel width.
-  const COLUMNS = 3;
+  // 6 columns × 2 rows, column-major layout. Each "column" is a label+value
+  // pair; pairs are separated by a fixed-width spacer so the gap between pairs
+  // reads wider than the in-pair gap. A `1fr` filler trailing the last pair
+  // absorbs leftover panel width.
+  const COLUMNS = 6;
+  const ROWS = 2;
+  const trackParts: string[] = [];
+  for (let i = 0; i < COLUMNS; i++) {
+    trackParts.push('max-content', 'max-content');
+    if (i < COLUMNS - 1) trackParts.push('28px');
+  }
+  trackParts.push('1fr');
+
   return (
     <div
       style={{
         display: 'grid',
-        gridTemplateColumns:
-          'max-content max-content 28px max-content max-content 28px max-content max-content 1fr',
+        gridTemplateColumns: trackParts.join(' '),
         columnGap: 12,
         rowGap: 6,
         alignItems: 'baseline',
@@ -361,10 +354,10 @@ function StatsGrid({ items }: StatsGridProps) {
       }}
     >
       {items.map((it, i) => {
-        const colGroup = i % COLUMNS;        // 0, 1, or 2
-        const row = Math.floor(i / COLUMNS) + 1;
-        const labelCol = colGroup * 3 + 1;   // 1, 4, or 7
-        const valueCol = labelCol + 1;       // 2, 5, or 8
+        const colGroup = Math.floor(i / ROWS);
+        const row = (i % ROWS) + 1;
+        const labelCol = colGroup * 3 + 1;
+        const valueCol = labelCol + 1;
         return (
           <Fragment key={i}>
             <span style={{ color: '#888', gridColumn: labelCol, gridRow: row }}>{it.label}</span>

@@ -13,6 +13,7 @@ import screenerRouter from './routes/screener.js';
 import newsRouter from './routes/news.js';
 import prefsRouter from './routes/prefs.js';
 import { poller } from './services/poller.js';
+import { universe } from './services/universe.js';
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -26,6 +27,7 @@ app.get('/health', async (_req, res) => {
     status: dbOk ? 'ok' : 'degraded',
     database: dbOk ? 'connected' : 'disconnected',
     poller: poller.status(),
+    universe: universe.status(),
     timestamp: new Date().toISOString(),
   });
 });
@@ -48,4 +50,5 @@ app.listen(port, () => {
   console.log(`API server running at http://localhost:${port}`);
   console.log(`Health check: http://localhost:${port}/health`);
   poller.start();
+  universe.start();
 });
