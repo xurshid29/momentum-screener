@@ -41,6 +41,7 @@ export interface EnrichedRow {
   ticker: string;
   change_pct: number | null;
   float_m: number | null;
+  float_is_proxy: boolean;
   price: number | null;
   volume: number | null;
   avg_volume: number | null;
@@ -92,6 +93,7 @@ export interface HistoryRow {
   ticker: string;
   change_pct: number | null;
   float_m: number | null;
+  float_is_proxy: boolean;
   price: number | null;
   volume: number | null;
   avg_volume: number | null;

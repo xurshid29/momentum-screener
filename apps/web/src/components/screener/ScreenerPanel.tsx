@@ -65,7 +65,21 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
         },
         sorter: (a, b) => (num(a.change_pct) ?? 0) - (num(b.change_pct) ?? 0),
       },
-      { title: 'Float', dataIndex: 'float_m', key: 'float_m', width: 70, align: 'right', render: fmtFloat },
+      {
+        title: 'Float',
+        dataIndex: 'float_m',
+        key: 'float_m',
+        width: 70,
+        align: 'right',
+        render: (raw, row) =>
+          row.float_is_proxy ? (
+            <Tooltip title="Shares outstanding (Finviz did not report a Float value)">
+              <span style={{ color: '#bfbfbf' }}>{fmtFloat(raw)}<span style={{ color: '#888' }}>*</span></span>
+            </Tooltip>
+          ) : (
+            fmtFloat(raw)
+          ),
+      },
       { title: 'Price', dataIndex: 'price', key: 'price', width: 75, align: 'right', render: fmtPrice },
       { title: 'Volume', dataIndex: 'volume', key: 'volume', width: 80, align: 'right', render: fmtVolume },
       {

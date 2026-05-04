@@ -8,6 +8,10 @@ export interface ScreenerRow {
   ticker: string;
   change_pct: number | null;
   float_m: number | null;
+  // True when float_m was filled in from shares_outstanding because Finviz
+  // returned no Float value for the row. The displayed value still represents
+  // the best-available estimate of tradeable supply.
+  float_is_proxy: boolean;
   price: number | null;
   volume: number | null;
   avg_volume: number | null;
@@ -152,8 +156,25 @@ export async function fetchScreener(opts: ScreenerOptions): Promise<ScreenerRow[
     const r = ownership[i];
     if (r.length < 15) continue;
     const ticker = r[1];
-    const float_m = num(r[4]);
-    if (float_m == null || float_m <= 0 || float_m >= opts.floatMaxM) continue;
+    const rawFloat = num(r[4]);
+    const sharesOut = num(r[3]);
+    // Size cap based on best-available "tradeable supply" estimate. If Finviz
+    // returned a Float value, use it. If not (Finviz often misses Float for
+    // recent IPOs / nano-caps like CNSP), fall back to Shares Outstanding —
+    // for tiny issuers these are effectively equal anyway, and skipping these
+    // rows would silently drop legitimate momentum candidates.
+    let floatValue: number | null;
+    let floatIsProxy: boolean;
+    if (rawFloat != null && rawFloat > 0) {
+      floatValue = rawFloat;
+      floatIsProxy = false;
+    } else if (sharesOut != null && sharesOut > 0) {
+      floatValue = sharesOut;
+      floatIsProxy = true;
+    } else {
+      continue;
+    }
+    if (floatValue >= opts.floatMaxM) continue;
     const meta = metaByTicker.get(ticker);
     const avg_volume = numScaled(r[11]);   // v=131 col 11 = Avg Volume; Finviz returns this with K/M/B suffix
     const volume = num(r[14]);
@@ -163,7 +184,8 @@ export async function fetchScreener(opts: ScreenerOptions): Promise<ScreenerRow[
     out.push({
       ticker,
       change_pct: num(r[13]),
-      float_m,
+      float_m: floatValue,
+      float_is_proxy: floatIsProxy,
       price: num(r[12]),
       volume,
       avg_volume,

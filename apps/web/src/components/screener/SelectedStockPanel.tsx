@@ -128,7 +128,21 @@ export function SelectedStockPanel({ payload }: SelectedStockPanelProps) {
         },
       },
       { title: 'Volume', dataIndex: 'volume', key: 'volume', width: 80, align: 'right', render: fmtVolume },
-      { title: 'Float', dataIndex: 'float_m', key: 'float_m', width: 70, align: 'right', render: fmtFloat },
+      {
+        title: 'Float',
+        dataIndex: 'float_m',
+        key: 'float_m',
+        width: 70,
+        align: 'right',
+        render: (raw, row) =>
+          row.float_is_proxy ? (
+            <Tooltip title="Shares outstanding (Finviz did not report a Float value)">
+              <span style={{ color: '#bfbfbf' }}>{fmtFloat(raw)}<span style={{ color: '#888' }}>*</span></span>
+            </Tooltip>
+          ) : (
+            fmtFloat(raw)
+          ),
+      },
     ],
     [history],
   );
@@ -211,7 +225,16 @@ function DetailsTab({ ticker, meta, news }: DetailsTabProps) {
       <StatsGrid
         items={[
           { label: 'Market Cap',    value: fmtMcap(meta?.mcap_m) },
-          { label: 'Float',         value: fmtFloat(meta?.float_m) },
+          {
+            label: 'Float',
+            value: meta?.float_is_proxy ? (
+              <Tooltip title="Shares outstanding (Finviz did not report a Float value)">
+                <span>{fmtFloat(meta?.float_m)}<span style={{ color: '#888' }}>*</span></span>
+              </Tooltip>
+            ) : (
+              fmtFloat(meta?.float_m)
+            ),
+          },
           { label: 'Volume',        value: fmtVolume(meta?.volume) },
           { label: 'Avg Vol',       value: fmtVolume(meta?.avg_volume) },
           { label: 'Short Float',   value: <Coloured color={colorShortFloat(num(meta?.short_float_pct))}>{fmtPct(meta?.short_float_pct)}</Coloured> },

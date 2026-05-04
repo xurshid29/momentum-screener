@@ -43,7 +43,7 @@ router.get('/history', authMiddleware, async (req, res) => {
     .selectFrom('screener_results as r')
     .innerJoin('screener_cycles as c', 'c.id', 'r.cycle_id')
     .select([
-      'r.id', 'r.ticker', 'r.change_pct', 'r.float_m', 'r.price', 'r.volume',
+      'r.id', 'r.ticker', 'r.change_pct', 'r.float_m', 'r.float_is_proxy', 'r.price', 'r.volume',
       'r.avg_volume', 'r.rel_volume', 'r.vol_5min', 'r.rel_vol_5min',
       'r.mcap_m', 'r.country', 'r.company', 'r.sector', 'r.industry',
       'r.short_float_pct', 'r.short_ratio',

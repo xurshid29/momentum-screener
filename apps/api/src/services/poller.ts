@@ -10,7 +10,11 @@ import { fetchBenzingaDelta } from './benzinga.js';
 import { broadcast } from './sse.js';
 
 const DEFAULTS: ScreenerFilterSnapshot = {
-  filter: 'ind_stocksonly,sh_float_u50,sh_price_1to25,sh_relvol_o5,ta_change_20to',
+  // Note: no `sh_float_u50` here. Finviz drops rows with null Float when that
+  // filter is active, which excludes legitimate nano-cap candidates (e.g.
+  // CNSP) where Finviz hasn't computed a Float value. The float ceiling is
+  // enforced post-fetch in finviz.ts using shares_outstanding as a fallback.
+  filter: 'ind_stocksonly,sh_price_1to25,sh_relvol_o5,ta_change_20to',
   float_max_m: 35,
   top_n: 50,
   accel_threshold: 2.0,
@@ -335,6 +339,7 @@ class PollerService {
               ticker: r.ticker,
               change_pct: r.change_pct,
               float_m: r.float_m,
+              float_is_proxy: r.float_is_proxy,
               price: r.price,
               volume: r.volume,
               avg_volume: r.avg_volume,

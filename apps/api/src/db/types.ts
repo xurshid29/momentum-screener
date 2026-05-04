@@ -35,6 +35,7 @@ export interface ScreenerResultsTable {
   ticker: string;
   change_pct: number | null;
   float_m: number | null;
+  float_is_proxy: Generated<boolean>;
   price: number | null;
   volume: number | null;
   avg_volume: number | null;
