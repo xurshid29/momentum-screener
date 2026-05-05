@@ -1,0 +1,82 @@
+# Production stack for pnldash.uz.
+#
+# Topology mirrors vault-infra: postgres + app(s) + outer nginx terminating
+# TLS + certbot. The api and web images are pulled from GHCR (built by
+# .github/workflows/build-images.yml).
+#
+# Operational commands (run from /opt/pnldash on the droplet):
+#   docker compose -f docker-compose.prod.yml pull          # update images
+#   docker compose -f docker-compose.prod.yml up -d         # apply
+#   docker compose -f docker-compose.prod.yml logs -f api   # tail
+#   docker compose -f docker-compose.prod.yml down          # stop
+
+services:
+  postgres:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - pnldash_network
+
+  api:
+    image: ghcr.io/xurshid29/pnldash-api:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - pnldash_network
+
+  web:
+    image: ghcr.io/xurshid29/pnldash-web:latest
+    restart: unless-stopped
+    depends_on:
+      - api
+    networks:
+      - pnldash_network
+
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
+      - certbot_data:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+    depends_on:
+      - api
+      - web
+    networks:
+      - pnldash_network
+
+  certbot:
+    image: certbot/certbot
+    restart: unless-stopped
+    volumes:
+      - certbot_data:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+    # Renew every 12h; certbot itself decides whether each cert is due.
+    entrypoint: /bin/sh -c 'trap exit TERM; while :; do certbot renew --quiet --webroot -w /var/www/certbot; nginx -s reload 2>/dev/null || true; sleep 12h & wait $${!}; done'
+
+networks:
+  pnldash_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  certbot_data:
+  certbot_www:

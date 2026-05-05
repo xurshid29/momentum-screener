@@ -1,6 +1,9 @@
 import type { ApiResponse, ApiError } from './types';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+// Empty by default → fetch uses the page's origin. In dev, Vite proxies /api
+// to the API server (see vite.config.ts). In prod, nginx routes /api/* to
+// the api service at the same origin, so no base URL is needed.
+const API_URL = import.meta.env.VITE_API_URL || '';
 
 class ApiClient {
   private baseUrl: string;

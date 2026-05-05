@@ -1,0 +1,67 @@
+name: Build & push images
+
+# Builds the api and web Docker images and pushes them to GHCR. Triggers:
+#   - push to main: tags `latest` and `sha-<short>`
+#   - manual run via workflow_dispatch
+#
+# The droplet pulls `latest` for routine deploys; the sha tag is there so we
+# can roll back to a known commit (`docker compose pull api:sha-abc123 && up -d`).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'deploy/api.Dockerfile'
+      - 'deploy/web.Dockerfile'
+      - 'deploy/web.nginx.conf'
+      - '.github/workflows/build-images.yml'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  OWNER: ${{ github.repository_owner }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - name: api
+            dockerfile: deploy/api.Dockerfile
+          - name: web
+            dockerfile: deploy/web.Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract short SHA
+        id: sha
+        run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push ${{ matrix.name }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/pnldash-${{ matrix.name }}:latest
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/pnldash-${{ matrix.name }}:sha-${{ steps.sha.outputs.short }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,scope=${{ matrix.name }},mode=max

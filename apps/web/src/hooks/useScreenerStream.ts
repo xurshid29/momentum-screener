@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { CyclePayload } from '../api/types';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+// Empty → EventSource uses the page's origin. Dev: vite proxy. Prod: nginx.
+const API_URL = import.meta.env.VITE_API_URL || '';
 
 // Subscribes to /api/screener/stream via EventSource. Token goes in query
 // string because EventSource can't set Authorization headers.
