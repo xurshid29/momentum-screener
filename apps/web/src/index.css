@@ -35,3 +35,26 @@ body {
 .tv-slot iframe {
   background: #1a1a1a !important;
 }
+
+/* Antd <Tabs> doesn't propagate parent height to its inner panes — the
+   content-holder has no flex by default, so children that depend on
+   percentage heights collapse to 0 (visible as: long content gets clipped
+   instead of scrolling). Apply this class to a Tabs that should fill its
+   parent and let the active pane manage its own scrolling. */
+.tabs-fill-height {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+.tabs-fill-height > .ant-tabs-content-holder {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.tabs-fill-height > .ant-tabs-content-holder > .ant-tabs-content {
+  height: 100%;
+}
+.tabs-fill-height .ant-tabs-tabpane {
+  height: 100%;
+}

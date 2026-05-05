@@ -51,7 +51,7 @@ export function NewsRoomPanel({ payload }: NewsRoomPanelProps) {
         activeKey={activeTab}
         onChange={onTabChange}
         size="small"
-        style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column' }}
+        className="tabs-fill-height"
         tabBarStyle={{ padding: '0 8px', margin: 0 }}
         items={[
           {

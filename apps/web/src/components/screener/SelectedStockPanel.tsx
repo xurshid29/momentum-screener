@@ -163,7 +163,7 @@ export function SelectedStockPanel({ payload }: SelectedStockPanelProps) {
       <Tabs
         size="small"
         defaultActiveKey="details"
-        style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column' }}
+        className="tabs-fill-height"
         tabBarStyle={{ margin: 0, padding: '0 8px' }}
         items={[
           {
