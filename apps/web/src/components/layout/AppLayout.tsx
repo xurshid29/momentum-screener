@@ -49,7 +49,7 @@ export function AppLayout() {
             />
           </Space>
           <AlertsToggle />
-          <Dropdown menu={{ items: menuItems }} placement="bottomRight">
+          <Dropdown menu={{ items: menuItems }} placement="bottomRight" trigger={['click']}>
           <Space style={{ cursor: 'pointer', color: '#e0e0e0' }}>
             <Avatar size="small" icon={<UserOutlined />} />
             <span style={{ fontSize: 13 }}>{user?.username || 'User'}</span>
