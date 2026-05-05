@@ -18,7 +18,10 @@
 
 set -euo pipefail
 
-DOMAINS=(pnldash.uz www.pnldash.uz)
+# Comma-separated list. To add www later, set
+# LETSENCRYPT_DOMAINS=pnldash.uz,www.pnldash.uz before running.
+DOMAINS_STR="${LETSENCRYPT_DOMAINS:-pnldash.uz}"
+IFS=',' read -ra DOMAINS <<< "$DOMAINS_STR"
 EMAIL="${LETSENCRYPT_EMAIL:-xurshid29@gmail.com}"
 RSA_KEY_SIZE=4096
 STAGING="${LETSENCRYPT_STAGING:-0}"   # set to 1 to use staging endpoint while debugging
