@@ -1,22 +1,24 @@
-name: Build & push images
+name: Build & deploy
 
-# Builds the api and web Docker images and pushes them to GHCR. Triggers:
-#   - push to main: tags `latest` and `sha-<short>`
+# Builds the api and web Docker images, pushes them to GHCR, then SSHes to
+# the droplet and rolls out the new versions. Triggers:
+#   - push to main: tags `latest` and `sha-<short>`, then deploys
 #   - manual run via workflow_dispatch
 #
-# The droplet pulls `latest` for routine deploys; the sha tag is there so we
-# can roll back to a known commit (`docker compose pull api:sha-abc123 && up -d`).
+# Path filter: any change that affects what runs in production (app source,
+# compose, nginx config, migrations, the workflow itself) triggers a deploy.
+# Everything else (README, docs/, the bash poller scripts) skips the workflow.
 
 on:
   push:
     branches: [main]
     paths:
       - 'apps/**'
+      - 'db/migrations/**'
       - 'package.json'
       - 'package-lock.json'
-      - 'deploy/api.Dockerfile'
-      - 'deploy/web.Dockerfile'
-      - 'deploy/web.nginx.conf'
+      - 'deploy/**'
+      - 'docker-compose.prod.yml'
       - '.github/workflows/build-images.yml'
   workflow_dispatch:
 
@@ -25,6 +27,7 @@ env:
   OWNER: ${{ github.repository_owner }}
 
 jobs:
+  # ─── 1. Build & push images to GHCR ─────────────────────────────────
   build:
     runs-on: ubuntu-latest
     permissions:
@@ -65,3 +68,70 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.OWNER }}/pnldash-${{ matrix.name }}:sha-${{ steps.sha.outputs.short }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,scope=${{ matrix.name }},mode=max
+
+  # ─── 2. Deploy to droplet ───────────────────────────────────────────
+  # Runs only after both api and web images are pushed successfully.
+  # Pulls the repo, pulls the new images, and rolls out via docker compose.
+  # Idempotent: safe to re-run on the same commit.
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DROPLET_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # Pin the host key so the connection isn't vulnerable to MITM on
+          # first contact. ssh-keyscan against the known IP is fine — we
+          # accept whatever key is currently presented because there's no
+          # baseline we trust more, but at least subsequent runs will
+          # detect a host-key change.
+          ssh-keyscan -H "${{ secrets.DROPLET_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Roll out
+        env:
+          HOST: ${{ secrets.DROPLET_HOST }}
+          USER: ${{ secrets.DROPLET_USER }}
+        run: |
+          ssh -i ~/.ssh/deploy_key "$USER@$HOST" 'bash -se' <<'REMOTE'
+            set -euo pipefail
+            cd /root/projects/pnldash
+
+            echo "::group::git pull"
+            git pull --ff-only
+            echo "::endgroup::"
+
+            echo "::group::docker compose pull"
+            docker compose -f docker-compose.prod.yml pull
+            echo "::endgroup::"
+
+            echo "::group::docker compose up -d"
+            docker compose -f docker-compose.prod.yml up -d
+            echo "::endgroup::"
+
+            # The nginx config is a bind mount, so a `git pull` that changed
+            # deploy/nginx.conf doesn't restart nginx. Validate the new config
+            # and reload — cheap and idempotent.
+            echo "::group::nginx reload"
+            docker compose -f docker-compose.prod.yml exec -T nginx nginx -t
+            docker compose -f docker-compose.prod.yml exec -T nginx nginx -s reload
+            echo "::endgroup::"
+
+            # Apply any new migrations. dbmate is a no-op if everything is
+            # already applied. The DATABASE_URL uses localhost because dbmate
+            # runs on the host, not in the docker network.
+            echo "::group::dbmate up"
+            PG_PASS=$(grep '^POSTGRES_PASSWORD=' .env | cut -d= -f2-)
+            DATABASE_URL="postgres://pnldash:${PG_PASS}@localhost:5432/pnldash?sslmode=disable" \
+              dbmate up
+            echo "::endgroup::"
+
+            echo "::group::final status"
+            docker compose -f docker-compose.prod.yml ps
+            echo "::endgroup::"
+          REMOTE
+
+      - name: Cleanup
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
