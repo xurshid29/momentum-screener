@@ -1,6 +1,6 @@
 import bcrypt from 'bcrypt';
 import jwt, { type SignOptions } from 'jsonwebtoken';
-import { getDb } from '../db';
+import { getDb } from '../db/index.js';
 
 const SALT_ROUNDS = 10;
 
