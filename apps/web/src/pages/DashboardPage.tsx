@@ -2,6 +2,7 @@ import { useEffect, type ReactNode } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { useScreenerStream } from '../hooks/useScreenerStream';
 import { useScreenerAlerts } from '../hooks/useScreenerAlerts';
+import { useTabTitleFlash } from '../hooks/useTabTitleFlash';
 import { ScreenerPanel } from '../components/screener/ScreenerPanel';
 import { SelectedStockPanel } from '../components/screener/SelectedStockPanel';
 import { NewsRoomPanel } from '../components/news/NewsRoomPanel';
@@ -16,6 +17,7 @@ import type { CyclePayload } from '../api/types';
 export function DashboardPage() {
   const { payload, connected } = useScreenerStream();
   useScreenerAlerts(payload);
+  useTabTitleFlash(payload);
 
   return (
     <SelectionProvider>
