@@ -139,11 +139,6 @@ class PollerService {
       topN: this.config.top_n,
     });
 
-    if (rows.length === 0) {
-      console.log(`[poller] ${nowHms()} — no rows`);
-      return;
-    }
-
     const tickers = rows.map((r) => r.ticker);
 
     // 2) news — three sources in parallel

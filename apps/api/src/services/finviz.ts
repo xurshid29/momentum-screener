@@ -133,6 +133,14 @@ export async function fetchScreener(opts: ScreenerOptions): Promise<ScreenerRow[
     fetchCsv(overviewUrl),
   ]);
 
+  // Finviz occasionally returns an empty body (transient). Distinguish that
+  // from a legitimate "no matches" by requiring at least the header row on
+  // the ownership response — without it, we can't trust the result and would
+  // rather throw so the caller keeps the last good payload.
+  if (ownership.length === 0) {
+    throw new Error('Finviz ownership export returned empty body');
+  }
+
   // v=110 (overview) header order: No, Ticker, Company, Sector, Industry, Country, ...
   type Meta = { company: string | null; sector: string | null; industry: string | null; country: string | null };
   const metaByTicker = new Map<string, Meta>();
