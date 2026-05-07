@@ -10,14 +10,12 @@ import type { CyclePayload } from '../api/types';
 const DEFAULT_TITLE = 'PNL Dash';
 const FLASH_INTERVAL_MS = 1000;
 
-function flashTitle(tickers: string[]): string {
-  if (tickers.length <= 3) return `🔥 NEW: ${tickers.join(', ')}`;
-  return `🔥 ${tickers.length} new with news`;
+function flashTitle(count: number): string {
+  return `${DEFAULT_TITLE} (🔥 ${count} news)`;
 }
 
-function staticTitle(tickers: string[]): string {
-  if (tickers.length <= 3) return `🆕 NEW: ${tickers.join(', ')}`;
-  return `🆕 ${tickers.length} new tickers`;
+function staticTitle(count: number): string {
+  return `${DEFAULT_TITLE} (${count} new)`;
 }
 
 export function useTabTitleFlash(payload: CyclePayload | null) {
@@ -65,7 +63,7 @@ export function useTabTitleFlash(payload: CyclePayload | null) {
       .map((r) => r.ticker);
 
     if (newWithCatalyst.length > 0) {
-      altTitleRef.current = flashTitle(newWithCatalyst);
+      altTitleRef.current = flashTitle(newWithCatalyst.length);
       if (intervalRef.current != null) return;
       intervalRef.current = window.setInterval(() => {
         flippedRef.current = !flippedRef.current;
@@ -74,7 +72,7 @@ export function useTabTitleFlash(payload: CyclePayload | null) {
     } else if (newWithoutNews.length > 0) {
       // Don't downgrade an in-progress flash to a static title.
       if (intervalRef.current != null) return;
-      document.title = staticTitle(newWithoutNews);
+      document.title = staticTitle(newWithoutNews.length);
     }
   }, [payload]);
 }
