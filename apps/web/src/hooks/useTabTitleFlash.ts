@@ -5,7 +5,7 @@ import type { CyclePayload } from '../api/types';
 // (same trigger as the dingDing audio alert). Flashing only runs while the
 // tab is hidden; focusing the tab clears the alert and restores the title.
 
-const DEFAULT_TITLE = 'Momentum Screener';
+const DEFAULT_TITLE = 'PNL Dash';
 const FLASH_INTERVAL_MS = 1000;
 
 function alertTitle(tickers: string[]): string {
