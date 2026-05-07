@@ -1,16 +1,23 @@
 import { useEffect, useRef } from 'react';
 import type { CyclePayload } from '../api/types';
 
-// Flash the tab title when a NEW ticker with a today-catalyst appears
-// (same trigger as the dingDing audio alert). Flashing only runs while the
-// tab is hidden; focusing the tab clears the alert and restores the title.
+// Tab-title alerts. Two modes, both only run while the tab is hidden and
+// both reset on focus / unmount:
+//   • flash (higher priority): a NEW ticker with a today-catalyst → 🔥
+//   • static (lower priority): a NEW ticker without news       → 🆕
+// Flash beats static; if a flash is already running we don't downgrade it.
 
 const DEFAULT_TITLE = 'PNL Dash';
 const FLASH_INTERVAL_MS = 1000;
 
-function alertTitle(tickers: string[]): string {
+function flashTitle(tickers: string[]): string {
   if (tickers.length <= 3) return `🔥 NEW: ${tickers.join(', ')}`;
   return `🔥 ${tickers.length} new with news`;
+}
+
+function staticTitle(tickers: string[]): string {
+  if (tickers.length <= 3) return `🆕 NEW: ${tickers.join(', ')}`;
+  return `🆕 ${tickers.length} new tickers`;
 }
 
 export function useTabTitleFlash(payload: CyclePayload | null) {
@@ -20,9 +27,9 @@ export function useTabTitleFlash(payload: CyclePayload | null) {
   const altTitleRef = useRef<string>(DEFAULT_TITLE);
   const flippedRef = useRef(false);
 
-  // Stop flashing on tab focus and on unmount.
+  // Reset on tab focus and on unmount.
   useEffect(() => {
-    function stop() {
+    function reset() {
       if (intervalRef.current != null) {
         window.clearInterval(intervalRef.current);
         intervalRef.current = null;
@@ -31,16 +38,16 @@ export function useTabTitleFlash(payload: CyclePayload | null) {
       document.title = DEFAULT_TITLE;
     }
     function onVisibility() {
-      if (!document.hidden) stop();
+      if (!document.hidden) reset();
     }
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
       document.removeEventListener('visibilitychange', onVisibility);
-      stop();
+      reset();
     };
   }, []);
 
-  // React to new cycles: start flashing if a new entrant has a catalyst.
+  // React to new cycles: flash for NEW+catalyst, static for NEW without news.
   useEffect(() => {
     if (!payload) return;
     if (handled.current.has(payload.cycle_id)) return;
@@ -50,16 +57,24 @@ export function useTabTitleFlash(payload: CyclePayload | null) {
       seenFirst.current = true;
       return;
     }
-
-    const { new_with_catalyst } = payload.banners;
-    if (new_with_catalyst.length === 0) return;
     if (!document.hidden) return;
 
-    altTitleRef.current = alertTitle(new_with_catalyst);
-    if (intervalRef.current != null) return;
-    intervalRef.current = window.setInterval(() => {
-      flippedRef.current = !flippedRef.current;
-      document.title = flippedRef.current ? altTitleRef.current : DEFAULT_TITLE;
-    }, FLASH_INTERVAL_MS);
+    const newWithCatalyst = payload.banners.new_with_catalyst;
+    const newWithoutNews = payload.rows
+      .filter((r) => r.status === 'NEW' && !r.has_today_news)
+      .map((r) => r.ticker);
+
+    if (newWithCatalyst.length > 0) {
+      altTitleRef.current = flashTitle(newWithCatalyst);
+      if (intervalRef.current != null) return;
+      intervalRef.current = window.setInterval(() => {
+        flippedRef.current = !flippedRef.current;
+        document.title = flippedRef.current ? altTitleRef.current : DEFAULT_TITLE;
+      }, FLASH_INTERVAL_MS);
+    } else if (newWithoutNews.length > 0) {
+      // Don't downgrade an in-progress flash to a static title.
+      if (intervalRef.current != null) return;
+      document.title = staticTitle(newWithoutNews);
+    }
   }, [payload]);
 }
