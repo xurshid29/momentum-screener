@@ -23,6 +23,29 @@ body {
   font-weight: 600;
 }
 
+/* Per-row Finviz / TradingView link buttons. Sized for an easy click target. */
+.screener-link-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 22px;
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #bfbfbf;
+  background: #2a2a2a;
+  border: 1px solid #404040;
+  border-radius: 3px;
+  text-decoration: none;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.screener-link-btn:hover {
+  background: #1890ff;
+  border-color: #1890ff;
+  color: #fff;
+}
+
 /* react-resizable-panels handles — make them discoverable on hover. */
 [data-panel-resize-handle-enabled]:hover,
 [data-panel-resize-handle-enabled][data-resize-handle-active] {

@@ -30,15 +30,15 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
       {
         title: '',
         key: 'links',
-        width: 56,
+        width: 76,
         render: (_v, row) => (
-          <Space size={2} onClick={(e) => e.stopPropagation()}>
+          <Space size={4} onClick={(e) => e.stopPropagation()}>
             <Tooltip title="Open in Finviz">
               <a
                 href={row.finviz_url}
                 target="_blank"
                 rel="noreferrer"
-                style={{ color: '#bfbfbf', fontSize: 10, fontWeight: 600 }}
+                className="screener-link-btn"
               >
                 F
               </a>
@@ -48,7 +48,7 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
                 href={`https://www.tradingview.com/symbols/${row.ticker}/`}
                 target="_blank"
                 rel="noreferrer"
-                style={{ color: '#bfbfbf', fontSize: 10, fontWeight: 600 }}
+                className="screener-link-btn"
               >
                 TV
               </a>
