@@ -33,26 +33,22 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
         width: 76,
         render: (_v, row) => (
           <Space size={4} onClick={(e) => e.stopPropagation()}>
-            <Tooltip title="Open in Finviz">
-              <a
-                href={row.finviz_url}
-                target="_blank"
-                rel="noreferrer"
-                className="screener-link-btn"
-              >
-                F
-              </a>
-            </Tooltip>
-            <Tooltip title="Open in TradingView">
-              <a
-                href={`https://www.tradingview.com/symbols/${row.ticker}/`}
-                target="_blank"
-                rel="noreferrer"
-                className="screener-link-btn"
-              >
-                TV
-              </a>
-            </Tooltip>
+            <a
+              href={row.finviz_url}
+              target="_blank"
+              rel="noreferrer"
+              className="screener-link-btn"
+            >
+              F
+            </a>
+            <a
+              href={`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(row.ticker)}`}
+              target="_blank"
+              rel="noreferrer"
+              className="screener-link-btn"
+            >
+              TV
+            </a>
           </Space>
         ),
       },
