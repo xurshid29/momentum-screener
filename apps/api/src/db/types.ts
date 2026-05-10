@@ -76,6 +76,27 @@ export interface NewsTickerLinksTable {
   ticker: string;
 }
 
+export type CatalystDirection = 'bullish' | 'bearish' | 'mixed' | 'neutral';
+export type CatalystUrgency = 'ignore' | 'watch' | 'strong' | 'major';
+export type CatalystMateriality = 'high' | 'medium' | 'low' | 'unknown';
+export type Classifier = 'rules' | 'openai_nano' | 'openai_mini' | 'openai';
+
+export interface NewsClassificationsTable {
+  article_id: string;
+  impact_score: number;
+  direction: CatalystDirection;
+  urgency: CatalystUrgency;
+  catalyst_type: string;
+  materiality: CatalystMateriality;
+  is_repeat: Generated<boolean>;
+  confidence: number;
+  reason: string | null;
+  risk_flags: JSONColumnType<string[]>;
+  classifier: Classifier;
+  classified_at: Generated<Date>;
+  updated_at: Generated<Date>;
+}
+
 export interface UserFilterPresetsTable {
   id: Generated<string>;
   user_id: string;
@@ -109,6 +130,7 @@ export interface Database {
   screener_results: ScreenerResultsTable;
   news_articles: NewsArticlesTable;
   news_ticker_links: NewsTickerLinksTable;
+  news_classifications: NewsClassificationsTable;
   user_filter_presets: UserFilterPresetsTable;
   user_panel_layout: UserPanelLayoutTable;
   user_chart_prefs: UserChartPrefsTable;

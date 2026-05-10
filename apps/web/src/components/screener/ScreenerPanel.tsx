@@ -64,12 +64,18 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
         title: 'Ticker',
         dataIndex: 'ticker',
         key: 'ticker',
-        width: 100,
+        width: 110,
         render: (t: string, row) => (
           <span>
             <Text strong style={{ color: '#fff' }}>{t}</Text>
             {row.is_fresh_news && <span title="Fresh news this cycle"> 🚨</span>}
-            {!row.is_fresh_news && row.has_today_news && <span title="Has today's news"> 🔥</span>}
+            {row.has_today_news && (
+              <CatalystIcon
+                score={row.catalyst?.score ?? null}
+                reason={row.catalyst?.reason}
+                type={row.catalyst?.type}
+              />
+            )}
           </span>
         ),
       },
@@ -191,4 +197,27 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
       </div>
     </div>
   );
+}
+
+// Catalyst-tier icon — keeps the fire motif but varies by impact score.
+//   ≥70  🔥  major catalyst (red flame)
+//   40+  ⚡  watch / momentum-only
+//   15+  🧊  weak headline
+//   <15  —   nothing (we still show the underlying news icon elsewhere)
+// `score` is `null` until the classifier has run for this article.
+function CatalystIcon({
+  score,
+  reason,
+  type,
+}: {
+  score: number | null;
+  reason?: string;
+  type?: string;
+}) {
+  if (score == null) return <span title="Catalyst score pending"> 🔥</span>;
+  const tooltip = `${score} · ${type ?? ''}${reason ? ` — ${reason}` : ''}`.trim();
+  if (score >= 70) return <span title={tooltip} style={{ filter: 'saturate(1.2)' }}> 🔥</span>;
+  if (score >= 40) return <span title={tooltip}> ⚡</span>;
+  if (score >= 15) return <span title={tooltip} style={{ opacity: 0.65 }}> 🧊</span>;
+  return null;
 }

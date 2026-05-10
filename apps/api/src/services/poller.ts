@@ -3,11 +3,19 @@
 // Single-instance only by design — see CLAUDE.md.
 
 import { getDb } from '../db/index.js';
-import type { RowStatus, ScreenerFilterSnapshot, NewsSource } from '../db/types.js';
+import type {
+  RowStatus,
+  ScreenerFilterSnapshot,
+  NewsSource,
+  CatalystDirection,
+  CatalystUrgency,
+  Classifier,
+} from '../db/types.js';
 import { fetchScreener, fetchFinvizNews, type ScreenerRow } from './finviz.js';
 import { fetchYahooNews } from './yahoo.js';
 import { fetchBenzingaDelta } from './benzinga.js';
 import { broadcast } from './sse.js';
+import { classifyByRules, type Classification } from './catalyst-rules.js';
 
 const DEFAULTS: ScreenerFilterSnapshot = {
   // Note: no `sh_float_u50` here. Finviz drops rows with null Float when that
@@ -47,6 +55,17 @@ export interface EnrichedRow extends ScreenerRow {
   news_source: NewsSource | null;
   news_url: string | null;
   finviz_url: string;
+  catalyst: CatalystInfo | null;
+}
+
+export interface CatalystInfo {
+  score: number;
+  urgency: CatalystUrgency;
+  direction: CatalystDirection;
+  type: string;
+  reason: string;
+  risk_flags: string[];
+  classifier: Classifier;
 }
 
 export interface NewsHeadline {
@@ -72,6 +91,10 @@ class PollerService {
   private bzHeadlineCache = new Map<string, NewsHeadline>(); // ticker -> latest headline (any source merged)
   private bzWatermark = Math.floor(Date.now() / 1000) - BZ_INITIAL_LOOKBACK_SEC;
   private lastEtDate = '';
+  // Per-article-URL classification cache. Lets the LLM classifier
+  // overwrite the rule-based score in-place; the next cycle's payload
+  // automatically picks up the refined verdict without a DB read.
+  private classificationCache = new Map<string, { classification: Classification; classifier: Classifier }>();
 
   // Last full payload, served by /api/screener/latest for new clients.
   private lastPayload: CyclePayload | null = null;
@@ -129,6 +152,7 @@ class PollerService {
     const todayEt = etDateString(new Date());
     if (todayEt !== this.lastEtDate) {
       this.bzHeadlineCache.clear();
+      this.classificationCache.clear();
       this.lastEtDate = todayEt;
     }
 
@@ -253,6 +277,37 @@ class PollerService {
       // If no movement classification but has news, mark NEWS.
       if (status == null && hasNews) status = 'NEWS';
 
+      // Catalyst score — read from the URL cache, or compute fresh via rules.
+      let catalyst: CatalystInfo | null = null;
+      if (headline) {
+        let cached = this.classificationCache.get(headline.url);
+        if (!cached) {
+          const cls = classifyByRules({
+            ticker: r.ticker,
+            title: headline.title,
+            source: headline.source,
+            marketContext: {
+              change_pct: r.change_pct,
+              float_m: r.float_m,
+              mcap_m: r.mcap_m,
+              rel_volume: r.rel_volume,
+              country: r.country,
+            },
+          });
+          cached = { classification: cls, classifier: 'rules' };
+          this.classificationCache.set(headline.url, cached);
+        }
+        catalyst = {
+          score: cached.classification.impact_score,
+          urgency: cached.classification.urgency,
+          direction: cached.classification.direction,
+          type: cached.classification.catalyst_type,
+          reason: cached.classification.reason,
+          risk_flags: cached.classification.risk_flags,
+          classifier: cached.classifier,
+        };
+      }
+
       return {
         ...r,
         status,
@@ -266,6 +321,7 @@ class PollerService {
         news_source: headline?.source ?? null,
         news_url: headline?.url ?? null,
         finviz_url: `https://elite.finviz.com/quote?t=${r.ticker}&ty=c&p=h&b=1`,
+        catalyst,
       };
     });
 
@@ -423,6 +479,29 @@ class PollerService {
             .insertInto('news_ticker_links')
             .values({ article_id: articleId, ticker: tk })
             .onConflict((oc) => oc.columns(['article_id', 'ticker']).doNothing())
+            .execute();
+        }
+
+        // Persist the rule-based classification once per article. The OpenAI
+        // pass writes the same row later via UPDATE — `do nothing` here means
+        // we never clobber a refined verdict with the cached rule one.
+        const cached = this.classificationCache.get(p.url);
+        if (cached) {
+          await trx
+            .insertInto('news_classifications')
+            .values({
+              article_id: articleId,
+              impact_score: cached.classification.impact_score,
+              direction: cached.classification.direction,
+              urgency: cached.classification.urgency,
+              catalyst_type: cached.classification.catalyst_type,
+              materiality: cached.classification.materiality,
+              confidence: cached.classification.confidence,
+              reason: cached.classification.reason,
+              risk_flags: JSON.stringify(cached.classification.risk_flags) as unknown as never,
+              classifier: cached.classifier,
+            })
+            .onConflict((oc) => oc.column('article_id').doNothing())
             .execute();
         }
       }

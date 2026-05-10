@@ -28,6 +28,19 @@ export interface LoginResponse {
 // ─── screener ──────────────────────────────────────────────────────────────
 export type RowStatus = 'NEW' | 'ACC' | 'UP' | 'NEWS' | null;
 export type NewsSource = 'finviz' | 'yahoo' | 'benzinga';
+export type CatalystDirection = 'bullish' | 'bearish' | 'mixed' | 'neutral';
+export type CatalystUrgency = 'ignore' | 'watch' | 'strong' | 'major';
+export type Classifier = 'rules' | 'openai_nano' | 'openai_mini' | 'openai';
+
+export interface CatalystInfo {
+  score: number;
+  urgency: CatalystUrgency;
+  direction: CatalystDirection;
+  type: string;
+  reason: string;
+  risk_flags: string[];
+  classifier: Classifier;
+}
 
 export interface ScreenerFilterSnapshot {
   filter: string;
@@ -69,6 +82,7 @@ export interface EnrichedRow {
   news_source: NewsSource | null;
   news_url: string | null;
   finviz_url: string;
+  catalyst: CatalystInfo | null;
 }
 
 export interface NewsHeadline {
