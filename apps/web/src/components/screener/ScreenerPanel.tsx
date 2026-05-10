@@ -39,7 +39,7 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
               rel="noreferrer"
               className="screener-link-btn"
             >
-              F
+              <img src="/finviz-icon.png" alt="Finviz" />
             </a>
             <a
               href={`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(row.ticker)}`}
@@ -47,7 +47,7 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
               rel="noreferrer"
               className="screener-link-btn"
             >
-              TV
+              <img src="/tradingview-icon.png" alt="TradingView" />
             </a>
           </Space>
         ),
