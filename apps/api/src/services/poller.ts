@@ -15,7 +15,8 @@ import { fetchScreener, fetchFinvizNews, type ScreenerRow } from './finviz.js';
 import { fetchYahooNews } from './yahoo.js';
 import { fetchBenzingaDelta } from './benzinga.js';
 import { broadcast } from './sse.js';
-import { classifyByRules, type Classification } from './catalyst-rules.js';
+import { classifyByRules, type Classification, type ClassifierInput } from './catalyst-rules.js';
+import { classifyByOpenAI } from './catalyst-openai.js';
 
 const DEFAULTS: ScreenerFilterSnapshot = {
   // Note: no `sh_float_u50` here. Finviz drops rows with null Float when that
@@ -94,7 +95,16 @@ class PollerService {
   // Per-article-URL classification cache. Lets the LLM classifier
   // overwrite the rule-based score in-place; the next cycle's payload
   // automatically picks up the refined verdict without a DB read.
-  private classificationCache = new Map<string, { classification: Classification; classifier: Classifier }>();
+  // `needsLLM` is set when the rule-based result is written and
+  // cleared once OpenAI has refined (or once we've tried and failed).
+  private classificationCache = new Map<string, {
+    classification: Classification;
+    classifier: Classifier;
+    articleId?: string;
+    needsLLM: boolean;
+    input: ClassifierInput;
+  }>();
+  private llmInFlight = false;
 
   // Last full payload, served by /api/screener/latest for new clients.
   private lastPayload: CyclePayload | null = null;
@@ -282,7 +292,7 @@ class PollerService {
       if (headline) {
         let cached = this.classificationCache.get(headline.url);
         if (!cached) {
-          const cls = classifyByRules({
+          const input: ClassifierInput = {
             ticker: r.ticker,
             title: headline.title,
             source: headline.source,
@@ -293,8 +303,14 @@ class PollerService {
               rel_volume: r.rel_volume,
               country: r.country,
             },
-          });
-          cached = { classification: cls, classifier: 'rules' };
+          };
+          const cls = classifyByRules(input);
+          cached = {
+            classification: cls,
+            classifier: 'rules',
+            needsLLM: !!process.env.OPENAI_API_KEY,
+            input,
+          };
           this.classificationCache.set(headline.url, cached);
         }
         catalyst = {
@@ -362,6 +378,75 @@ class PollerService {
     console.log(
       `[poller] ${nowHms()} — ${enriched.length} rows, ${newWithCatalyst.length} new+catalyst, ${freshList.length} fresh`,
     );
+
+    // Fire-and-forget LLM refinement of any rule-classified articles.
+    // Completes in the background; the next cycle's payload picks up the
+    // refined scores via the in-memory cache.
+    void this.refineWithOpenAI();
+  }
+
+  // Run OpenAI on every article still flagged needsLLM (i.e. classified by
+  // rules and persisted, but not yet refined). Bounded concurrency keeps
+  // us from hammering the API. Skipped entirely if a previous run is still
+  // in flight, so a slow API doesn't queue up infinite work.
+  private async refineWithOpenAI() {
+    if (this.llmInFlight) return;
+    if (!process.env.OPENAI_API_KEY) return;
+
+    const pending = [...this.classificationCache.values()].filter(
+      (v) => v.needsLLM && v.articleId,
+    );
+    if (pending.length === 0) return;
+
+    this.llmInFlight = true;
+    try {
+      const concurrency = 5;
+      for (let i = 0; i < pending.length; i += concurrency) {
+        const batch = pending.slice(i, i + concurrency);
+        await Promise.all(batch.map((entry) => this.refineOne(entry)));
+      }
+    } finally {
+      this.llmInFlight = false;
+    }
+  }
+
+  private async refineOne(entry: {
+    classification: Classification;
+    classifier: Classifier;
+    articleId?: string;
+    needsLLM: boolean;
+    input: ClassifierInput;
+  }): Promise<void> {
+    const result = await classifyByOpenAI(entry.input);
+    if (!result || !entry.articleId) {
+      // Give up after one failure — don't burn tokens retrying every cycle.
+      entry.needsLLM = false;
+      return;
+    }
+    entry.classification = result;
+    entry.classifier = 'openai_nano';
+    entry.needsLLM = false;
+
+    try {
+      await getDb()
+        .updateTable('news_classifications')
+        .set({
+          impact_score: result.impact_score,
+          direction: result.direction,
+          urgency: result.urgency,
+          catalyst_type: result.catalyst_type,
+          materiality: result.materiality,
+          confidence: result.confidence,
+          reason: result.reason,
+          risk_flags: JSON.stringify(result.risk_flags) as unknown as never,
+          classifier: 'openai_nano',
+          updated_at: new Date(),
+        })
+        .where('article_id', '=', entry.articleId)
+        .execute();
+    } catch (err) {
+      console.error('[poller] failed to persist OpenAI classification:', err);
+    }
   }
 
   private async persistCycle(
@@ -487,6 +572,7 @@ class PollerService {
         // we never clobber a refined verdict with the cached rule one.
         const cached = this.classificationCache.get(p.url);
         if (cached) {
+          cached.articleId = articleId; // unlock LLM refinement for this article
           await trx
             .insertInto('news_classifications')
             .values({
