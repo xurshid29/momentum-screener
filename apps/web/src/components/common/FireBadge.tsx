@@ -1,17 +1,24 @@
-// Tier-colored fire icon for the screener row. Single flame at weak/strong,
-// double flame at major. Inline SVG so the colors are exact across browsers
-// and emoji fonts don't interfere.
+// Tier-colored fire icon. Inline SVG so the colors are exact and emoji
+// fonts can't interfere. Sits on the baseline cleanly inside compact
+// table rows.
 
 interface Props {
   score: number;
-  size?: number;       // px height, defaults to 14
+  size?: number;       // px height, defaults to 16
 }
 
-export function FireBadge({ score, size = 14 }: Props) {
+export function FireBadge({ score, size = 16 }: Props) {
   if (score < 15) return null;
   const { color, count } = tier(score);
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 0, verticalAlign: 'middle' }}>
+    <span
+      style={{
+        display: 'inline-block',
+        verticalAlign: 'middle',
+        lineHeight: 0,
+        marginTop: -2, // optical centering against capital-letter text
+      }}
+    >
       {Array.from({ length: count }).map((_, i) => (
         <Flame key={i} color={color} size={size} />
       ))}
@@ -30,14 +37,12 @@ function Flame({ color, size }: { color: string; size: number }) {
     <svg
       width={size}
       height={size}
-      viewBox="0 0 32 32"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      style={{ display: 'block' }}
+      viewBox="0 0 16 16"
+      style={{ display: 'inline-block', verticalAlign: 'middle' }}
     >
       <path
-        d="M16 2 C18 6 22 10 22 15 C22 17 21 18 19 18 C19 16 18 14 17 14 C18 18 14 19 14 23 C14 24 14.5 25 16 25 C12 27 8 24 8 19 C8 14 12 12 12 8 C13 9 14 10 14 13 C15 9 16 6 16 2 Z"
         fill={color}
+        d="M8 1.5 C6.4 4 5 5.4 5 7.6 C5 8.5 5.4 9 6.1 9 C6.1 7.8 6.6 6.7 7.3 6.4 C7 8.4 5 9.4 5 11.6 C5 13.4 6.3 14.5 8 14.5 C9.7 14.5 11 13.4 11 11.6 C11 9 8.5 7.5 8.5 5 C8.5 3.7 8.4 2.5 8 1.5 Z"
       />
     </svg>
   );
