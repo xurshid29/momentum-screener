@@ -113,6 +113,65 @@ router.put('/charts', authMiddleware, async (req, res) => {
   res.json({ data: { ok: true } });
 });
 
+// ─── hidden tickers (per-user, ET-day) ─────────────────────────────────────
+// Users can hide tickers from their screener view for the current ET day —
+// e.g. tickers their broker won't let them trade. Auto-clears at midnight ET
+// since the GET only returns rows with hidden_date = today, and any stale
+// rows get garbage-collected by the same endpoint.
+function etDateString(dt: Date): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(dt);
+}
+
+router.get('/hidden-tickers', authMiddleware, async (req, res) => {
+  const db = getDb();
+  const today = etDateString(new Date());
+  // Opportunistic cleanup — anything from a previous ET day is dead weight.
+  await db
+    .deleteFrom('user_hidden_tickers')
+    .where('user_id', '=', req.user!.userId)
+    .where('hidden_date', '<', today)
+    .execute();
+  const rows = await db
+    .selectFrom('user_hidden_tickers')
+    .select('ticker')
+    .where('user_id', '=', req.user!.userId)
+    .where('hidden_date', '=', today)
+    .execute();
+  res.json({ data: rows.map((r) => r.ticker) });
+});
+
+const hideSchema = z.object({ ticker: z.string().min(1).max(10) });
+
+router.post('/hidden-tickers', authMiddleware, async (req, res) => {
+  const parsed = hideSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Validation failed', details: parsed.error.errors });
+  const ticker = parsed.data.ticker.toUpperCase();
+  const today = etDateString(new Date());
+  const db = getDb();
+  await db
+    .insertInto('user_hidden_tickers')
+    .values({ user_id: req.user!.userId, ticker, hidden_date: today })
+    .onConflict((oc) => oc.columns(['user_id', 'ticker', 'hidden_date']).doNothing())
+    .execute();
+  res.status(201).json({ data: { ticker } });
+});
+
+router.delete('/hidden-tickers/:ticker', authMiddleware, async (req, res) => {
+  const ticker = String(req.params.ticker).toUpperCase();
+  const today = etDateString(new Date());
+  const db = getDb();
+  await db
+    .deleteFrom('user_hidden_tickers')
+    .where('user_id', '=', req.user!.userId)
+    .where('ticker', '=', ticker)
+    .where('hidden_date', '=', today)
+    .execute();
+  res.json({ data: { ok: true } });
+});
+
 // ─── panel layout (free-form jsonb) ────────────────────────────────────────
 router.get('/layout', authMiddleware, async (req, res) => {
   const db = getDb();

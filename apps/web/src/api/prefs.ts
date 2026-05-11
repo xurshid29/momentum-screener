@@ -25,4 +25,18 @@ export const prefsApi = {
   async putLayout(layout: PanelLayout): Promise<void> {
     await apiClient.put<{ ok: true }>('/api/prefs/layout', layout);
   },
+
+  // ─── hidden tickers (current ET day) ──────────────────────────────────────
+  async getHiddenTickers(): Promise<string[]> {
+    const res = await apiClient.get<string[]>('/api/prefs/hidden-tickers');
+    return res.data;
+  },
+
+  async hideTicker(ticker: string): Promise<void> {
+    await apiClient.post<{ ticker: string }>('/api/prefs/hidden-tickers', { ticker });
+  },
+
+  async unhideTicker(ticker: string): Promise<void> {
+    await apiClient.delete<{ ok: true }>(`/api/prefs/hidden-tickers/${encodeURIComponent(ticker)}`);
+  },
 };

@@ -113,6 +113,15 @@ export interface UserPanelLayoutTable {
   updated_at: Generated<Date>;
 }
 
+export interface UserHiddenTickersTable {
+  user_id: string;
+  ticker: string;
+  // Stored as a Postgres `date`. Treat as ISO-8601 (YYYY-MM-DD) at all
+  // boundaries so day-equality comparisons stay timezone-safe.
+  hidden_date: ColumnType<string, string, string>;
+  hidden_at: Generated<Date>;
+}
+
 export interface UserChartPrefsTable {
   user_id: string;
   slot: number;
@@ -134,4 +143,5 @@ export interface Database {
   user_filter_presets: UserFilterPresetsTable;
   user_panel_layout: UserPanelLayoutTable;
   user_chart_prefs: UserChartPrefsTable;
+  user_hidden_tickers: UserHiddenTickersTable;
 }

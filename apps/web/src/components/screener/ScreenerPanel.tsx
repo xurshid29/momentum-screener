@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
-import { Table, Tag, Typography, Tooltip, Badge, Button, Space } from 'antd';
-import { FilterOutlined } from '@ant-design/icons';
+import { Table, Tag, Typography, Tooltip, Badge, Button, Space, Popover, List } from 'antd';
+import { FilterOutlined, CloseOutlined, EyeInvisibleOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import type { CyclePayload, EnrichedRow, RowStatus } from '../../api/types';
 import { useSelection } from '../../context/SelectionContext';
+import { useHiddenTickers } from '../../hooks/useHiddenTickers';
 import { TickerLink } from '../common/TickerLink';
 import { FireBadge } from '../common/FireBadge';
 import { fmtPct, fmtFloat, fmtPrice, fmtVolume, fmtMcap, fmtRelVol, fmtBigPct, num } from '../../utils/format';
@@ -26,6 +27,7 @@ const STATUS_COLOR: Record<NonNullable<RowStatus>, string> = {
 export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
   const { selected, setSelected } = useSelection();
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const { hidden, hide, unhide } = useHiddenTickers();
 
   const columns: ColumnsType<EnrichedRow> = useMemo(
     () => [
@@ -150,11 +152,34 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
       },
       { title: 'MCap', dataIndex: 'mcap_m', key: 'mcap_m', width: 70, align: 'right', render: fmtMcap },
       { title: 'Country', dataIndex: 'country', key: 'country', width: 90, ellipsis: true },
+      {
+        title: '',
+        key: 'hide',
+        width: 36,
+        align: 'center',
+        render: (_v, row) => (
+          <Tooltip title="Hide for today">
+            <Button
+              type="text"
+              size="small"
+              icon={<CloseOutlined style={{ fontSize: 11, color: '#888' }} />}
+              onClick={(e) => { e.stopPropagation(); hide(row.ticker); }}
+              style={{ width: 22, height: 22, padding: 0 }}
+            />
+          </Tooltip>
+        ),
+      },
     ],
-    [],
+    [hide],
   );
 
-  const rows = payload?.rows ?? [];
+  const allRows = payload?.rows ?? [];
+  const rows = allRows.filter((r) => !hidden.has(r.ticker));
+  const hiddenInScreener = allRows.filter((r) => hidden.has(r.ticker)).map((r) => r.ticker);
+  // Tickers the user hid that aren't currently in the screener — still show
+  // them in the "Hidden" list so the user can unhide blind if they want.
+  const hiddenOutside = [...hidden].filter((t) => !allRows.some((r) => r.ticker === t));
+  const hiddenList = [...hiddenInScreener, ...hiddenOutside];
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
@@ -163,6 +188,37 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
           Screener — {rows.length} rows
         </Text>
         <Space size="middle">
+          {hiddenList.length > 0 && (
+            <Popover
+              trigger="click"
+              placement="bottomRight"
+              content={
+                <List
+                  size="small"
+                  style={{ minWidth: 160 }}
+                  dataSource={hiddenList}
+                  locale={{ emptyText: 'Nothing hidden' }}
+                  renderItem={(t) => (
+                    <List.Item style={{ padding: '4px 0' }}>
+                      <Text strong style={{ flex: 1 }}>{t}</Text>
+                      <Button
+                        type="link"
+                        size="small"
+                        onClick={() => unhide(t)}
+                        style={{ padding: 0, height: 'auto' }}
+                      >
+                        unhide
+                      </Button>
+                    </List.Item>
+                  )}
+                />
+              }
+            >
+              <Button size="small" icon={<EyeInvisibleOutlined />}>
+                {hiddenList.length} hidden
+              </Button>
+            </Popover>
+          )}
           <Tooltip title="Edit filters">
             <Button size="small" icon={<FilterOutlined />} onClick={() => setFiltersOpen(true)}>
               Filters
