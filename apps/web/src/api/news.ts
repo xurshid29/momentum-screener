@@ -1,5 +1,5 @@
 import { apiClient } from './client';
-import type { NewsArticle } from './types';
+import type { NewsArticle, ClassifyArticleResponse } from './types';
 
 export const newsApi = {
   async forTicker(ticker: string, limit = 50): Promise<NewsArticle[]> {
@@ -18,6 +18,11 @@ export const newsApi = {
     if (opts?.universe) params.set('universe', 'true');
     if (opts?.hours != null) params.set('hours', String(opts.hours));
     const res = await apiClient.get<NewsArticle[]>(`/api/news/feed?${params.toString()}`);
+    return res.data;
+  },
+
+  async classify(articleId: string): Promise<ClassifyArticleResponse> {
+    const res = await apiClient.post<ClassifyArticleResponse>(`/api/news/${encodeURIComponent(articleId)}/classify`);
     return res.data;
   },
 };

@@ -2,8 +2,23 @@ import { Router } from 'express';
 import { authMiddleware } from '../middleware/auth.js';
 import { getDb } from '../db/index.js';
 import { universe } from '../services/universe.js';
+import { getOrClassifyArticle } from '../services/classify-article.js';
 
 const router = Router();
+
+// Shared shape for the per-article catalyst column that comes back with
+// each news row. `null` when nothing has classified the article yet.
+const CLASSIFICATION_COLUMNS = [
+  'c.impact_score',
+  'c.urgency',
+  'c.direction',
+  'c.catalyst_type',
+  'c.materiality',
+  'c.confidence',
+  'c.reason',
+  'c.risk_flags',
+  'c.classifier',
+] as const;
 
 // GET /api/news?ticker=X&limit=N — per-ticker news history.
 router.get('/', authMiddleware, async (req, res) => {
@@ -13,12 +28,16 @@ router.get('/', authMiddleware, async (req, res) => {
   let q = db
     .selectFrom('news_articles as a')
     .innerJoin('news_ticker_links as l', 'l.article_id', 'a.id')
-    .select(['a.id', 'a.source', 'a.url', 'a.title', 'a.published_at', 'a.fetched_at', 'l.ticker'])
+    .leftJoin('news_classifications as c', 'c.article_id', 'a.id')
+    .select([
+      'a.id', 'a.source', 'a.url', 'a.title', 'a.published_at', 'a.fetched_at', 'l.ticker',
+      ...CLASSIFICATION_COLUMNS,
+    ])
     .orderBy('a.published_at', 'desc')
     .limit(limit);
   if (ticker) q = q.where('l.ticker', '=', ticker);
   const rows = await q.execute();
-  res.json({ data: rows });
+  res.json({ data: rows.map(shapeNewsRow) });
 });
 
 // GET /api/news/feed?tickers=A,B,C&universe=true&hours=N&limit=N — latest news.
@@ -60,7 +79,11 @@ router.get('/feed', authMiddleware, async (req, res) => {
   let q = db
     .selectFrom('news_articles as a')
     .innerJoin('news_ticker_links as l', 'l.article_id', 'a.id')
-    .select(['a.id', 'a.source', 'a.url', 'a.title', 'a.published_at', 'a.fetched_at', 'l.ticker'])
+    .leftJoin('news_classifications as c', 'c.article_id', 'a.id')
+    .select([
+      'a.id', 'a.source', 'a.url', 'a.title', 'a.published_at', 'a.fetched_at', 'l.ticker',
+      ...CLASSIFICATION_COLUMNS,
+    ])
     .orderBy('a.published_at', 'desc')
     .limit(limit);
 
@@ -76,7 +99,75 @@ router.get('/feed', authMiddleware, async (req, res) => {
   }
 
   const rows = await q.execute();
-  res.json({ data: rows });
+  res.json({ data: rows.map(shapeNewsRow) });
 });
+
+// POST /api/news/:articleId/classify — synchronous on-demand classifier.
+// If the article is already classified, returns the cached result with
+// `cached: true`. Otherwise spends an OpenAI call (or falls back to rules
+// if OpenAI is unavailable) and persists the result before returning.
+router.post('/:articleId/classify', authMiddleware, async (req, res) => {
+  const articleId = req.params.articleId;
+  if (!articleId || typeof articleId !== 'string') {
+    res.status(400).json({ error: 'invalid article id' });
+    return;
+  }
+  try {
+    const result = await getOrClassifyArticle(articleId);
+    if (!result) {
+      res.status(404).json({ error: 'article not found' });
+      return;
+    }
+    res.json({ data: result });
+  } catch (err) {
+    console.error('[news/classify] failed:', err);
+    res.status(500).json({ error: 'classification failed' });
+  }
+});
+
+interface NewsRowDbShape {
+  id: string;
+  source: string;
+  url: string;
+  title: string;
+  published_at: Date | string | null;
+  fetched_at: Date | string;
+  ticker: string;
+  impact_score: number | null;
+  urgency: string | null;
+  direction: string | null;
+  catalyst_type: string | null;
+  materiality: string | null;
+  confidence: string | number | null; // pg numeric returns as string sometimes
+  reason: string | null;
+  risk_flags: unknown;
+  classifier: string | null;
+}
+
+function shapeNewsRow(r: NewsRowDbShape) {
+  const hasClassification = r.impact_score != null && r.classifier != null;
+  return {
+    id: r.id,
+    source: r.source,
+    url: r.url,
+    title: r.title,
+    published_at: r.published_at,
+    fetched_at: r.fetched_at,
+    ticker: r.ticker,
+    classification: hasClassification
+      ? {
+          impact_score: r.impact_score,
+          urgency: r.urgency,
+          direction: r.direction,
+          catalyst_type: r.catalyst_type,
+          materiality: r.materiality,
+          confidence: r.confidence != null ? Number(r.confidence) : null,
+          reason: r.reason,
+          risk_flags: Array.isArray(r.risk_flags) ? r.risk_flags : [],
+          classifier: r.classifier,
+        }
+      : null,
+  };
+}
 
 export default router;

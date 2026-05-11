@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Typography, List, Tag, Tabs } from 'antd';
 import { newsApi } from '../../api/news';
 import { useSelection } from '../../context/SelectionContext';
+import { CatalystAnalyzeButton } from './CatalystAnalyzeButton';
 import type { CyclePayload, NewsArticle } from '../../api/types';
 
 const { Text } = Typography;
@@ -154,14 +155,15 @@ function NewsListPane({ items, headerRight, emptyText }: NewsListPaneProps) {
             <List.Item style={{ padding: '6px 0', borderBottom: '1px solid #2a2a2a' }}>
               <div style={{ width: '100%' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
-                  <div>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                    <CatalystAnalyzeButton articleId={n.id} initial={n.classification} />
                     {n.ticker && (
                       <a
                         onClick={(e) => {
                           e.preventDefault();
                           if (n.ticker) setSelected(n.ticker);
                         }}
-                        style={{ color: '#1890ff', fontWeight: 600, marginRight: 6, cursor: 'pointer' }}
+                        style={{ color: '#1890ff', fontWeight: 600, cursor: 'pointer' }}
                       >
                         {n.ticker}
                       </a>

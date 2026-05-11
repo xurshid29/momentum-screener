@@ -134,6 +134,18 @@ export interface HistoryRow {
 }
 
 // ─── news ──────────────────────────────────────────────────────────────────
+export interface NewsClassification {
+  impact_score: number;
+  urgency: CatalystUrgency;
+  direction: CatalystDirection;
+  catalyst_type: string;
+  materiality: 'high' | 'medium' | 'low' | 'unknown';
+  confidence: number;
+  reason: string | null;
+  risk_flags: string[];
+  classifier: Classifier;
+}
+
 export interface NewsArticle {
   id: string;
   source: NewsSource;
@@ -142,6 +154,11 @@ export interface NewsArticle {
   published_at: string | null;
   fetched_at: string;
   ticker: string | null;
+  classification: NewsClassification | null;
+}
+
+export interface ClassifyArticleResponse extends NewsClassification {
+  cached: boolean;
 }
 
 // ─── prefs ─────────────────────────────────────────────────────────────────

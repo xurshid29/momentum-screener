@@ -5,6 +5,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { useSelection } from '../../context/SelectionContext';
 import { newsApi } from '../../api/news';
 import { screenerApi } from '../../api/screener';
+import { CatalystAnalyzeButton } from '../news/CatalystAnalyzeButton';
 import type { CyclePayload, EnrichedRow, HistoryRow, NewsArticle, RowStatus } from '../../api/types';
 import { fmtPct, fmtPrice, fmtVolume, fmtFloat, fmtMcap, fmtRelVol, fmtBigPct, num } from '../../utils/format';
 
@@ -264,7 +265,9 @@ function DetailsTab({ ticker, meta, news }: DetailsTabProps) {
               <List.Item style={{ padding: '6px 0', borderBottom: '1px solid #2a2a2a' }}>
                 <div style={{ width: '100%' }}>
                   <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
-                    <span style={{ flex: '0 0 auto' }}>🔥</span>
+                    <span style={{ flex: '0 0 auto' }}>
+                      <CatalystAnalyzeButton articleId={n.id} initial={n.classification} />
+                    </span>
                     <a
                       href={n.url}
                       target="_blank"
