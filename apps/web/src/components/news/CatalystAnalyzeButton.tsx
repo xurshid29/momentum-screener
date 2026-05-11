@@ -12,7 +12,7 @@ interface Props {
 }
 
 // Per-row catalyst analysis button. Three visual states:
-//   • 🤖 grey  — no classification yet, click triggers a POST
+//   • ✨ grey  — no classification yet, click triggers a POST
 //   • tiered  — already classified, click shows cached result
 //   • spinner — POST in flight
 // Idempotent on the server: re-clicking a classified article returns the
@@ -40,7 +40,7 @@ export function CatalystAnalyzeButton({ articleId, initial, size = 14 }: Props) 
     }
   }
 
-  const icon = data ? tierIcon(data.impact_score) : '🤖';
+  const icon = data ? tierIcon(data.impact_score) : '✨';
   const opacity = data ? 1 : 0.55;
 
   return (
