@@ -13,7 +13,7 @@ interface Props {
 
 // Per-row catalyst analysis button. Three visual states:
 //   • ✨ grey  — no classification yet, click triggers a POST
-//   • tiered  — already classified, click shows cached result
+//   • score   — already classified, shows tier-colored number badge
 //   • spinner — POST in flight
 // Idempotent on the server: re-clicking a classified article returns the
 // cached row without spending a new OpenAI call.
@@ -39,9 +39,6 @@ export function CatalystAnalyzeButton({ articleId, initial, size = 14 }: Props) 
       setLoading(false);
     }
   }
-
-  const icon = data ? tierIcon(data.impact_score) : '✨';
-  const opacity = data ? 1 : 0.55;
 
   return (
     <Popover
@@ -73,29 +70,46 @@ export function CatalystAnalyzeButton({ articleId, initial, size = 14 }: Props) 
           margin: 0,
           font: 'inherit',
           color: 'inherit',
-          opacity,
           fontSize: size,
           lineHeight: 1,
         }}
       >
-        {loading ? <Spin size="small" /> : icon}
+        {loading ? <Spin size="small" /> : data ? <ScoreBadge score={data.impact_score} /> : <span style={{ opacity: 0.55 }}>✨</span>}
       </button>
     </Popover>
   );
 }
 
-function tierIcon(score: number): string {
-  if (score >= 70) return '🔥';
-  if (score >= 40) return '⚡';
-  if (score >= 15) return '🧊';
-  return '💤';
+// Tiered colors — match the popover's tag color so the meaning carries
+// across both surfaces.
+function tierBg(score: number): string {
+  if (score >= 70) return '#cf1322';  // red — major catalyst
+  if (score >= 40) return '#d48806';  // gold — strong
+  if (score >= 15) return '#0958d9';  // blue — weak
+  return '#595959';                    // gray — noise
 }
 
-function tierColor(score: number): string {
-  if (score >= 70) return 'volcano';
-  if (score >= 40) return 'gold';
-  if (score >= 15) return 'blue';
-  return 'default';
+function ScoreBadge({ score }: { score: number }) {
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minWidth: 22,
+        height: 16,
+        padding: '0 4px',
+        fontSize: 11,
+        fontWeight: 700,
+        color: '#fff',
+        background: tierBg(score),
+        borderRadius: 3,
+        lineHeight: 1,
+      }}
+    >
+      {score}
+    </span>
+  );
 }
 
 function urgencyColor(u: NewsClassification['urgency']): string {
@@ -111,10 +125,7 @@ function CatalystContent({ c }: { c: NewsClassification }) {
   return (
     <div style={{ maxWidth: 280, fontSize: 12 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-        <span style={{ fontSize: 16 }}>{tierIcon(c.impact_score)}</span>
-        <Tag color={tierColor(c.impact_score)} style={{ margin: 0, fontWeight: 600 }}>
-          {c.impact_score}
-        </Tag>
+        <ScoreBadge score={c.impact_score} />
         <Tag color={urgencyColor(c.urgency)} style={{ margin: 0 }}>{c.urgency.toUpperCase()}</Tag>
         <Tag style={{ margin: 0 }}>{c.catalyst_type}</Tag>
       </div>
