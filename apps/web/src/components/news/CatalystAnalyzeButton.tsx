@@ -88,7 +88,7 @@ function tierIcon(score: number): string {
   if (score >= 70) return '🔥';
   if (score >= 40) return '⚡';
   if (score >= 15) return '🧊';
-  return '·';
+  return '💤';
 }
 
 function tierColor(score: number): string {
