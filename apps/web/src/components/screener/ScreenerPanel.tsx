@@ -5,6 +5,7 @@ import type { ColumnsType } from 'antd/es/table';
 import type { CyclePayload, EnrichedRow, RowStatus } from '../../api/types';
 import { useSelection } from '../../context/SelectionContext';
 import { TickerLink } from '../common/TickerLink';
+import { ScoreBadge } from '../common/ScoreBadge';
 import { fmtPct, fmtFloat, fmtPrice, fmtVolume, fmtMcap, fmtRelVol, fmtBigPct, num } from '../../utils/format';
 import { FiltersDialog } from './FiltersDialog';
 
@@ -76,7 +77,7 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
             />
             {row.is_fresh_news && <span title="Fresh news this cycle"> 🚨</span>}
             {row.has_today_news && (
-              <CatalystIcon
+              <CatalystBadge
                 score={row.catalyst?.score ?? null}
                 reason={row.catalyst?.reason}
                 type={row.catalyst?.type}
@@ -205,13 +206,11 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
   );
 }
 
-// Catalyst-tier icon — keeps the fire motif but varies by impact score.
-//   ≥70  🔥  major catalyst (red flame)
-//   40+  ⚡  watch / momentum-only
-//   15+  🧊  weak headline
-//   <15  —   nothing (we still show the underlying news icon elsewhere)
-// `score` is `null` until the classifier has run for this article.
-function CatalystIcon({
+// Score badge for the screener row. Matches the news-row analyze button so
+// the tier colors mean the same thing in both places. `null` score means
+// the classifier hasn't run yet for this article — show a faint placeholder
+// rather than an arbitrary tier.
+function CatalystBadge({
   score,
   reason,
   type,
@@ -220,10 +219,13 @@ function CatalystIcon({
   reason?: string;
   type?: string;
 }) {
-  if (score == null) return <span title="Catalyst score pending"> 🔥</span>;
+  if (score == null) {
+    return <span title="Catalyst score pending" style={{ marginLeft: 6, opacity: 0.55 }}>✨</span>;
+  }
   const tooltip = `${score} · ${type ?? ''}${reason ? ` — ${reason}` : ''}`.trim();
-  if (score >= 70) return <span title={tooltip} style={{ filter: 'saturate(1.2)' }}> 🔥</span>;
-  if (score >= 40) return <span title={tooltip}> ⚡</span>;
-  if (score >= 15) return <span title={tooltip} style={{ opacity: 0.65 }}> 🧊</span>;
-  return null;
+  return (
+    <span title={tooltip} style={{ marginLeft: 6 }}>
+      <ScoreBadge score={score} size="sm" />
+    </span>
+  );
 }

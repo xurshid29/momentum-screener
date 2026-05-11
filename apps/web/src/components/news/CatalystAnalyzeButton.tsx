@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Popover, Spin, Tag, Typography } from 'antd';
 import { newsApi } from '../../api/news';
+import { ScoreBadge } from '../common/ScoreBadge';
 import type { NewsClassification } from '../../api/types';
 
 const { Text } = Typography;
@@ -77,38 +78,6 @@ export function CatalystAnalyzeButton({ articleId, initial, size = 14 }: Props) 
         {loading ? <Spin size="small" /> : data ? <ScoreBadge score={data.impact_score} /> : <span style={{ opacity: 0.55 }}>✨</span>}
       </button>
     </Popover>
-  );
-}
-
-// Tiered colors — match the popover's tag color so the meaning carries
-// across both surfaces.
-function tierBg(score: number): string {
-  if (score >= 70) return '#cf1322';  // red — major catalyst
-  if (score >= 40) return '#d48806';  // gold — strong
-  if (score >= 15) return '#0958d9';  // blue — weak
-  return '#595959';                    // gray — noise
-}
-
-function ScoreBadge({ score }: { score: number }) {
-  return (
-    <span
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        minWidth: 22,
-        height: 16,
-        padding: '0 4px',
-        fontSize: 11,
-        fontWeight: 700,
-        color: '#fff',
-        background: tierBg(score),
-        borderRadius: 3,
-        lineHeight: 1,
-      }}
-    >
-      {score}
-    </span>
   );
 }
 
