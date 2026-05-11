@@ -4,10 +4,10 @@
 
 interface Props {
   score: number;
-  size?: number;       // px height, defaults to 16
+  size?: number;       // px height, defaults to 18
 }
 
-export function FireBadge({ score, size = 16 }: Props) {
+export function FireBadge({ score, size = 18 }: Props) {
   if (score < 15) return null;
   const { color, count } = tier(score);
   return (
