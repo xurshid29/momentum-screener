@@ -6,6 +6,7 @@ import { useSelection } from '../../context/SelectionContext';
 import { newsApi } from '../../api/news';
 import { screenerApi } from '../../api/screener';
 import { CatalystAnalyzeButton } from '../news/CatalystAnalyzeButton';
+import { TickerLink } from '../common/TickerLink';
 import type { CyclePayload, EnrichedRow, HistoryRow, NewsArticle, RowStatus } from '../../api/types';
 import { fmtPct, fmtPrice, fmtVolume, fmtFloat, fmtMcap, fmtRelVol, fmtBigPct, num } from '../../utils/format';
 
@@ -209,7 +210,10 @@ function DetailsTab({ ticker, meta, news }: DetailsTabProps) {
     <div style={{ height: '100%', overflow: 'auto', padding: '10px 12px' }}>
       {/* Header — ticker + price + change */}
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 4 }}>
-        <Text strong style={{ color: '#fff', fontSize: 22, letterSpacing: 0.5 }}>{ticker}</Text>
+        <TickerLink
+          ticker={ticker}
+          style={{ color: '#fff', fontSize: 22, fontWeight: 700, letterSpacing: 0.5 }}
+        />
         <Text style={{ color: '#e6e6e6', fontSize: 18 }}>{fmtPrice(meta?.price)}</Text>
         <Text style={{ color: changeColor, fontSize: 14, fontWeight: 600 }}>
           {change != null && change >= 0 ? '+' : ''}{fmtPct(meta?.change_pct)}

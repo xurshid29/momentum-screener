@@ -4,6 +4,7 @@ import { Typography, List, Tag, Tabs } from 'antd';
 import { newsApi } from '../../api/news';
 import { useSelection } from '../../context/SelectionContext';
 import { CatalystAnalyzeButton } from './CatalystAnalyzeButton';
+import { TickerLink } from '../common/TickerLink';
 import type { CyclePayload, NewsArticle } from '../../api/types';
 
 const { Text } = Typography;
@@ -158,13 +159,12 @@ function NewsListPane({ items, headerRight, emptyText }: NewsListPaneProps) {
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
                     <CatalystAnalyzeButton articleId={n.id} initial={n.classification} />
                     {n.tickers.slice(0, 6).map((t) => (
-                      <a
+                      <TickerLink
                         key={t}
-                        onClick={(e) => { e.preventDefault(); setSelected(t); }}
-                        style={{ color: '#1890ff', fontWeight: 600, cursor: 'pointer' }}
-                      >
-                        {t}
-                      </a>
+                        ticker={t}
+                        onSelect={setSelected}
+                        style={{ color: '#1890ff', fontWeight: 600 }}
+                      />
                     ))}
                     {n.tickers.length > 6 && (
                       <Text type="secondary" style={{ fontSize: 11 }}>+{n.tickers.length - 6}</Text>

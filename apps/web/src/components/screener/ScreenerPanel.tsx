@@ -4,6 +4,7 @@ import { FilterOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import type { CyclePayload, EnrichedRow, RowStatus } from '../../api/types';
 import { useSelection } from '../../context/SelectionContext';
+import { TickerLink } from '../common/TickerLink';
 import { fmtPct, fmtFloat, fmtPrice, fmtVolume, fmtMcap, fmtRelVol, fmtBigPct, num } from '../../utils/format';
 import { FiltersDialog } from './FiltersDialog';
 
@@ -67,7 +68,12 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
         width: 110,
         render: (t: string, row) => (
           <span>
-            <Text strong style={{ color: '#fff' }}>{t}</Text>
+            <TickerLink
+              ticker={t}
+              onSelect={setSelected}
+              stopPropagation
+              style={{ color: '#fff', fontWeight: 600 }}
+            />
             {row.is_fresh_news && <span title="Fresh news this cycle"> 🚨</span>}
             {row.has_today_news && (
               <CatalystIcon
