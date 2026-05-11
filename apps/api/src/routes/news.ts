@@ -21,22 +21,29 @@ const CLASSIFICATION_COLUMNS = [
   'c.classifier',
 ] as const;
 
-// Subquery that aggregates every ticker tagged to an article into a sorted
-// array. Lives in SELECT so each article appears once per outer query row
-// regardless of how many ticker links it has.
-const TICKERS_AGG = sql<string[]>`COALESCE((SELECT array_agg(ticker ORDER BY ticker) FROM news_ticker_links WHERE article_id = a.id), '{}'::text[])`.as('tickers');
+// Subquery that aggregates the article's ticker links into a sorted array.
+// When a filter is given, the array is intersected with the filter — so a
+// Benzinga article tagged to AAPL + a universe ticker only surfaces the
+// universe ticker, not the AAPL noise.
+function tickersAggExpr(filter: string[] | null) {
+  if (!filter) {
+    return sql<string[]>`COALESCE((SELECT array_agg(ticker ORDER BY ticker) FROM news_ticker_links WHERE article_id = a.id), '{}'::text[])`.as('tickers');
+  }
+  return sql<string[]>`COALESCE((SELECT array_agg(ticker ORDER BY ticker) FROM news_ticker_links WHERE article_id = a.id AND ticker = ANY(${filter}::text[])), '{}'::text[])`.as('tickers');
+}
 
 // GET /api/news?ticker=X&limit=N — per-ticker news history.
 router.get('/', authMiddleware, async (req, res) => {
   const ticker = typeof req.query.ticker === 'string' ? req.query.ticker.toUpperCase() : null;
   const limit = Math.min(parseInt(String(req.query.limit ?? '50'), 10) || 50, 200);
   const db = getDb();
+  const tickerFilter = ticker ? [ticker] : null;
   let q = db
     .selectFrom('news_articles as a')
     .leftJoin('news_classifications as c', 'c.article_id', 'a.id')
     .select([
       'a.id', 'a.source', 'a.url', 'a.title', 'a.published_at', 'a.fetched_at',
-      TICKERS_AGG,
+      tickersAggExpr(tickerFilter),
       ...CLASSIFICATION_COLUMNS,
     ])
     .orderBy('a.published_at', 'desc')
@@ -89,7 +96,7 @@ router.get('/feed', authMiddleware, async (req, res) => {
     .leftJoin('news_classifications as c', 'c.article_id', 'a.id')
     .select([
       'a.id', 'a.source', 'a.url', 'a.title', 'a.published_at', 'a.fetched_at',
-      TICKERS_AGG,
+      tickersAggExpr(effectiveTickers),
       ...CLASSIFICATION_COLUMNS,
     ])
     .orderBy('a.published_at', 'desc')
