@@ -5,7 +5,7 @@ import type { ColumnsType } from 'antd/es/table';
 import type { CyclePayload, EnrichedRow, RowStatus } from '../../api/types';
 import { useSelection } from '../../context/SelectionContext';
 import { TickerLink } from '../common/TickerLink';
-import { ScoreBadge } from '../common/ScoreBadge';
+import { FireBadge } from '../common/FireBadge';
 import { fmtPct, fmtFloat, fmtPrice, fmtVolume, fmtMcap, fmtRelVol, fmtBigPct, num } from '../../utils/format';
 import { FiltersDialog } from './FiltersDialog';
 
@@ -206,10 +206,12 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
   );
 }
 
-// Score badge for the screener row. Matches the news-row analyze button so
-// the tier colors mean the same thing in both places. `null` score means
-// the classifier hasn't run yet for this article — show a faint placeholder
-// rather than an arbitrary tier.
+// Catalyst marker for a screener row. Color + flame count signal strength
+// at a glance; tooltip carries the precise score and reason.
+//   ≥70  🔥🔥 red    — major catalyst
+//   40+  🔥    orange — strong
+//   15+  🔥    yellow — weak
+//   <15  —            — hidden
 function CatalystBadge({
   score,
   reason,
@@ -222,10 +224,11 @@ function CatalystBadge({
   if (score == null) {
     return <span title="Catalyst score pending" style={{ marginLeft: 6, opacity: 0.55 }}>✨</span>;
   }
+  if (score < 15) return null;
   const tooltip = `${score} · ${type ?? ''}${reason ? ` — ${reason}` : ''}`.trim();
   return (
     <span title={tooltip} style={{ marginLeft: 6 }}>
-      <ScoreBadge score={score} size="sm" />
+      <FireBadge score={score} />
     </span>
   );
 }
