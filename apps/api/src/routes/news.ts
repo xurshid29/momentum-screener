@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { sql } from 'kysely';
 import { authMiddleware } from '../middleware/auth.js';
 import { getDb } from '../db/index.js';
 import { universe } from '../services/universe.js';
@@ -20,6 +21,11 @@ const CLASSIFICATION_COLUMNS = [
   'c.classifier',
 ] as const;
 
+// Subquery that aggregates every ticker tagged to an article into a sorted
+// array. Lives in SELECT so each article appears once per outer query row
+// regardless of how many ticker links it has.
+const TICKERS_AGG = sql<string[]>`COALESCE((SELECT array_agg(ticker ORDER BY ticker) FROM news_ticker_links WHERE article_id = a.id), '{}'::text[])`.as('tickers');
+
 // GET /api/news?ticker=X&limit=N — per-ticker news history.
 router.get('/', authMiddleware, async (req, res) => {
   const ticker = typeof req.query.ticker === 'string' ? req.query.ticker.toUpperCase() : null;
@@ -27,15 +33,17 @@ router.get('/', authMiddleware, async (req, res) => {
   const db = getDb();
   let q = db
     .selectFrom('news_articles as a')
-    .innerJoin('news_ticker_links as l', 'l.article_id', 'a.id')
     .leftJoin('news_classifications as c', 'c.article_id', 'a.id')
     .select([
-      'a.id', 'a.source', 'a.url', 'a.title', 'a.published_at', 'a.fetched_at', 'l.ticker',
+      'a.id', 'a.source', 'a.url', 'a.title', 'a.published_at', 'a.fetched_at',
+      TICKERS_AGG,
       ...CLASSIFICATION_COLUMNS,
     ])
     .orderBy('a.published_at', 'desc')
     .limit(limit);
-  if (ticker) q = q.where('l.ticker', '=', ticker);
+  if (ticker) {
+    q = q.where(sql<boolean>`EXISTS (SELECT 1 FROM news_ticker_links WHERE article_id = a.id AND ticker = ${ticker})`);
+  }
   const rows = await q.execute();
   res.json({ data: rows.map(shapeNewsRow) });
 });
@@ -78,17 +86,18 @@ router.get('/feed', authMiddleware, async (req, res) => {
   const db = getDb();
   let q = db
     .selectFrom('news_articles as a')
-    .innerJoin('news_ticker_links as l', 'l.article_id', 'a.id')
     .leftJoin('news_classifications as c', 'c.article_id', 'a.id')
     .select([
-      'a.id', 'a.source', 'a.url', 'a.title', 'a.published_at', 'a.fetched_at', 'l.ticker',
+      'a.id', 'a.source', 'a.url', 'a.title', 'a.published_at', 'a.fetched_at',
+      TICKERS_AGG,
       ...CLASSIFICATION_COLUMNS,
     ])
     .orderBy('a.published_at', 'desc')
     .limit(limit);
 
   if (effectiveTickers) {
-    q = q.where('l.ticker', 'in', effectiveTickers);
+    const tickerArr = effectiveTickers;
+    q = q.where(sql<boolean>`EXISTS (SELECT 1 FROM news_ticker_links WHERE article_id = a.id AND ticker = ANY(${tickerArr}::text[]))`);
   }
 
   if (useUniverse) {
@@ -132,7 +141,7 @@ interface NewsRowDbShape {
   title: string;
   published_at: Date | string | null;
   fetched_at: Date | string;
-  ticker: string;
+  tickers: string[] | null;
   impact_score: number | null;
   urgency: string | null;
   direction: string | null;
@@ -153,7 +162,7 @@ function shapeNewsRow(r: NewsRowDbShape) {
     title: r.title,
     published_at: r.published_at,
     fetched_at: r.fetched_at,
-    ticker: r.ticker,
+    tickers: Array.isArray(r.tickers) ? r.tickers : [],
     classification: hasClassification
       ? {
           impact_score: r.impact_score,

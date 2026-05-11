@@ -153,7 +153,9 @@ export interface NewsArticle {
   title: string;
   published_at: string | null;
   fetched_at: string;
-  ticker: string | null;
+  // Every ticker tagged to the article, alphabetical. Same article appears
+  // once in the feed regardless of how many tickers it covers.
+  tickers: string[];
   classification: NewsClassification | null;
 }
 

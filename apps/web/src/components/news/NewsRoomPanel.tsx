@@ -155,18 +155,19 @@ function NewsListPane({ items, headerRight, emptyText }: NewsListPaneProps) {
             <List.Item style={{ padding: '6px 0', borderBottom: '1px solid #2a2a2a' }}>
               <div style={{ width: '100%' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
-                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
                     <CatalystAnalyzeButton articleId={n.id} initial={n.classification} />
-                    {n.ticker && (
+                    {n.tickers.slice(0, 6).map((t) => (
                       <a
-                        onClick={(e) => {
-                          e.preventDefault();
-                          if (n.ticker) setSelected(n.ticker);
-                        }}
+                        key={t}
+                        onClick={(e) => { e.preventDefault(); setSelected(t); }}
                         style={{ color: '#1890ff', fontWeight: 600, cursor: 'pointer' }}
                       >
-                        {n.ticker}
+                        {t}
                       </a>
+                    ))}
+                    {n.tickers.length > 6 && (
+                      <Text type="secondary" style={{ fontSize: 11 }}>+{n.tickers.length - 6}</Text>
                     )}
                     <a href={n.url} target="_blank" rel="noopener noreferrer" style={{ color: '#e6e6e6', fontSize: 13 }}>
                       {n.title}
