@@ -103,11 +103,12 @@ export async function classifyByOpenAI(input: ClassifierInput): Promise<Classifi
   const oai = getClient();
   if (!oai) return null;
 
+  // Source intentionally omitted — same headline from finviz/yahoo/benzinga
+  // should score the same. Including it nudges the model to weight credibility.
   const userPayload = {
     ticker: input.ticker,
     title: input.title,
     body: truncate(input.body, MAX_BODY_CHARS),
-    source: input.source,
     market_context: input.marketContext
       ? {
           change_pct: input.marketContext.change_pct,
@@ -122,6 +123,9 @@ export async function classifyByOpenAI(input: ClassifierInput): Promise<Classifi
   try {
     const res = await oai.chat.completions.create({
       model: MODEL,
+      // Deterministic — same headline must score the same every call.
+      temperature: 0,
+      seed: 1,
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: JSON.stringify(userPayload) },
