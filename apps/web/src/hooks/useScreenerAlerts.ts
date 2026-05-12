@@ -12,27 +12,53 @@ function ctx(): AudioContext {
   return audioCtx;
 }
 
-function beep(frequency: number, durationMs: number, when = 0) {
+// Trader-friendly alert tone: sharp attack, ~70% sustain, brief decay.
+// Layers a sine + a triangle one octave higher for more presence than a
+// pure sine — cuts through background noise without being harsh.
+function beep(frequency: number, durationMs: number, when = 0, peak = 0.55) {
   const ac = ctx();
-  const osc = ac.createOscillator();
+  const t0 = ac.currentTime + when;
+  const dur = durationMs / 1000;
+  const sustainEnd = t0 + dur * 0.7;
+  const end = t0 + dur;
+
   const gain = ac.createGain();
-  osc.frequency.value = frequency;
-  osc.type = 'sine';
-  gain.gain.setValueAtTime(0.0001, ac.currentTime + when);
-  gain.gain.exponentialRampToValueAtTime(0.25, ac.currentTime + when + 0.01);
-  gain.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + when + durationMs / 1000);
-  osc.connect(gain).connect(ac.destination);
-  osc.start(ac.currentTime + when);
-  osc.stop(ac.currentTime + when + durationMs / 1000 + 0.05);
+  gain.gain.setValueAtTime(0.0001, t0);
+  gain.gain.exponentialRampToValueAtTime(peak, t0 + 0.005);
+  gain.gain.setValueAtTime(peak, sustainEnd);
+  gain.gain.exponentialRampToValueAtTime(0.0001, end);
+  gain.connect(ac.destination);
+
+  const fundamental = ac.createOscillator();
+  fundamental.type = 'sine';
+  fundamental.frequency.value = frequency;
+  fundamental.connect(gain);
+  fundamental.start(t0);
+  fundamental.stop(end + 0.05);
+
+  // Octave-up harmonic at lower amplitude — gives the tone a brighter,
+  // more "alert" character without distorting.
+  const harmonic = ac.createOscillator();
+  const harmonicGain = ac.createGain();
+  harmonic.type = 'triangle';
+  harmonic.frequency.value = frequency * 2;
+  harmonicGain.gain.value = 0.35;
+  harmonic.connect(harmonicGain).connect(gain);
+  harmonic.start(t0);
+  harmonic.stop(end + 0.05);
 }
 
 function dingDing() {
-  beep(880, 180);          // A5
-  beep(1320, 220, 0.18);   // E6
+  // 3 ascending tones — major catalyst, deserves a triple ding.
+  beep(880, 220);          // A5
+  beep(1320, 220, 0.24);   // E6
+  beep(1760, 280, 0.48);   // A6
 }
 
 function chime() {
-  beep(660, 200);          // E5
+  // 2 ascending tones for fresh news.
+  beep(660, 220);          // E5
+  beep(880, 240, 0.24);    // A5
 }
 
 export function requestNotificationPermission() {
