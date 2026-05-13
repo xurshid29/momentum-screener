@@ -32,7 +32,9 @@ function tickersAggExpr(filter: string[] | null) {
   return sql<string[]>`COALESCE((SELECT array_agg(ticker ORDER BY ticker) FROM news_ticker_links WHERE article_id = a.id AND ticker = ANY(${filter}::text[])), '{}'::text[])`.as('tickers');
 }
 
-// GET /api/news?ticker=X&limit=N — per-ticker news history.
+// GET /api/news?ticker=X&limit=N — per-ticker news for today (ET).
+// Restricted to the current America/New_York date so the Quote Details panel
+// doesn't surface stale prior-day headlines on intraday-momentum tickers.
 router.get('/', authMiddleware, async (req, res) => {
   const ticker = typeof req.query.ticker === 'string' ? req.query.ticker.toUpperCase() : null;
   const limit = Math.min(parseInt(String(req.query.limit ?? '50'), 10) || 50, 200);
@@ -46,6 +48,7 @@ router.get('/', authMiddleware, async (req, res) => {
       tickersAggExpr(tickerFilter),
       ...CLASSIFICATION_COLUMNS,
     ])
+    .where(sql<boolean>`(a.published_at AT TIME ZONE 'America/New_York')::date = (now() AT TIME ZONE 'America/New_York')::date`)
     .orderBy('a.published_at', 'desc')
     .limit(limit);
   if (ticker) {
