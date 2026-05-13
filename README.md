@@ -74,7 +74,7 @@ Register a user at `/login`, then the dashboard loads. The poller starts automat
 ## Project structure
 
 ```
-momentum_screener/
+pnldash/
 ├── apps/
 │   ├── api/                      # Express backend
 │   │   └── src/
