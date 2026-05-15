@@ -19,11 +19,16 @@ export interface ScreenerFilterSnapshot {
   interval_sec: number;
 }
 
+// ET trading session a cycle was polled in. 'afterhours' cycles carry
+// after-hours change/price/volume; the rest carry regular-session figures.
+export type TradingSession = 'premarket' | 'regular' | 'afterhours' | 'closed';
+
 export interface ScreenerCyclesTable {
   id: Generated<string>;
   polled_at: Generated<Date>;
   filter_snapshot: JSONColumnType<ScreenerFilterSnapshot>;
   row_count: Generated<number>;
+  session: Generated<TradingSession>;
   created_at: Generated<Date>;
 }
 

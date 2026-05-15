@@ -1,6 +1,8 @@
 // Finviz screener client — equivalent of the two parallel curl calls in
 // screener-poll_breakout.sh (v=131 ownership + v=110 overview), joined by ticker.
 
+import type { TradingSession } from '../db/types.js';
+
 const FINVIZ_BASE = 'https://elite.finviz.com';
 const UA = 'Mozilla/5.0';
 
@@ -119,12 +121,18 @@ export interface ScreenerOptions {
   filter: string;       // e.g. ind_stocksonly,sh_float_u50,...
   floatMaxM: number;    // post-filter ceiling
   topN: number;
+  session: TradingSession;  // 'afterhours' switches to the after-hours screen
 }
 
 // Fetch one cycle worth of screener rows.
 // Mirrors lines 63-114 of screener-poll_breakout.sh.
 export async function fetchScreener(opts: ScreenerOptions): Promise<ScreenerRow[]> {
-  const f = encodeURIComponent(opts.filter);
+  // After-hours: Finviz freezes the regular Change at the 4pm close, so we
+  // screen on the after-hours move instead. Finviz applies the ah_change
+  // filter to v=131/v=110 as well, so the ownership/overview joins below
+  // still resolve to the right universe.
+  const afterHours = opts.session === 'afterhours';
+  const f = encodeURIComponent(afterHours ? toAfterHoursFilter(opts.filter) : opts.filter);
   const ownershipUrl = `${FINVIZ_BASE}/export?v=131&f=${f}&o=-change&auth=${token()}`;
   const overviewUrl = `${FINVIZ_BASE}/export?v=110&f=${f}&o=-change&auth=${token()}`;
 
@@ -214,7 +222,59 @@ export async function fetchScreener(opts: ScreenerOptions): Promise<ScreenerRow[
       short_ratio:       num(r[10]),
     });
   }
+
+  // After-hours: v=131's Price/Change/Volume are frozen at the 4pm close.
+  // Overlay the live after-hours figures (which Finviz keeps in separate
+  // columns) so the screener reflects the current session.
+  if (afterHours && out.length > 0) {
+    await applyAfterHoursQuotes(out);
+  }
   return out;
+}
+
+// Rewrite a regular-session filter string for the after-hours screen:
+//   ta_change_*  → ah_change_*   (screen on the after-hours move; same range
+//                                 syntax, e.g. ta_change_20to → ah_change_20to)
+//   sh_relvol_*  → dropped       (relative volume is a regular-session metric
+//                                 Finviz freezes at the close)
+// All other tokens (industry, price band, …) carry over unchanged.
+function toAfterHoursFilter(filter: string): string {
+  return filter
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .filter((t) => !t.startsWith('sh_relvol'))
+    .map((t) => (t.startsWith('ta_change_') ? `ah_change_${t.slice(10)}` : t))
+    .join(',');
+}
+
+// Overlay live after-hours price/change/volume onto rows whose v=131 figures
+// are frozen at the regular close. Uses the v=152 custom view:
+//   c=1 Ticker · c=71 After-Hours Close · c=72 After-Hours Change · c=141 After-Hours Volume
+// Best-effort: on any fetch failure or a missing per-ticker quote we keep the
+// regular-session value rather than blanking the row.
+async function applyAfterHoursQuotes(rows: ScreenerRow[]): Promise<void> {
+  const url = `${FINVIZ_BASE}/export?v=152&t=${rows.map((r) => r.ticker).join(',')}&c=1,71,72,141&auth=${token()}`;
+  let csv: string[][];
+  try {
+    csv = await fetchCsv(url);
+  } catch {
+    return;
+  }
+  // header: Ticker, After-Hours Close, After-Hours Change, After-Hours Volume
+  const ah = new Map<string, { close: number | null; change: number | null; volume: number | null }>();
+  for (let i = 1; i < csv.length; i++) {
+    const r = csv[i];
+    if (r.length < 4) continue;
+    ah.set(r[0], { close: num(r[1]), change: num(r[2]), volume: num(r[3]) });
+  }
+  for (const row of rows) {
+    const q = ah.get(row.ticker);
+    if (!q) continue;
+    if (q.close != null) row.price = q.close;
+    if (q.change != null) row.change_pct = q.change;
+    if (q.volume != null) row.volume = q.volume;
+  }
 }
 
 // Batch news fetch. Returns ticker → { title, url, published_at } where

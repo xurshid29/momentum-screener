@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Table, Tag, Typography, Tooltip, Badge, Button, Space, Popover, List } from 'antd';
 import { FilterOutlined, CloseOutlined, EyeInvisibleOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import type { CyclePayload, EnrichedRow, RowStatus } from '../../api/types';
+import type { CyclePayload, EnrichedRow, RowStatus, TradingSession } from '../../api/types';
 import { useSelection } from '../../context/SelectionContext';
 import { useHiddenTickers } from '../../hooks/useHiddenTickers';
 import { TickerLink } from '../common/TickerLink';
@@ -22,6 +22,20 @@ const STATUS_COLOR: Record<NonNullable<RowStatus>, string> = {
   ACC: 'orange',
   UP: 'green',
   NEWS: 'purple',
+};
+
+const SESSION_LABEL: Record<TradingSession, string> = {
+  premarket: 'pre-market',
+  regular: 'market',
+  afterhours: 'after-hours',
+  closed: 'closed',
+};
+
+const SESSION_COLOR: Record<TradingSession, string> = {
+  premarket: '#1890ff',
+  regular: '#52c41a',
+  afterhours: '#faad14',
+  closed: '#8c8c8c',
 };
 
 export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
@@ -89,7 +103,8 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
         ),
       },
       {
-        title: 'Chg %',
+        // After-hours cycles carry the after-hours move in change_pct.
+        title: payload?.session === 'afterhours' ? 'AH Chg %' : 'Chg %',
         dataIndex: 'change_pct',
         key: 'change_pct',
         width: 80,
@@ -170,7 +185,7 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
         ),
       },
     ],
-    [hide],
+    [hide, payload?.session],
   );
 
   const allRows = payload?.rows ?? [];
@@ -229,6 +244,14 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
             text={
               <Text type="secondary" style={{ fontSize: 12 }}>
                 {connected ? 'live' : 'offline'}
+                {payload?.session && (
+                  <>
+                    {' · '}
+                    <span style={{ color: SESSION_COLOR[payload.session] }}>
+                      {SESSION_LABEL[payload.session]}
+                    </span>
+                  </>
+                )}
                 {payload?.polled_at && ` · ${new Date(payload.polled_at).toLocaleTimeString()}`}
               </Text>
             }

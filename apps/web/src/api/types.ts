@@ -93,9 +93,14 @@ export interface NewsHeadline {
   published_at: string | null;
 }
 
+// ET trading session a cycle was polled in. During 'afterhours' the row
+// change_pct/price/volume reflect after-hours figures, not the regular close.
+export type TradingSession = 'premarket' | 'regular' | 'afterhours' | 'closed';
+
 export interface CyclePayload {
   cycle_id: string;
   polled_at: string | null;
+  session: TradingSession;
   config: ScreenerFilterSnapshot;
   rows: EnrichedRow[];
   banners: { new_with_catalyst: string[]; fresh_news: string[] };

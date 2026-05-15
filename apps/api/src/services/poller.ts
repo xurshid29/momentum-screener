@@ -10,6 +10,7 @@ import type {
   CatalystDirection,
   CatalystUrgency,
   Classifier,
+  TradingSession,
 } from '../db/types.js';
 import { fetchScreener, fetchFinvizNews, type ScreenerRow } from './finviz.js';
 import { fetchYahooNews } from './yahoo.js';
@@ -35,6 +36,7 @@ const BZ_INITIAL_LOOKBACK_SEC = 1800;
 export interface CyclePayload {
   cycle_id: string;
   polled_at: string;
+  session: TradingSession;
   config: ScreenerFilterSnapshot;
   rows: EnrichedRow[];
   banners: {
@@ -92,6 +94,7 @@ class PollerService {
   private bzHeadlineCache = new Map<string, NewsHeadline>(); // ticker -> latest headline (any source merged)
   private bzWatermark = Math.floor(Date.now() / 1000) - BZ_INITIAL_LOOKBACK_SEC;
   private lastEtDate = '';
+  private lastSession: TradingSession | null = null;
   // Per-article-URL classification cache. Lets the LLM classifier
   // overwrite the rule-based score in-place; the next cycle's payload
   // automatically picks up the refined verdict without a DB read.
@@ -113,6 +116,7 @@ class PollerService {
     return {
       running: this.running,
       first_poll: this.firstPoll,
+      session: this.lastSession,
       tracked_tickers: this.prevChange.size,
       cached_headlines: this.bzHeadlineCache.size,
       bz_watermark: this.bzWatermark,
@@ -159,11 +163,21 @@ class PollerService {
   }
 
   private async runCycle() {
-    const todayEt = etDateString(new Date());
+    const now = new Date();
+    const todayEt = etDateString(now);
+    const session = currentEtSession(now);
     if (todayEt !== this.lastEtDate) {
       this.bzHeadlineCache.clear();
       this.classificationCache.clear();
       this.lastEtDate = todayEt;
+    }
+    // A session boundary (notably the 4pm regular→after-hours flip) swaps the
+    // change basis entirely. Drop per-ticker movement state so the jump isn't
+    // misread as a huge acceleration on the new session's first cycle.
+    if (session !== this.lastSession) {
+      this.prevChange.clear();
+      this.volHistory.clear();
+      this.lastSession = session;
     }
 
     // 1) screener
@@ -171,6 +185,7 @@ class PollerService {
       filter: this.config.filter,
       floatMaxM: this.config.float_max_m,
       topN: this.config.top_n,
+      session,
     });
 
     const tickers = rows.map((r) => r.ticker);
@@ -347,7 +362,7 @@ class PollerService {
     }
 
     // 5) persist
-    const cycleId = await this.persistCycle(enriched, bzDelta?.articles, finvizNews, yahooNews);
+    const cycleId = await this.persistCycle(session, enriched, bzDelta?.articles, finvizNews, yahooNews);
 
     // 6) broadcast
     const newWithCatalyst = enriched
@@ -358,6 +373,7 @@ class PollerService {
     const payload: CyclePayload = {
       cycle_id: cycleId,
       polled_at: new Date().toISOString(),
+      session,
       config: this.config,
       rows: enriched,
       banners: { new_with_catalyst: newWithCatalyst, fresh_news: freshList },
@@ -450,6 +466,7 @@ class PollerService {
   }
 
   private async persistCycle(
+    session: TradingSession,
     rows: EnrichedRow[],
     bzArticles: import('./benzinga.js').BenzingaArticle[] | undefined,
     finvizNews: Awaited<ReturnType<typeof fetchFinvizNews>>,
@@ -462,6 +479,7 @@ class PollerService {
         .values({
           filter_snapshot: JSON.stringify(this.config),
           row_count: rows.length,
+          session,
         })
         .returning('id')
         .executeTakeFirstOrThrow();
@@ -611,6 +629,36 @@ function etDateString(dt: Date): string {
     month: '2-digit',
     day: '2-digit',
   }).format(dt);
+}
+
+// Maps a moment to its US-equities trading session by ET wall-clock:
+//   premarket   04:00–09:30 ET
+//   regular     09:30–16:00 ET
+//   afterhours  16:00–20:00 ET
+//   closed      everything else (overnight + weekends)
+// Holidays are not special-cased — on a holiday Finviz simply returns no
+// movers, so the session label is cosmetically off but the screen is empty.
+function currentEtSession(at: Date): TradingSession {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      weekday: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    })
+      .formatToParts(at)
+      .filter((p) => p.type !== 'literal')
+      .map((p) => [p.type, p.value]),
+  );
+  if (parts.weekday === 'Sat' || parts.weekday === 'Sun') return 'closed';
+  let hour = parseInt(parts.hour, 10);
+  if (hour === 24) hour = 0; // some ICU builds emit '24' for midnight
+  const mins = hour * 60 + parseInt(parts.minute, 10);
+  if (mins >= 240 && mins < 570) return 'premarket';   // 04:00–09:30
+  if (mins >= 570 && mins < 960) return 'regular';     // 09:30–16:00
+  if (mins >= 960 && mins < 1200) return 'afterhours'; // 16:00–20:00
+  return 'closed';
 }
 
 // Finviz news dates look like "2026-05-03 09:31:00" with no TZ — they're ET-local.
