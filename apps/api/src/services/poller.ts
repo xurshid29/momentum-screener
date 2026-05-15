@@ -126,19 +126,57 @@ class PollerService {
 
   setConfig(partial: Partial<ScreenerFilterSnapshot>) {
     this.config = { ...this.config, ...partial };
+    void this.persistConfig();
   }
 
   getConfig(): ScreenerFilterSnapshot {
     return { ...this.config };
   }
 
+  // Restore the persisted config (screener_settings holds a single row).
+  // Falls back to the code DEFAULTS when nothing has been saved yet.
+  private async loadConfig() {
+    try {
+      const row = await getDb()
+        .selectFrom('screener_settings')
+        .select('config')
+        .where('id', '=', 1)
+        .executeTakeFirst();
+      if (row?.config) {
+        this.config = { ...DEFAULTS, ...row.config };
+        console.log(`[poller] restored saved config — filter: ${this.config.filter}`);
+      }
+    } catch (err) {
+      console.error('[poller] could not load saved config, using defaults:', err);
+    }
+  }
+
+  // Upsert the single global config row so the live filter survives restarts.
+  private async persistConfig() {
+    try {
+      await getDb()
+        .insertInto('screener_settings')
+        .values({ id: 1, config: JSON.stringify(this.config), updated_at: new Date() })
+        .onConflict((oc) =>
+          oc.column('id').doUpdateSet({
+            config: JSON.stringify(this.config),
+            updated_at: new Date(),
+          }),
+        )
+        .execute();
+    } catch (err) {
+      console.error('[poller] could not persist config:', err);
+    }
+  }
+
   getLastPayload(): CyclePayload | null {
     return this.lastPayload;
   }
 
-  start() {
+  async start() {
     if (this.running) return;
     this.running = true;
+    await this.loadConfig();
     console.log(`[poller] starting (every ${this.config.interval_sec}s)`);
     void this.tick();
     this.timer = setInterval(() => void this.tick(), this.config.interval_sec * 1000);

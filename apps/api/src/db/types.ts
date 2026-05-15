@@ -32,6 +32,13 @@ export interface ScreenerCyclesTable {
   created_at: Generated<Date>;
 }
 
+// Single-row table — persists the global poller config across restarts.
+export interface ScreenerSettingsTable {
+  id: Generated<number>;
+  config: JSONColumnType<ScreenerFilterSnapshot>;
+  updated_at: Generated<Date>;
+}
+
 export type RowStatus = 'NEW' | 'ACC' | 'UP' | 'NEWS' | null;
 
 export interface ScreenerResultsTable {
@@ -140,6 +147,7 @@ export interface UserChartPrefsTable {
 
 export interface Database {
   users: UsersTable;
+  screener_settings: ScreenerSettingsTable;
   screener_cycles: ScreenerCyclesTable;
   screener_results: ScreenerResultsTable;
   news_articles: NewsArticlesTable;
