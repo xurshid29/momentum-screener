@@ -298,19 +298,30 @@ export async function fetchFinvizNews(tickers: string[], todayEt: string): Promi
   }
 
   // header: Title, Source, Date, Url, Category, Ticker
+  // Finviz tags aggregate articles (e.g. "BC-Most Active Stocks") with a
+  // comma-joined Ticker field — split it so each link is a single ticker.
   const out: FinvizNewsItem[] = [];
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i];
     if (r.length < 6) continue;
-    const [title, , date, link, , ticker] = r;
-    if (!title || !ticker) continue;
+    const [title, , date, link, , tickerField] = r;
+    if (!title || !tickerField) continue;
     if (todayEt && !date.startsWith(todayEt)) continue;
-    out.push({
-      ticker,
-      title: title.replace(/[\t\n]/g, ' ').trim(),
-      url: link,
-      date,
-    });
+    const cleanTitle = title.replace(/[\t\n]/g, ' ').trim();
+    for (const ticker of splitTickers(tickerField)) {
+      out.push({ ticker, title: cleanTitle, url: link, date });
+    }
   }
   return out;
+}
+
+// Split a (possibly comma-joined) Finviz Ticker field into individual,
+// plausible tickers. Anything not ticker-shaped — a real ticker is 1–7 chars
+// of A-Z/0-9 plus optional . or - — is dropped, which also keeps non-ticker
+// junk out of the news_ticker_links table.
+function splitTickers(field: string): string[] {
+  return field
+    .split(',')
+    .map((t) => t.trim().toUpperCase())
+    .filter((t) => /^[A-Z0-9][A-Z0-9.-]{0,6}$/.test(t));
 }
