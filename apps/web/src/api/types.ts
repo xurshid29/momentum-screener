@@ -27,7 +27,7 @@ export interface LoginResponse {
 
 // ─── screener ──────────────────────────────────────────────────────────────
 export type RowStatus = 'NEW' | 'ACC' | 'UP' | 'NEWS' | null;
-export type NewsSource = 'finviz' | 'yahoo' | 'benzinga';
+export type NewsSource = 'finviz' | 'yahoo' | 'benzinga' | 'sec' | 'halt';
 export type CatalystDirection = 'bullish' | 'bearish' | 'mixed' | 'neutral';
 export type CatalystUrgency = 'ignore' | 'watch' | 'strong' | 'major';
 export type Classifier = 'rules' | 'openai_nano' | 'openai_mini' | 'openai';

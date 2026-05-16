@@ -15,6 +15,8 @@ import type {
 import { fetchScreener, fetchFinvizNews, type ScreenerRow } from './finviz.js';
 import { fetchYahooNews } from './yahoo.js';
 import { fetchBenzingaDelta } from './benzinga.js';
+import { fetchEdgarFilings, type EdgarFiling } from './edgar.js';
+import { fetchHalts, type TradeHalt } from './halts.js';
 import { broadcast } from './sse.js';
 import { classifyByRules, type Classification, type ClassifierInput } from './catalyst-rules.js';
 import { classifyByOpenAI } from './catalyst-openai.js';
@@ -31,7 +33,7 @@ const DEFAULTS: ScreenerFilterSnapshot = {
   interval_sec: 20,
 };
 
-const BZ_INITIAL_LOOKBACK_SEC = 1800;
+const DELTA_LOOKBACK_SEC = 1800;
 
 export interface CyclePayload {
   cycle_id: string;
@@ -77,6 +79,8 @@ export interface NewsHeadline {
   title: string;
   url: string;
   published_at: string | null;
+  secForm?: string;     // SEC form type — set only when source === 'sec'
+  haltReason?: string;  // Nasdaq halt reason code — set only when source === 'halt'
 }
 
 class PollerService {
@@ -92,7 +96,11 @@ class PollerService {
   // Used to compute the last-5-minutes volume diff. Trimmed to ~10 minutes deep.
   private volHistory = new Map<string, Array<{ ts: number; volume: number }>>();
   private bzHeadlineCache = new Map<string, NewsHeadline>(); // ticker -> latest headline (any source merged)
-  private bzWatermark = Math.floor(Date.now() / 1000) - BZ_INITIAL_LOOKBACK_SEC;
+  private bzWatermark = Math.floor(Date.now() / 1000) - DELTA_LOOKBACK_SEC;
+  // SEC EDGAR + Nasdaq halts are delta feeds too — a watermark per source
+  // tells us which filings/halts are new this cycle (i.e. audio-worthy).
+  private secWatermark = Math.floor(Date.now() / 1000) - DELTA_LOOKBACK_SEC;
+  private haltWatermark = Math.floor(Date.now() / 1000) - DELTA_LOOKBACK_SEC;
   private lastEtDate = '';
   private lastSession: TradingSession | null = null;
   // Per-article-URL classification cache. Lets the LLM classifier
@@ -120,6 +128,8 @@ class PollerService {
       tracked_tickers: this.prevChange.size,
       cached_headlines: this.bzHeadlineCache.size,
       bz_watermark: this.bzWatermark,
+      sec_watermark: this.secWatermark,
+      halt_watermark: this.haltWatermark,
       config: this.config,
     };
   }
@@ -207,6 +217,10 @@ class PollerService {
     if (todayEt !== this.lastEtDate) {
       this.bzHeadlineCache.clear();
       this.classificationCache.clear();
+      // Reset the SEC/halt delta watermarks so the new day's first cycle
+      // doesn't replay the whole backlog as "fresh".
+      this.secWatermark = Math.floor(now.getTime() / 1000);
+      this.haltWatermark = Math.floor(now.getTime() / 1000);
       this.lastEtDate = todayEt;
     }
     // A session boundary (notably the 4pm regular→after-hours flip) swaps the
@@ -228,14 +242,17 @@ class PollerService {
 
     const tickers = rows.map((r) => r.ticker);
 
-    // 2) news — three sources in parallel
-    const [finvizNews, yahooNews, bzDelta] = await Promise.all([
+    // 2) news — five sources in parallel
+    const [finvizNews, yahooNews, bzDelta, edgarDelta, haltDelta] = await Promise.all([
       fetchFinvizNews(tickers, todayEt).catch(() => []),
       fetchYahooNews(tickers, todayEt).catch(() => []),
       fetchBenzingaDelta(this.bzWatermark, todayEt).catch(() => null),
+      fetchEdgarFilings(new Set(tickers), this.secWatermark).catch(() => null),
+      fetchHalts(this.haltWatermark, todayEt).catch(() => null),
     ]);
 
-    // Build per-cycle ticker → headline map with precedence Benzinga > Yahoo > Finviz.
+    // Build per-cycle ticker → headline map. Precedence, low → high:
+    //   Finviz < Yahoo < Benzinga < SEC filing < trade halt.
     const cycleNews = new Map<string, NewsHeadline>();
     for (const n of finvizNews) {
       cycleNews.set(n.ticker, {
@@ -257,7 +274,6 @@ class PollerService {
     }
 
     // Benzinga: persist articles + update cumulative cache + freshness set.
-    const freshTickers = bzDelta?.freshTickers ?? new Set<string>();
     if (bzDelta) {
       this.bzWatermark = bzDelta.newWatermark;
       for (const a of bzDelta.articles) {
@@ -276,11 +292,56 @@ class PollerService {
       }
     }
 
+    // SEC EDGAR filings — a primary-source catalyst (offerings, 8-Ks, M&A,
+    // 13D stakes). Outranks the aggregators: the filing IS the news. Filings
+    // arrive newest-first, so the first one per ticker wins.
+    if (edgarDelta) {
+      this.secWatermark = edgarDelta.newWatermark;
+      for (const f of edgarDelta.filings) {
+        if (cycleNews.get(f.ticker)?.source === 'sec') continue;
+        cycleNews.set(f.ticker, {
+          ticker: f.ticker,
+          source: 'sec',
+          title: f.title,
+          url: f.url,
+          published_at: f.published_at.toISOString(),
+          secForm: f.form,
+        });
+      }
+    }
+
+    // Trade halts — highest precedence. A frozen tape is the loudest signal
+    // there is. The feed is market-wide; surface only screener tickers.
+    if (haltDelta) {
+      this.haltWatermark = haltDelta.newWatermark;
+      const onScreen = new Set(tickers);
+      for (const h of haltDelta.halts) {
+        if (!onScreen.has(h.ticker)) continue;
+        if (cycleNews.get(h.ticker)?.source === 'halt') continue;
+        cycleNews.set(h.ticker, {
+          ticker: h.ticker,
+          source: 'halt',
+          title: h.title,
+          url: h.url,
+          published_at: h.haltedAt.toISOString(),
+          haltReason: h.reasonCode,
+        });
+      }
+    }
+
     // Apply persistent Benzinga cache as a base layer for tickers we've seen
     // before — even if they didn't return Finviz/Yahoo this cycle.
     for (const [tk, hl] of this.bzHeadlineCache) {
       if (!cycleNews.has(tk)) cycleNews.set(tk, hl);
     }
+
+    // "Fresh this cycle" = audio-worthy. Any delta source can contribute: a
+    // new Benzinga article, a just-disseminated SEC filing, or a new halt.
+    const freshTickers = new Set<string>([
+      ...(bzDelta?.freshTickers ?? []),
+      ...(edgarDelta?.freshTickers ?? []),
+      ...(haltDelta?.freshTickers ?? []),
+    ]);
 
     // 3) classify rows + compute 5-min relative volume + build payload
     const nowSec = Math.floor(Date.now() / 1000);
@@ -349,6 +410,8 @@ class PollerService {
             ticker: r.ticker,
             title: headline.title,
             source: headline.source,
+            secForm: headline.secForm,
+            haltReason: headline.haltReason,
             marketContext: {
               change_pct: r.change_pct,
               float_m: r.float_m,
@@ -361,7 +424,11 @@ class PollerService {
           cached = {
             classification: cls,
             classifier: 'rules',
-            needsLLM: !!process.env.OPENAI_API_KEY,
+            // SEC filings and halts are classified deterministically from
+            // their form/reason code — the rule verdict is final, not a
+            // baseline for the LLM to refine.
+            needsLLM: !!process.env.OPENAI_API_KEY
+              && headline.source !== 'sec' && headline.source !== 'halt',
             input,
           };
           this.classificationCache.set(headline.url, cached);
@@ -400,7 +467,10 @@ class PollerService {
     }
 
     // 5) persist
-    const cycleId = await this.persistCycle(session, enriched, bzDelta?.articles, finvizNews, yahooNews);
+    const cycleId = await this.persistCycle(
+      session, enriched, bzDelta?.articles, finvizNews, yahooNews,
+      edgarDelta?.filings, haltDelta?.halts,
+    );
 
     // 6) broadcast
     const newWithCatalyst = enriched
@@ -509,6 +579,8 @@ class PollerService {
     bzArticles: import('./benzinga.js').BenzingaArticle[] | undefined,
     finvizNews: Awaited<ReturnType<typeof fetchFinvizNews>>,
     yahooNews: Awaited<ReturnType<typeof fetchYahooNews>>,
+    edgarFilings: EdgarFiling[] | undefined,
+    halts: TradeHalt[] | undefined,
   ): Promise<string> {
     const db = getDb();
     return db.transaction().execute(async (trx) => {
@@ -593,6 +665,28 @@ class PollerService {
           published_at: n.published_at,
           raw: n,
           tickers: [n.ticker],
+        });
+      }
+      for (const f of edgarFilings ?? []) {
+        if (!f.url) continue;
+        pending.push({
+          source: 'sec',
+          url: f.url,
+          title: f.title,
+          published_at: f.published_at,
+          raw: f.raw,
+          tickers: [f.ticker],
+        });
+      }
+      for (const h of halts ?? []) {
+        if (!h.url) continue;
+        pending.push({
+          source: 'halt',
+          url: h.url,
+          title: h.title,
+          published_at: h.haltedAt,
+          raw: h.raw,
+          tickers: [h.ticker],
         });
       }
 

@@ -2,7 +2,7 @@
 
 Project: a real-time low-float momentum screener with a multi-panel web dashboard. The original implementation is a bash script (`screener-poll_breakout.sh`) — it stays as-is. The web port lives in `apps/api` (Express + Kysely + Postgres) and `apps/web` (React + Antd + Vite). Multi-user with JWT auth.
 
-The web service runs a singleton `PollerService` that does the same Finviz + Yahoo + Benzinga work as the bash script, persists every cycle to Postgres, and pushes live deltas to the browser via SSE.
+The web service runs a singleton `PollerService` that does the same Finviz + Yahoo + Benzinga work as the bash script (plus SEC EDGAR filings and Nasdaq trade halts), persists every cycle to Postgres, and pushes live deltas to the browser via SSE.
 
 ## Environment Variables
 
@@ -12,6 +12,7 @@ Required in `.env` (copy from `.env.example`):
 DATABASE_URL=postgres://app:app@localhost:5438/app?sslmode=disable
 FINVIZ_API_TOKEN=your-token-here
 BENZINGA_API_TOKEN=bz.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   # optional
+SEC_EDGAR_USER_AGENT=App Name (you@example.com)          # optional — SEC requires a descriptive UA; a default is used if unset
 JWT_SECRET=your-secret-key-here
 JWT_EXPIRES_IN=7d
 ```
@@ -25,7 +26,7 @@ Postgres, migrations via `dbmate` in `db/migrations/`.
 | `users` | Accounts (JWT auth) |
 | `screener_cycles` | One row per poll: `polled_at`, `filter_snapshot` (jsonb), `row_count` |
 | `screener_results` | Tickers seen in each cycle: `cycle_id`, `ticker`, `change_pct`, `float_m`, `price`, `volume`, `mcap`, `country`, `status` (NEW/ACC/UP/NEWS/-), `prev_change_pct` |
-| `news_articles` | Deduped news: `source` (finviz/yahoo/benzinga), `url` UNIQUE, `title`, `published_at`, `fetched_at`, `raw` (jsonb) |
+| `news_articles` | Deduped news: `source` (finviz/yahoo/benzinga/sec/halt), `url` UNIQUE, `title`, `published_at`, `fetched_at`, `raw` (jsonb) |
 | `news_ticker_links` | M:N — `article_id`, `ticker` |
 | `user_filter_presets` | Per-user saved filters: `user_id`, `name`, `filter` (jsonb), `is_default` |
 | `user_panel_layout` | Per-user panel sizing/visibility: `user_id`, `layout` (jsonb) |
@@ -46,12 +47,14 @@ Postgres, migrations via `dbmate` in `db/migrations/`.
 `apps/api/src/services/poller.ts` is a long-lived singleton. On API startup it begins a 20s loop:
 
 1. Fetch Finviz `v=131` (ownership: gives float, mcap, price, change, volume) **and** `v=110` (overview: gives country) in parallel. Join by ticker. Post-filter `float < FLOAT_MAX_M` (default 35M).
-2. Per cycle, fetch news from three sources:
+2. Per cycle, fetch news from five sources:
    - **Finviz** `news_export?v=3&t=<batch>` — one call for all current tickers, today only
    - **Yahoo RSS** `feeds.finance.yahoo.com/rss/2.0/headline?s=<ticker>` — per-ticker fan-out, today only
    - **Benzinga delta** `api.benzinga.com/api/v2/news?updatedSince=<watermark>` with `Accept: application/json` header — only articles with `ts > stored_max` count as "fresh" (audio-worthy)
-3. Merge precedence (highest wins): **Benzinga > Yahoo > Finviz**
-4. Cross-cycle state lives in service memory (per-ticker `prev_change_pct`, Benzinga headline cache, ts watermark). Auto-cleared at midnight ET.
+   - **SEC EDGAR** `browse-edgar?action=getcurrent` — the "latest filings" firehose (one call), matched to screener tickers via the `company_tickers.json` CIK map. Surfaces offerings/dilution (424B*, S-1/S-3), 8-Ks, M&A, and 13D/G stakes. Watermark = filing dissemination ts.
+   - **Nasdaq trade halts** `nasdaqtrader.com/rss.aspx?feed=tradehalts` — the market-wide halt feed (one call), filtered to screener tickers. A T1 ("news pending") halt scores as a major catalyst. Watermark = halt ts.
+3. Merge precedence (highest wins): **halt > sec > Benzinga > Yahoo > Finviz**
+4. Cross-cycle state lives in service memory (per-ticker `prev_change_pct`, Benzinga headline cache, three ts watermarks — Benzinga / SEC / halt). Auto-cleared at midnight ET.
 5. Classify rows: `NEW` (first appearance), `ACC` (`change% delta > 2`), `UP` (any positive delta), `NEWS` (no movement but has today's news).
 6. Persist cycle + rows + new news articles to DB.
 7. Broadcast a delta payload to all connected SSE clients on `/api/screener/stream`.

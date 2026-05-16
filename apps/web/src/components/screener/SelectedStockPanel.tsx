@@ -16,6 +16,8 @@ const SOURCE_COLOR: Record<string, string> = {
   benzinga: 'gold',
   yahoo: 'purple',
   finviz: 'blue',
+  sec: 'geekblue',
+  halt: 'red',
 };
 
 const STATUS_COLOR: Record<NonNullable<RowStatus>, string> = {

@@ -15,6 +15,10 @@ export interface ClassifierInput {
   title: string;
   body?: string | null;
   source: NewsSource;
+  // Structured hints for the primary-source feeds — let the classifier score
+  // off the filing/halt type rather than guessing from the headline text.
+  secForm?: string | null;     // SEC form type (source='sec'), e.g. '424B5'
+  haltReason?: string | null;  // Nasdaq reason code (source='halt'), e.g. 'T1'
   marketContext?: {
     change_pct?: number | null;
     float_m?: number | null;
@@ -102,6 +106,11 @@ function urgencyFromScore(score: number): CatalystUrgency {
 }
 
 export function classifyByRules(input: ClassifierInput): Classification {
+  // Primary-source feeds carry a deterministic type — score off it directly
+  // instead of pattern-matching a synthesized headline.
+  if (input.source === 'sec') return classifySecFiling(input);
+  if (input.source === 'halt') return classifyHalt(input);
+
   const text = `${input.title} ${input.body ?? ''}`;
 
   let score = 30; // baseline — assume modest news interest
@@ -145,16 +154,7 @@ export function classifyByRules(input: ClassifierInput): Classification {
   }
 
   // Risk flags from market context.
-  const ctx = input.marketContext;
-  if (ctx) {
-    if ((ctx.change_pct ?? 0) >= 50) flags.add('already_extended');
-    if (ctx.mcap_m != null && ctx.mcap_m < 50) flags.add('microcap');
-    if (ctx.float_m != null && ctx.float_m < 5) flags.add('low_float_volatility');
-    const country = (ctx.country ?? '').toLowerCase();
-    if ((country.includes('china') || country.includes('hong kong')) && (ctx.mcap_m ?? 0) < 200) {
-      flags.add('china_microcap_risk');
-    }
-  }
+  for (const f of marketContextFlags(input.marketContext)) flags.add(f);
   if (/\b(offering|dilution|registered\s+direct)/i.test(text)) flags.add('dilution_risk');
   if (input.title.length < 30 && !input.body) flags.add('vague_pr');
 
@@ -164,7 +164,7 @@ export function classifyByRules(input: ClassifierInput): Classification {
   if (matched >= 2) confidence = 0.7;
 
   // Clamp.
-  score = Math.max(0, Math.min(100, Math.round(score)));
+  score = clamp(score);
 
   return {
     impact_score: score,
@@ -175,6 +175,124 @@ export function classifyByRules(input: ClassifierInput): Classification {
     is_repeat: false,
     confidence,
     reason: reasons.length > 0 ? reasons.join('; ') : 'no strong signal',
+    risk_flags: [...flags],
+  };
+}
+
+function clamp(n: number): number {
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+// Risk flags derived purely from the live screener row — shared by every
+// classification path (text, SEC filing, halt).
+function marketContextFlags(ctx: ClassifierInput['marketContext']): string[] {
+  if (!ctx) return [];
+  const flags = new Set<string>();
+  if ((ctx.change_pct ?? 0) >= 50) flags.add('already_extended');
+  if (ctx.mcap_m != null && ctx.mcap_m < 50) flags.add('microcap');
+  if (ctx.float_m != null && ctx.float_m < 5) flags.add('low_float_volatility');
+  const country = (ctx.country ?? '').toLowerCase();
+  if ((country.includes('china') || country.includes('hong kong')) && (ctx.mcap_m ?? 0) < 200) {
+    flags.add('china_microcap_risk');
+  }
+  return [...flags];
+}
+
+// SEC EDGAR filing — the form type is the catalyst. Offerings are scored
+// bearish (dilution kills a runner); M&A bullish; everything else neutral.
+function classifySecFiling(input: ClassifierInput): Classification {
+  // The form arrives structured from the poller, but fall back to recovering
+  // it from the synthesized "SEC <FORM> · …" title on an on-demand re-classify.
+  let form = (input.secForm ?? '').toUpperCase().trim();
+  if (!form) form = input.title.match(/^SEC\s+([^\s·]+)/i)?.[1]?.toUpperCase() ?? '';
+  form = form.replace(/^SCHEDULE\s+/, 'SC ');
+
+  let score = 40;
+  let direction: CatalystDirection = 'neutral';
+  let materiality: CatalystMateriality = 'medium';
+  let type = 'sec_filing';
+  let reason = `SEC ${form || 'filing'}`;
+  const flags = new Set<string>(marketContextFlags(input.marketContext));
+
+  if (/^424B/.test(form) || /^S-1/.test(form) || /^S-3/.test(form) || /^F-1/.test(form) ||
+      /^F-3/.test(form) || form === 'POS AM' || form === '424A' || form === 'FWP' || form === 'EFFECT') {
+    score = 66; direction = 'bearish'; materiality = 'high';
+    type = 'offering_dilution'; reason = `SEC ${form} — securities offering / dilution`;
+    flags.add('dilution_risk');
+  } else if (form === '425' || /^S-4/.test(form) || form === 'DEFM14A' || form === 'PREM14A' ||
+             /^SC TO/.test(form) || form === 'SC 14D9') {
+    score = 70; direction = 'bullish'; materiality = 'high';
+    type = 'merger_acquisition'; reason = `SEC ${form} — M&A filing`;
+  } else if (/^SC 13D/.test(form)) {
+    score = 58; direction = 'bullish'; materiality = 'medium';
+    type = 'ownership_change'; reason = `SEC ${form} — activist 13D stake`;
+  } else if (/^SC 13G/.test(form)) {
+    score = 42; materiality = 'low';
+    type = 'ownership_change'; reason = `SEC ${form} — passive 13G stake`;
+  } else if (form === '8-K' || form === '8-K/A') {
+    score = 52; type = 'material_event'; reason = 'SEC 8-K — material event';
+  } else if (form === '6-K' || form === '6-K/A') {
+    score = 48; type = 'material_event'; reason = 'SEC 6-K — foreign-issuer event';
+  } else if (form === '25' || form === '25-NSE' || /^15-12/.test(form)) {
+    score = 56; direction = 'bearish'; materiality = 'high';
+    type = 'legal_regulatory'; reason = `SEC ${form} — delisting notice`;
+    flags.add('delisting_risk');
+  }
+
+  return {
+    impact_score: clamp(score),
+    direction,
+    urgency: urgencyFromScore(score),
+    catalyst_type: type,
+    materiality,
+    is_repeat: false,
+    confidence: 0.85,
+    reason,
+    risk_flags: [...flags],
+  };
+}
+
+// Nasdaq trade halt — the reason code is the catalyst. A T1 ("news pending")
+// halt is the strongest signal of all: a catalyst is landing this instant.
+function classifyHalt(input: ClassifierInput): Classification {
+  let code = (input.haltReason ?? '').toUpperCase().trim();
+  if (!code) code = input.title.match(/\(([A-Z0-9]+)\)/)?.[1]?.toUpperCase() ?? '';
+
+  let score = 52;
+  let direction: CatalystDirection = 'neutral';
+  let type = 'trading_halt';
+  let reason = `trading halt (${code || '—'})`;
+  const flags = new Set<string>(marketContextFlags(input.marketContext));
+
+  if (code === 'T1') {
+    score = 82; type = 'halt_news_pending';
+    reason = 'halted — news pending (T1): catalyst imminent';
+  } else if (code === 'T2' || code === 'T3' || code === 'T6') {
+    score = 68; type = 'halt_news'; reason = `halted — news released (${code})`;
+  } else if (code === 'T12') {
+    score = 58; type = 'halt_info_requested';
+    reason = 'halted — additional information requested (T12)';
+    flags.add('info_requested');
+  } else if (/^MWC/.test(code)) {
+    score = 28; type = 'halt_market_wide'; reason = 'market-wide circuit breaker';
+  } else if (/^H/.test(code) || /^R/.test(code) || code === 'D' || code === 'O1') {
+    score = 56; direction = 'bearish'; type = 'halt_regulatory';
+    reason = `halted — regulatory (${code})`;
+    flags.add('regulatory_risk');
+  } else if (code === 'LUDP' || code === 'M' || code === 'T5' || code === 'T7') {
+    score = 46; type = 'halt_volatility'; reason = `halted — volatility pause (${code})`;
+  }
+
+  const materiality: CatalystMateriality = score >= 60 ? 'high' : score >= 40 ? 'medium' : 'low';
+  return {
+    impact_score: clamp(score),
+    direction,
+    urgency: urgencyFromScore(score),
+    catalyst_type: type,
+    materiality,
+    is_repeat: false,
+    confidence: 0.9,
+    reason,
     risk_flags: [...flags],
   };
 }

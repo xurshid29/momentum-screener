@@ -7,7 +7,7 @@ This project began as a single bash script (`screener-poll_breakout.sh`) and is 
 ## Features
 
 - **Live screener** — top low-float momentum runners (filter customizable in UI), updated every 20s via Server-Sent Events
-- **Multi-source news** — Finviz news + Yahoo Finance RSS + Benzinga delta API, deduped & merged with the freshest source winning
+- **Multi-source catalysts** — Finviz + Yahoo RSS + Benzinga news, plus **SEC EDGAR filings** (offerings/dilution, 8-Ks, M&A, 13D/G stakes) and **Nasdaq trade halts** — deduped & merged, primary sources outranking aggregators
 - **Visual + audio alerts** — 🔥 (today catalyst), 🚨 (fresh news this cycle), `NEW` / `ACC` / `UP` row markers; browser notification + sound on actionable events
 - **4 TradingView charts** — embedded Advanced Real-Time widgets in a 2×2 grid, intervals `1m / 5m / 15m / 1h` (per-chart, persisted per user); click "Open in TradingView" to use seconds intervals (`1S / 10S / 30S`) on tradingview.com with your Premium account
 - **Persistence** — every poll cycle, every news article, and every user pref written to Postgres. Enables retrospective analysis: *which news sources/types preceded the biggest moves?*
@@ -22,7 +22,7 @@ This project began as a single bash script (`screener-poll_breakout.sh`) and is 
 │  │    Finviz v=131 + v=110 → join                               │
 │  │    + Finviz news_export (batch)                              │
 │  │    + Yahoo RSS (per-ticker, parallel)                        │
-│  │    + Benzinga delta (cumulative cache)                       │
+│  │    + Benzinga / SEC EDGAR / Nasdaq halts                     │
 │  │    → write screener_cycles + news_articles                   │
 │  │    → broadcast to SSE subscribers                            │
 │  └─ Routes: /api/auth, /api/screener, /api/news, /api/prefs     │

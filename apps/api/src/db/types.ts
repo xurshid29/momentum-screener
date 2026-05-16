@@ -71,7 +71,9 @@ export interface ScreenerResultsTable {
   accel_delta: number | null;
 }
 
-export type NewsSource = 'finviz' | 'yahoo' | 'benzinga';
+// 'sec'  — an SEC EDGAR filing (offering, 8-K, M&A, 13D…)
+// 'halt' — a Nasdaq trade halt / volatility pause
+export type NewsSource = 'finviz' | 'yahoo' | 'benzinga' | 'sec' | 'halt';
 
 export interface NewsArticlesTable {
   id: Generated<string>;

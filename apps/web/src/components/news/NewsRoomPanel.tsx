@@ -13,6 +13,8 @@ const SOURCE_COLOR: Record<string, string> = {
   benzinga: 'gold',
   yahoo: 'purple',
   finviz: 'blue',
+  sec: 'geekblue',
+  halt: 'red',
 };
 
 // When the screener has at most this many rows we presume the user is in
