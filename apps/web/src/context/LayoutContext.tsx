@@ -6,7 +6,8 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import { useQuery } from '@tanstack/react-query';
 import { prefsApi } from '../api/prefs';
 
-export type ChartCount = 1 | 2 | 3 | 4;
+// 0 = charts hidden entirely (the chart pane unmounts).
+export type ChartCount = 0 | 1 | 2 | 3 | 4;
 const DEFAULT_CHART_COUNT: ChartCount = 4;
 
 interface LayoutContextValue {
@@ -30,7 +31,7 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (hydrated.current || serverLayout === undefined) return;
     const cc = serverLayout?.chart_count;
-    if (cc === 1 || cc === 2 || cc === 3 || cc === 4) setChartCountState(cc);
+    if (cc === 0 || cc === 1 || cc === 2 || cc === 3 || cc === 4) setChartCountState(cc);
     hydrated.current = true;
   }, [serverLayout]);
 

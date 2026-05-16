@@ -111,6 +111,8 @@ function ChartLayout({ count, renderSlot }: ChartLayoutProps) {
   const HHandle = <PanelResizeHandle style={{ width: 4, background: '#0a0a0a' }} />;
   const VHandle = <PanelResizeHandle style={{ height: 4, background: '#0a0a0a' }} />;
 
+  if (count === 0) return null; // charts hidden — DashboardPage unmounts the pane
+
   if (count === 1) {
     return <div style={{ width: '100%', height: '100%' }}>{renderSlot(1)}</div>;
   }

@@ -44,7 +44,7 @@ export function AppLayout() {
             <Segmented<ChartCount>
               size="small"
               value={chartCount}
-              options={[1, 2, 3, 4].map((v) => ({ label: String(v), value: v as ChartCount }))}
+              options={[0, 1, 2, 3, 4].map((v) => ({ label: String(v), value: v as ChartCount }))}
               onChange={setChartCount}
             />
           </Space>
