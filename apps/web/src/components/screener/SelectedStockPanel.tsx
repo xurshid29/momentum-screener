@@ -1,24 +1,16 @@
 import { Fragment, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Typography, Empty, List, Tag, Tabs, Table, Tooltip } from 'antd';
+import { Typography, Empty, Tag, Tabs, Table, Tooltip } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useSelection } from '../../context/SelectionContext';
 import { newsApi } from '../../api/news';
 import { screenerApi } from '../../api/screener';
-import { CatalystAnalyzeButton } from '../news/CatalystAnalyzeButton';
 import { TickerLink } from '../common/TickerLink';
+import { TickerNewsList } from '../news/TickerNewsList';
 import type { CyclePayload, EnrichedRow, HistoryRow, NewsArticle, RowStatus } from '../../api/types';
 import { fmtPct, fmtPrice, fmtVolume, fmtFloat, fmtMcap, fmtRelVol, fmtBigPct, num } from '../../utils/format';
 
 const { Text } = Typography;
-
-const SOURCE_COLOR: Record<string, string> = {
-  benzinga: 'gold',
-  yahoo: 'purple',
-  finviz: 'blue',
-  sec: 'geekblue',
-  halt: 'red',
-};
 
 const STATUS_COLOR: Record<NonNullable<RowStatus>, string> = {
   NEW: 'blue',
@@ -259,43 +251,7 @@ function DetailsTab({ ticker, meta, news }: DetailsTabProps) {
           numbers are immediately visible without scrolling. */}
       <div style={{ marginTop: 20 }}>
         <SectionTitle>News Headline</SectionTitle>
-        {news.length === 0 ? (
-          <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
-            No news yet
-          </Text>
-        ) : (
-          <List
-            size="small"
-            dataSource={news.slice(0, 8)}
-            renderItem={(n) => (
-              <List.Item style={{ padding: '6px 0', borderBottom: '1px solid #2a2a2a' }}>
-                <div style={{ width: '100%' }}>
-                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
-                    <span style={{ flex: '0 0 auto' }}>
-                      <CatalystAnalyzeButton articleId={n.id} initial={n.classification} />
-                    </span>
-                    <a
-                      href={n.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{ color: '#e6e6e6', fontSize: 13, flex: '1 1 auto' }}
-                    >
-                      {n.title}
-                    </a>
-                    <Tag color={SOURCE_COLOR[n.source]} style={{ margin: 0, flex: '0 0 auto', fontSize: 10 }}>
-                      {n.source}
-                    </Tag>
-                  </div>
-                  {n.published_at && (
-                    <Text type="secondary" style={{ fontSize: 11, marginLeft: 22 }}>
-                      ({new Date(n.published_at).toLocaleTimeString([], { hour12: false })})
-                    </Text>
-                  )}
-                </div>
-              </List.Item>
-            )}
-          />
-        )}
+        <TickerNewsList news={news} />
       </div>
     </div>
   );

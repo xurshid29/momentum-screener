@@ -1,14 +1,15 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type MouseEvent } from 'react';
 import { Table, Tag, Typography, Tooltip, Badge, Button, Space, Popover, List } from 'antd';
 import { FilterOutlined, CloseOutlined, EyeInvisibleOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import type { CyclePayload, EnrichedRow, RowStatus, TradingSession } from '../../api/types';
+import type { CatalystInfo, CyclePayload, EnrichedRow, RowStatus, TradingSession } from '../../api/types';
 import { useSelection } from '../../context/SelectionContext';
 import { useHiddenTickers } from '../../hooks/useHiddenTickers';
 import { TickerLink } from '../common/TickerLink';
 import { FireBadge } from '../common/FireBadge';
 import { fmtPct, fmtFloat, fmtPrice, fmtVolume, fmtMcap, fmtRelVol, fmtBigPct, num } from '../../utils/format';
 import { FiltersDialog } from './FiltersDialog';
+import { CatalystNewsModal } from './CatalystNewsModal';
 
 const { Text } = Typography;
 
@@ -41,6 +42,7 @@ const SESSION_COLOR: Record<TradingSession, string> = {
 export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
   const { selected, setSelected } = useSelection();
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [catalystModal, setCatalystModal] = useState<{ ticker: string; catalyst: CatalystInfo | null } | null>(null);
   const { hidden, hide, unhide } = useHiddenTickers();
 
   const columns: ColumnsType<EnrichedRow> = useMemo(
@@ -97,6 +99,7 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
                 score={row.catalyst?.score ?? null}
                 reason={row.catalyst?.reason}
                 type={row.catalyst?.type}
+                onOpen={() => setCatalystModal({ ticker: row.ticker, catalyst: row.catalyst ?? null })}
               />
             )}
           </span>
@@ -263,6 +266,11 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
         onClose={() => setFiltersOpen(false)}
         config={payload?.config ?? null}
       />
+      <CatalystNewsModal
+        ticker={catalystModal?.ticker ?? null}
+        catalyst={catalystModal?.catalyst ?? null}
+        onClose={() => setCatalystModal(null)}
+      />
       <div style={{ flex: '1 1 auto', minHeight: 0, overflow: 'auto' }}>
         <Table<EnrichedRow>
           rowKey="ticker"
@@ -286,7 +294,8 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
 }
 
 // Catalyst marker for a screener row. Color + flame count signal strength
-// at a glance; tooltip carries the precise score and reason.
+// at a glance; tooltip carries the precise score and reason. Clicking opens
+// the catalyst/news modal for the ticker.
 //   ≥70  🔥🔥 red    — major catalyst
 //   40+  🔥    orange — strong
 //   15+  🔥    yellow — weak
@@ -295,18 +304,34 @@ function CatalystBadge({
   score,
   reason,
   type,
+  onOpen,
 }: {
   score: number | null;
   reason?: string;
   type?: string;
+  onOpen: () => void;
 }) {
+  // Stop the click bubbling to the row so opening the modal doesn't also
+  // re-select the row underneath.
+  const open = (e: MouseEvent) => {
+    e.stopPropagation();
+    onOpen();
+  };
   if (score == null) {
-    return <span title="Catalyst score pending" style={{ marginLeft: 6, opacity: 0.55 }}>✨</span>;
+    return (
+      <span
+        title="Catalyst score pending — click for news"
+        onClick={open}
+        style={{ marginLeft: 6, opacity: 0.55, cursor: 'pointer' }}
+      >
+        ✨
+      </span>
+    );
   }
   if (score < 15) return null;
-  const tooltip = `${score} · ${type ?? ''}${reason ? ` — ${reason}` : ''}`.trim();
+  const tooltip = `${score} · ${type ?? ''}${reason ? ` — ${reason}` : ''} · click for news`.trim();
   return (
-    <span title={tooltip} style={{ marginLeft: 6 }}>
+    <span title={tooltip} onClick={open} style={{ marginLeft: 6, cursor: 'pointer' }}>
       <FireBadge score={score} />
     </span>
   );
