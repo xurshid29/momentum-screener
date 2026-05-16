@@ -110,21 +110,30 @@ jobs:
             docker compose -f docker-compose.prod.yml up -d
             echo "::endgroup::"
 
-            # The nginx config is a bind mount, so a `git pull` that changed
-            # deploy/nginx.conf doesn't restart nginx. Validate the new config
-            # and reload — cheap and idempotent.
-            echo "::group::nginx reload"
+            # nginx.conf is a bind mount, and nginx caches upstream IPs — after
+            # api/web are recreated it can hold stale IPs and serve 502s. Validate
+            # the (live bind-mounted) config, then restart the container so it
+            # reloads config AND re-resolves api/web DNS. A ~1s blip, but it kills
+            # the stale-upstream 502 for good.
+            echo "::group::nginx restart"
             docker compose -f docker-compose.prod.yml exec -T nginx nginx -t
-            docker compose -f docker-compose.prod.yml exec -T nginx nginx -s reload
+            docker compose -f docker-compose.prod.yml restart nginx
             echo "::endgroup::"
 
-            # Apply any new migrations. dbmate is a no-op if everything is
-            # already applied. The DATABASE_URL uses localhost because dbmate
+            # Apply any new migrations, then assert none remain pending — dbmate
+            # has been seen to silently no-op, so fail the deploy loudly if the
+            # schema is still behind. DATABASE_URL uses localhost because dbmate
             # runs on the host, not in the docker network.
             echo "::group::dbmate up"
             PG_PASS=$(grep '^POSTGRES_PASSWORD=' .env | cut -d= -f2-)
-            DATABASE_URL="postgres://pnldash:${PG_PASS}@localhost:5432/pnldash?sslmode=disable" \
-              dbmate up
+            export DATABASE_URL="postgres://pnldash:${PG_PASS}@localhost:5432/pnldash?sslmode=disable"
+            dbmate up
+            PENDING=$(dbmate status 2>/dev/null | grep -cE '^\[ \]' || true)
+            if [ "$PENDING" -ne 0 ]; then
+              echo "::error::dbmate left ${PENDING} migration(s) pending after 'dbmate up' — schema is behind"
+              exit 1
+            fi
+            echo "schema up to date — no migrations pending"
             echo "::endgroup::"
 
             echo "::group::final status"
