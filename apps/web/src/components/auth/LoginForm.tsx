@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Form, Input, Button, message, Tabs } from 'antd';
+import { useQuery } from '@tanstack/react-query';
+import { Form, Input, Button, message, Tabs, Typography } from 'antd';
 import { UserOutlined, LockOutlined } from '@ant-design/icons';
 import { useAuth } from '../../context/AuthContext';
 import { authApi } from '../../api/auth';
@@ -16,6 +17,14 @@ export function LoginForm() {
   const [activeTab, setActiveTab] = useState('login');
   const { login } = useAuth();
   const navigate = useNavigate();
+
+  // Whether public sign-up is open — gates the Register tab.
+  const { data: authConfig } = useQuery({
+    queryKey: ['auth', 'config'],
+    queryFn: () => authApi.config(),
+    staleTime: Infinity,
+  });
+  const registrationOpen = authConfig?.registration_open ?? false;
 
   const handleSubmit = async (values: LoginFormValues) => {
     setLoading(true);
@@ -36,15 +45,21 @@ export function LoginForm() {
 
   return (
     <>
-      <Tabs
-        activeKey={activeTab}
-        onChange={setActiveTab}
-        centered
-        items={[
-          { key: 'login', label: 'Login' },
-          { key: 'register', label: 'Register' },
-        ]}
-      />
+      {registrationOpen ? (
+        <Tabs
+          activeKey={activeTab}
+          onChange={setActiveTab}
+          centered
+          items={[
+            { key: 'login', label: 'Login' },
+            { key: 'register', label: 'Register' },
+          ]}
+        />
+      ) : (
+        <Typography.Title level={4} style={{ textAlign: 'center', marginTop: 8, marginBottom: 20 }}>
+          Login
+        </Typography.Title>
+      )}
       <Form
       form={form}
       onFinish={handleSubmit}

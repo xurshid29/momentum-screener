@@ -10,8 +10,23 @@ const authSchema = z.object({
   password: z.string().min(6).max(100),
 });
 
+// Public sign-up is gated by REGISTRATION_OPEN — registration is closed
+// unless the env var is exactly 'true'. Existing users can always log in.
+function registrationOpen(): boolean {
+  return process.env.REGISTRATION_OPEN === 'true';
+}
+
+// GET /api/auth/config — public; lets the login page reflect whether the
+// Register option should be shown.
+router.get('/config', (_req, res) => {
+  res.json({ data: { registration_open: registrationOpen() } });
+});
+
 // POST /api/auth/register
 router.post('/register', async (req, res) => {
+  if (!registrationOpen()) {
+    return res.status(403).json({ error: 'Registration is closed' });
+  }
   try {
     const result = authSchema.safeParse(req.body);
     if (!result.success) {

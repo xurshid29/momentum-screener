@@ -15,6 +15,7 @@ BENZINGA_API_TOKEN=bz.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   # optional
 SEC_EDGAR_USER_AGENT=App Name (you@example.com)          # optional — SEC requires a descriptive UA; a default is used if unset
 JWT_SECRET=your-secret-key-here
 JWT_EXPIRES_IN=7d
+REGISTRATION_OPEN=true                                   # public sign-up — closed unless exactly 'true'
 ```
 
 ## Database Schema
