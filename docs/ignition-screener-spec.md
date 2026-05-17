@@ -10,8 +10,9 @@ Implementation spec for Phase 2 of the runner-detection roadmap. See
 A second, **volume-led** screener running in the same 20s poll cycle as the
 Momentum screener — tuned to catch low-float names in the *first minutes* of
 ignition. Surfaced as an always-visible **ranked sidebar**, scored by a
-composite **runner-score**, and wired into Telegram alerts. The current Momentum
-screener is untouched.
+composite **runner-score**, wired into Telegram alerts, and **persisted** —
+every row's runner-score is recorded so the score can be tuned/backtested
+later. The current Momentum screener is untouched.
 
 ## 2. The Ignition Finviz screen
 
@@ -62,12 +63,47 @@ union once, produce two views:
 4. **Two views** — `rows` = enriched ∈ momentumTickers (today's behavior);
    `ignition` = enriched ∈ ignitionTickers, each + `runner_score`, sorted desc,
    top ~25.
-5. **Persist** — Momentum only (see scope cuts). Unchanged.
+5. **Persist** — Momentum rows → `screener_results` (unchanged); ignition rows →
+   the new `ignition_results` table, in the same transaction, referencing the
+   same `screener_cycles` row.
 6. **Broadcast** — one `cycle` payload carrying both arrays.
 
 Files: `poller.ts` (significant but contained — it's `runCycle` + 2 helpers),
 `finviz.ts` (no change — `fetchScreener` already takes a filter), new
-`runner-score.ts`.
+`runner-score.ts`, one `db/migrations/` file.
+
+### Persistence — `ignition_results`
+
+A dedicated table keeps ignition rows fully separate from momentum data — zero
+impact on existing `screener_results` queries — and records the runner-score
+*as it was at ignition time*, which is what makes the score tunable later
+(backtest: "did `score ≥ 65` actually go on to run?").
+
+```sql
+create table ignition_results (
+    id              uuid primary key default extensions.uuid_generate_v4(),
+    cycle_id        uuid not null references screener_cycles(id) on delete cascade,
+    ticker          varchar(16) not null,
+    runner_score    numeric(5,2) not null,
+    score_breakdown jsonb not null,          -- per-component scores
+    price           numeric(12,4),
+    change_pct      numeric(8,4),
+    float_m         numeric(12,4),
+    rel_volume      numeric(12,4),
+    rel_vol_5min    numeric(12,4),
+    catalyst_score  integer,
+    news_source     varchar(16),
+    created_at      timestamptz not null default current_timestamp
+);
+create index idx_ignition_results_cycle  on ignition_results (cycle_id);
+create index idx_ignition_results_ticker on ignition_results (ticker);
+create index idx_ignition_results_score  on ignition_results (runner_score desc);
+```
+
+The poll cycle is shared, so ignition rows reference the existing
+`screener_cycles` row — no separate cycle table. Measuring outcomes is a
+forward-join (ticker → later price history); ad-hoc via psql for now — a
+backtest endpoint/UI is a later add, not Phase 2.
 
 ## 5. Telegram — Ignition alerts
 
@@ -99,23 +135,25 @@ event).
 - `IgnitionRow = EnrichedRow & { runner_score: number; score_breakdown: RunnerScoreBreakdown }`
 - `CyclePayload.ignition: IgnitionRow[]` — added both in
   `apps/api/src/db/types.ts` and `apps/web/src/api/types.ts`.
+- `IgnitionResultsTable` — Kysely table interface added to the `Database` type
+  in `apps/api/src/db/types.ts`, mirroring the migration.
 
 ## 8. v1 scope cuts (deliberate)
 
-- **No DB persistence** of ignition rows — live + alerts only. ⇒ **no
-  migration**, lower risk. Phase 3 adds a `screen` discriminator column.
 - **Ignition filter is a code constant** — not user-editable via the Filters
   dialog.
 - **Ignition sidebar always-visible** — no hide toggle (charts are hideable; the
   ignition feed is the thing you must not miss).
+- **No backtest endpoint/UI** — ignition rows *are* persisted (see §4), but
+  querying outcomes is ad-hoc psql for now; a tuning UI is a later add.
 - Runner-score weights are code constants (easy to tune).
 
 ## 9. Files touched
 
-New: `runner-score.ts`, `IgnitionSidebar.tsx`. Modified: `poller.ts`,
-`db/types.ts` (api), `api/types.ts` (web), `DashboardPage.tsx`, and the docs
-(`.env.example` n/a; `CLAUDE.md` + `catching-runners.md` mark Phase 2 done). No
-migration, no new dependency.
+New: a `db/migrations/` SQL file (`ignition_results`), `runner-score.ts`,
+`IgnitionSidebar.tsx`. Modified: `poller.ts`, `db/types.ts` (api), `api/types.ts`
+(web), `DashboardPage.tsx`, and the docs (`CLAUDE.md` + `catching-runners.md`
+mark Phase 2 done). One migration, no new dependency.
 
 ## 10. Open decisions — confirm or override
 
@@ -123,5 +161,5 @@ migration, no new dependency.
    Ignition→Screener→Charts) or right edge?
 2. **Ignition alert threshold** — runner-score `≥ 65`. Looser (more alerts) or
    tighter?
-3. **v1 cuts OK?** — specifically: ignition rows not persisted, and the ignition
-   filter not user-editable yet.
+3. **v1 cuts OK?** — specifically: the ignition filter not user-editable yet,
+   and no backtest UI (ad-hoc psql for tuning).
