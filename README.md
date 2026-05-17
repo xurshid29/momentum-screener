@@ -158,6 +158,7 @@ See `.env.example`.
 
 - [CLAUDE.md](CLAUDE.md) — project conventions for Claude Code sessions
 - [docs/web-dashboard.md](docs/web-dashboard.md) — what's built, key decisions, roadmap
+- [docs/catching-runners.md](docs/catching-runners.md) — low-float runner detection strategy & roadmap
 - [docs/screener-poll-breakout.md](docs/screener-poll-breakout.md) — bash scanner reference
 - [docs/finviz-api.md](docs/finviz-api.md) — Finviz API quick reference
 - [docs/smart-money-concepts.md](docs/smart-money-concepts.md) — Smart Money Concepts reference
