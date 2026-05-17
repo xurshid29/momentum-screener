@@ -141,7 +141,8 @@ becomes a second, higher-priority alert source through the same pipe.
 - **Phase 2 — Ignition screener.** Second Finviz screen (sub-$1, float < 15M,
   volume-led) + the composite runner-score + a compact, always-visible Ignition
   sidebar (ranked top-N; clicking a row drives the existing chart/quote panels
-  via the selection context).
+  via the selection context). Detailed spec:
+  [ignition-screener-spec.md](ignition-screener-spec.md).
 - **Phase 3 — Refinements.** Finviz daily-bar backfill for repeat-runner stats;
   surface the EDGAR shelf/dilution flag on rows and alerts.
 
