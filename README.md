@@ -9,7 +9,7 @@ This project began as a single bash script (`screener-poll_breakout.sh`) and is 
 - **Live screener** — top low-float momentum runners (filter customizable in UI), updated every 20s via Server-Sent Events; screens the pre-market, regular, and after-hours sessions
 - **Multi-source catalysts** — Finviz + Yahoo RSS + Benzinga news, plus **SEC EDGAR filings** (offerings/dilution, 8-Ks, M&A, 13D/G stakes) and **Nasdaq trade halts** — deduped & merged, primary sources outranking aggregators
 - **Catalyst scoring** — every headline is classified by a rule-based engine (and optionally refined by an LLM): impact score, direction, urgency, and risk flags drive the 🔥 badges; click a badge for a modal with the verdict + that ticker's news
-- **Visual + audio alerts** — 🔥 (today catalyst), 🚨 (fresh news this cycle), `NEW` / `ACC` / `UP` row markers; browser notification + sound on actionable events
+- **Visual + audio alerts** — 🔥 (today catalyst), 🚨 (fresh news this cycle), `NEW` / `ACC` / `UP` row markers; browser notification + sound on actionable events; optional **Telegram push alerts** — server-side, so they reach you 24/5 even with no browser open
 - **TradingView charts** — embedded Advanced Real-Time widgets, an adjustable `0–4` grid (charts can be hidden entirely), intervals `1m / 5m / 15m / 1h` (per-chart, persisted per user); click "Open in TradingView" to use seconds intervals (`1S / 10S / 30S`) on tradingview.com with your Premium account
 - **Persistence** — every poll cycle, every news article, and every user pref written to Postgres. Enables retrospective analysis: *which news sources/types preceded the biggest moves?*
 - **Multi-user** — JWT auth (public sign-up gated by `REGISTRATION_OPEN`), per-user filter presets, per-user chart settings
@@ -151,6 +151,7 @@ See `.env.example`.
   - `SEC_EDGAR_USER_AGENT` — SEC requires a descriptive UA with a contact address; a default is used if unset
   - `OPENAI_API_KEY` — enables LLM refinement of catalyst scores
   - `REGISTRATION_OPEN` — public sign-up; closed unless set to exactly `true`
+  - `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` — enable Telegram push alerts
   - `JWT_EXPIRES_IN` — token lifetime (default `7d`)
 
 ## Documentation

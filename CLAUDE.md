@@ -16,6 +16,8 @@ SEC_EDGAR_USER_AGENT=App Name (you@example.com)          # optional — SEC requ
 JWT_SECRET=your-secret-key-here
 JWT_EXPIRES_IN=7d
 REGISTRATION_OPEN=true                                   # public sign-up — closed unless exactly 'true'
+TELEGRAM_BOT_TOKEN=...                                   # optional — Telegram bot token for push alerts
+TELEGRAM_CHAT_ID=...                                     # optional — destination chat id for alerts
 ```
 
 ## Database Schema
@@ -59,6 +61,7 @@ Postgres, migrations via `dbmate` in `db/migrations/`.
 5. Classify rows: `NEW` (first appearance), `ACC` (`change% delta > 2`), `UP` (any positive delta), `NEWS` (no movement but has today's news).
 6. Persist cycle + rows + new news articles to DB.
 7. Broadcast a delta payload to all connected SSE clients on `/api/screener/stream`.
+8. Push a Telegram alert (if `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` are set) for any row with fresh news and a strong/major catalyst — once per article URL, so it never spams. Server-side, so alerts arrive even with no browser open.
 
 **Single-instance only:** the service holds cross-cycle state in memory. Don't deploy multiple replicas without moving state to Redis or DB.
 

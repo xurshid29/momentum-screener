@@ -18,6 +18,7 @@ import { fetchBenzingaDelta } from './benzinga.js';
 import { fetchEdgarFilings, type EdgarFiling } from './edgar.js';
 import { fetchHalts, type TradeHalt } from './halts.js';
 import { broadcast } from './sse.js';
+import { sendTelegram, telegramEnabled, escapeHtml } from './telegram.js';
 import { classifyByRules, type Classification, type ClassifierInput } from './catalyst-rules.js';
 import { classifyByOpenAI } from './catalyst-openai.js';
 
@@ -116,6 +117,9 @@ class PollerService {
     input: ClassifierInput;
   }>();
   private llmInFlight = false;
+  // Article URLs already pushed to Telegram — alert once per article.
+  // Cleared at midnight ET.
+  private alertedUrls = new Set<string>();
 
   // Last full payload, served by /api/screener/latest for new clients.
   private lastPayload: CyclePayload | null = null;
@@ -130,6 +134,7 @@ class PollerService {
       bz_watermark: this.bzWatermark,
       sec_watermark: this.secWatermark,
       halt_watermark: this.haltWatermark,
+      telegram_enabled: telegramEnabled(),
       config: this.config,
     };
   }
@@ -217,6 +222,7 @@ class PollerService {
     if (todayEt !== this.lastEtDate) {
       this.bzHeadlineCache.clear();
       this.classificationCache.clear();
+      this.alertedUrls.clear();
       // Reset the SEC/halt delta watermarks so the new day's first cycle
       // doesn't replay the whole backlog as "fresh".
       this.secWatermark = Math.floor(now.getTime() / 1000);
@@ -497,11 +503,16 @@ class PollerService {
     };
 
     this.lastPayload = payload;
+    const wasFirstPoll = this.firstPoll;
     this.firstPoll = false;
     broadcast('cycle', payload);
     console.log(
       `[poller] ${nowHms()} — ${enriched.length} rows, ${newWithCatalyst.length} new+catalyst, ${freshList.length} fresh`,
     );
+
+    // Telegram alerts — fresh, high-impact rows. Skipped on the first poll so
+    // a restart's 30-min news backfill doesn't blast a burst of alerts.
+    if (!wasFirstPoll) this.pushAlerts(enriched);
 
     // Fire-and-forget LLM refinement of any rule-classified articles.
     // Completes in the background; the next cycle's payload picks up the
@@ -745,9 +756,50 @@ class PollerService {
       return cycle.id;
     });
   }
+
+  // Push a Telegram alert for any fresh, high-impact row — once per article
+  // URL. `is_fresh_news` is already a near one-shot signal (true only while the
+  // article is newer than the source watermark); alertedUrls guards the rest.
+  private pushAlerts(rows: EnrichedRow[]): void {
+    if (!telegramEnabled()) return;
+    for (const r of rows) {
+      if (!r.is_fresh_news || !r.catalyst || !r.news_url) continue;
+      if (r.catalyst.urgency !== 'strong' && r.catalyst.urgency !== 'major') continue;
+      if (this.alertedUrls.has(r.news_url)) continue;
+      this.alertedUrls.add(r.news_url);
+      void sendTelegram(formatTelegramAlert(r));
+    }
+  }
 }
 
 export const poller = new PollerService();
+
+// Render a screener row as a Telegram HTML-mode message.
+function formatTelegramAlert(r: EnrichedRow): string {
+  const c = r.catalyst!;
+  const emoji = r.news_source === 'halt' ? '🛑' : c.urgency === 'major' ? '🔥' : '🚨';
+  const price = r.price == null ? '' : `$${r.price.toFixed(2)}`;
+  const chg = r.change_pct == null ? '' : `${r.change_pct >= 0 ? '+' : ''}${r.change_pct.toFixed(1)}%`;
+
+  const meta: string[] = [];
+  if (r.float_m != null) meta.push(`float ${r.float_m.toFixed(1)}M`);
+  if (r.rel_volume != null) meta.push(`RVol ${Math.round(r.rel_volume)}x`);
+  if (r.status) meta.push(r.status);
+
+  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}`;
+  const links = [`<a href="${escapeHtml(r.finviz_url)}">Finviz</a>`, `<a href="${tv}">TradingView</a>`];
+  if (r.news_url) links.unshift(`<a href="${escapeHtml(r.news_url)}">News</a>`);
+
+  const lines = [
+    `${emoji} <b>${escapeHtml(r.ticker)}</b>  ${price}  ${chg}`.trimEnd(),
+    meta.join(' · '),
+    `<b>${c.urgency.toUpperCase()}</b> catalyst · score ${c.score} · ${escapeHtml(c.type)} (${c.direction})`,
+    r.news_title ? `“${escapeHtml(r.news_title)}”${r.news_source ? ` — ${r.news_source}` : ''}` : '',
+    c.risk_flags.length > 0 ? `⚠️ ${escapeHtml(c.risk_flags.join(', '))}` : '',
+    links.join(' · '),
+  ];
+  return lines.filter(Boolean).join('\n');
+}
 
 function nowHms(): string {
   const d = new Date();
