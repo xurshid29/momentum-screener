@@ -63,6 +63,8 @@ Postgres, migrations via `dbmate` in `db/migrations/`.
 7. Broadcast a delta payload to all connected SSE clients on `/api/screener/stream`.
 8. Push a Telegram alert (if `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` are set) for any row with fresh news and a strong/major catalyst — once per article URL, so it never spams. Server-side, so alerts arrive even with no browser open.
 
+Each cycle also runs a second **Ignition screen** (volume-led: sub-$1, float < 15M, `rel_volume` > 2) alongside the Momentum one. The union of both screens is enriched once; ignition rows get a composite `runner_score`, persist to `ignition_results`, feed the Ignition sidebar, and trigger a Telegram alert at score ≥ 65. See `docs/ignition-screener-spec.md`.
+
 **Single-instance only:** the service holds cross-cycle state in memory. Don't deploy multiple replicas without moving state to Redis or DB.
 
 ## Finviz API Quick Reference

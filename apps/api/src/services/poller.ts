@@ -19,6 +19,7 @@ import { fetchEdgarFilings, type EdgarFiling } from './edgar.js';
 import { fetchHalts, type TradeHalt } from './halts.js';
 import { broadcast } from './sse.js';
 import { sendTelegram, telegramEnabled, escapeHtml } from './telegram.js';
+import { scoreRunner, type RunnerScoreBreakdown } from './runner-score.js';
 import { classifyByRules, type Classification, type ClassifierInput } from './catalyst-rules.js';
 import { classifyByOpenAI } from './catalyst-openai.js';
 
@@ -36,6 +37,18 @@ const DEFAULTS: ScreenerFilterSnapshot = {
 
 const DELTA_LOOKBACK_SEC = 1800;
 
+// Ignition screener — a second, volume-led screen run each cycle alongside the
+// Momentum one, to catch low-float names in the first minutes of a move.
+// See docs/ignition-screener-spec.md.
+const IGNITION = {
+  filter: 'ind_stocksonly,sh_price_u10,sh_relvol_o2,sh_curvol_o500',
+  float_max_m: 15,
+  top_n: 80,         // fetched from Finviz, then runner-score-ranked
+  min_price: 0.10,   // post-filter — sh_price_u10 has no lower bound
+  broadcast_n: 25,   // top-N kept in the SSE payload + persisted
+  alert_score: 65,   // runner-score threshold for a Telegram alert
+};
+
 export interface CyclePayload {
   cycle_id: string;
   polled_at: string;
@@ -47,6 +60,7 @@ export interface CyclePayload {
     fresh_news: string[];
   };
   fresh_news: NewsHeadline[];
+  ignition: IgnitionRow[];
 }
 
 export interface EnrichedRow extends ScreenerRow {
@@ -62,6 +76,12 @@ export interface EnrichedRow extends ScreenerRow {
   news_url: string | null;
   finviz_url: string;
   catalyst: CatalystInfo | null;
+}
+
+// A Momentum-style enriched row plus its Ignition-screener runner-score.
+export interface IgnitionRow extends EnrichedRow {
+  runner_score: number;
+  score_breakdown: RunnerScoreBreakdown;
 }
 
 export interface CatalystInfo {
@@ -120,6 +140,8 @@ class PollerService {
   // Article URLs already pushed to Telegram — alert once per article.
   // Cleared at midnight ET.
   private alertedUrls = new Set<string>();
+  // Tickers already Telegram-alerted from the Ignition screener today.
+  private alertedIgnition = new Set<string>();
 
   // Last full payload, served by /api/screener/latest for new clients.
   private lastPayload: CyclePayload | null = null;
@@ -223,6 +245,7 @@ class PollerService {
       this.bzHeadlineCache.clear();
       this.classificationCache.clear();
       this.alertedUrls.clear();
+      this.alertedIgnition.clear();
       // Reset the SEC/halt delta watermarks so the new day's first cycle
       // doesn't replay the whole backlog as "fresh".
       this.secWatermark = Math.floor(now.getTime() / 1000);
@@ -238,15 +261,32 @@ class PollerService {
       this.lastSession = session;
     }
 
-    // 1) screener
-    const rows = await fetchScreener({
-      filter: this.config.filter,
-      floatMaxM: this.config.float_max_m,
-      topN: this.config.top_n,
-      session,
-    });
+    // 1) screener — two screens in parallel: the configured Momentum screen
+    // and the volume-led Ignition screen.
+    const [rows, ignitionRaw] = await Promise.all([
+      fetchScreener({
+        filter: this.config.filter,
+        floatMaxM: this.config.float_max_m,
+        topN: this.config.top_n,
+        session,
+      }),
+      fetchScreener({
+        filter: IGNITION.filter,
+        floatMaxM: IGNITION.float_max_m,
+        topN: IGNITION.top_n,
+        session,
+      }).catch(() => [] as ScreenerRow[]),
+    ]);
+    // sh_price_u10 has no lower bound — drop sub-dime junk.
+    const ignitionRows = ignitionRaw.filter(
+      (r) => r.price != null && r.price >= IGNITION.min_price,
+    );
 
-    const tickers = rows.map((r) => r.ticker);
+    // Enrich the union of both screens once; derive each view afterward.
+    const screenRows = new Map<string, ScreenerRow>();
+    for (const r of rows) screenRows.set(r.ticker, r);
+    for (const r of ignitionRows) if (!screenRows.has(r.ticker)) screenRows.set(r.ticker, r);
+    const tickers = [...screenRows.keys()];
 
     // 2) news — five sources in parallel
     const [finvizNews, yahooNews, bzDelta, edgarDelta, haltDelta] = await Promise.all([
@@ -357,7 +397,7 @@ class PollerService {
     // baseline is the volume that would flow in a typical such slice.
     const SLICES_PER_DAY = 78;
 
-    const enriched: EnrichedRow[] = rows.map((r) => {
+    const enrichRow = (r: ScreenerRow): EnrichedRow => {
       const prev = this.prevChange.get(r.ticker);
       const cur = r.change_pct ?? 0;
       let status: RowStatus = null;
@@ -465,16 +505,37 @@ class PollerService {
         finviz_url: `https://elite.finviz.com/quote?t=${r.ticker}&ty=c&p=h&b=1`,
         catalyst,
       };
-    });
+    };
+
+    // Enrich every ticker once (volHistory side-effects fire once per ticker),
+    // then split into the two screen views.
+    const enrichedByTicker = new Map<string, EnrichedRow>();
+    for (const r of screenRows.values()) enrichedByTicker.set(r.ticker, enrichRow(r));
+    const enriched = rows.map((r) => enrichedByTicker.get(r.ticker)!);
+    const ignition: IgnitionRow[] = ignitionRows
+      .map((r) => {
+        const e = enrichedByTicker.get(r.ticker)!;
+        const rs = scoreRunner({
+          float_m: e.float_m,
+          rel_vol_5min: e.rel_vol_5min,
+          rel_volume: e.rel_volume,
+          catalyst_score: e.catalyst?.score ?? null,
+          change_pct: e.change_pct,
+          is_halt: e.news_source === 'halt',
+        });
+        return { ...e, runner_score: rs.score, score_breakdown: rs.breakdown };
+      })
+      .sort((a, b) => b.runner_score - a.runner_score)
+      .slice(0, IGNITION.broadcast_n);
 
     // 4) update memory state for next cycle
-    for (const r of rows) {
+    for (const r of screenRows.values()) {
       if (r.change_pct != null) this.prevChange.set(r.ticker, r.change_pct);
     }
 
     // 5) persist
     const cycleId = await this.persistCycle(
-      session, enriched, bzDelta?.articles, finvizNews, yahooNews,
+      session, enriched, ignition, bzDelta?.articles, finvizNews, yahooNews,
       edgarDelta?.filings, haltDelta?.halts,
     );
 
@@ -490,6 +551,7 @@ class PollerService {
       session,
       config: this.config,
       rows: enriched,
+      ignition,
       banners: { new_with_catalyst: newWithCatalyst, fresh_news: freshList },
       fresh_news: enriched
         .filter((r) => r.is_fresh_news && r.news_title)
@@ -507,12 +569,16 @@ class PollerService {
     this.firstPoll = false;
     broadcast('cycle', payload);
     console.log(
-      `[poller] ${nowHms()} — ${enriched.length} rows, ${newWithCatalyst.length} new+catalyst, ${freshList.length} fresh`,
+      `[poller] ${nowHms()} — ${enriched.length} rows, ${ignition.length} ignition, ${newWithCatalyst.length} new+catalyst, ${freshList.length} fresh`,
     );
 
-    // Telegram alerts — fresh, high-impact rows. Skipped on the first poll so
-    // a restart's 30-min news backfill doesn't blast a burst of alerts.
-    if (!wasFirstPoll) this.pushAlerts(enriched);
+    // Telegram alerts — fresh high-impact rows + Ignition runner-score hits.
+    // Skipped on the first poll so a restart's news backfill and cold-start
+    // ignition set don't blast a burst of alerts.
+    if (!wasFirstPoll) {
+      this.pushAlerts(enriched);
+      this.pushIgnitionAlerts(ignition);
+    }
 
     // Fire-and-forget LLM refinement of any rule-classified articles.
     // Completes in the background; the next cycle's payload picks up the
@@ -587,6 +653,7 @@ class PollerService {
   private async persistCycle(
     session: TradingSession,
     rows: EnrichedRow[],
+    ignitionRows: IgnitionRow[],
     bzArticles: import('./benzinga.js').BenzingaArticle[] | undefined,
     finvizNews: Awaited<ReturnType<typeof fetchFinvizNews>>,
     yahooNews: Awaited<ReturnType<typeof fetchYahooNews>>,
@@ -636,6 +703,27 @@ class PollerService {
               status: r.status,
               prev_change_pct: r.prev_change_pct,
               accel_delta: r.accel_delta,
+            })),
+          )
+          .execute();
+      }
+
+      if (ignitionRows.length > 0) {
+        await trx
+          .insertInto('ignition_results')
+          .values(
+            ignitionRows.map((r) => ({
+              cycle_id: cycle.id,
+              ticker: r.ticker,
+              runner_score: r.runner_score,
+              score_breakdown: JSON.stringify(r.score_breakdown) as unknown as never,
+              price: r.price,
+              change_pct: r.change_pct,
+              float_m: r.float_m,
+              rel_volume: r.rel_volume,
+              rel_vol_5min: r.rel_vol_5min,
+              catalyst_score: r.catalyst?.score ?? null,
+              news_source: r.news_source,
             })),
           )
           .execute();
@@ -770,6 +858,18 @@ class PollerService {
       void sendTelegram(formatTelegramAlert(r));
     }
   }
+
+  // Telegram alert for Ignition rows clearing the runner-score threshold —
+  // once per ticker per ET day.
+  private pushIgnitionAlerts(rows: IgnitionRow[]): void {
+    if (!telegramEnabled()) return;
+    for (const r of rows) {
+      if (r.runner_score < IGNITION.alert_score) continue;
+      if (this.alertedIgnition.has(r.ticker)) continue;
+      this.alertedIgnition.add(r.ticker);
+      void sendTelegram(formatIgnitionAlert(r));
+    }
+  }
 }
 
 export const poller = new PollerService();
@@ -797,6 +897,26 @@ function formatTelegramAlert(r: EnrichedRow): string {
     r.news_title ? `“${escapeHtml(r.news_title)}”${r.news_source ? ` — ${r.news_source}` : ''}` : '',
     c.risk_flags.length > 0 ? `⚠️ ${escapeHtml(c.risk_flags.join(', '))}` : '',
     links.join(' · '),
+  ];
+  return lines.filter(Boolean).join('\n');
+}
+
+// Render an Ignition row as a Telegram HTML-mode message.
+function formatIgnitionAlert(r: IgnitionRow): string {
+  const b = r.score_breakdown;
+  const price = r.price == null ? '' : `$${r.price.toFixed(2)}`;
+  const chg = r.change_pct == null ? '' : `${r.change_pct >= 0 ? '+' : ''}${r.change_pct.toFixed(1)}%`;
+  const meta: string[] = [];
+  if (r.float_m != null) meta.push(`float ${r.float_m.toFixed(1)}M`);
+  if (r.rel_vol_5min != null) meta.push(`RVol5m ${Math.round(r.rel_vol_5min)}%`);
+  if (r.catalyst) meta.push(`catalyst ${r.catalyst.score}`);
+  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}`;
+  const lines = [
+    `⚡ <b>${escapeHtml(r.ticker)}</b>  ${price}  ${chg}`.trimEnd(),
+    `<b>Ignition ${r.runner_score}</b> · float ${b.float} / vol ${b.volume} / cat ${b.catalyst} / early ${b.earliness} / halt ${b.halt}`,
+    meta.join(' · '),
+    r.news_title ? `“${escapeHtml(r.news_title)}”` : '',
+    `<a href="${escapeHtml(r.finviz_url)}">Finviz</a> · <a href="${tv}">TradingView</a>`,
   ];
   return lines.filter(Boolean).join('\n');
 }

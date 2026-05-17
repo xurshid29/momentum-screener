@@ -7,6 +7,7 @@ This project began as a single bash script (`screener-poll_breakout.sh`) and is 
 ## Features
 
 - **Live screener** — top low-float momentum runners (filter customizable in UI), updated every 20s via Server-Sent Events; screens the pre-market, regular, and after-hours sessions
+- **Ignition screener** — a second, volume-led screen that catches low-float names in the *first minutes* of a move; ranked by a composite runner-score, shown in an always-visible sidebar, persisted for backtesting, and pushed to Telegram
 - **Multi-source catalysts** — Finviz + Yahoo RSS + Benzinga news, plus **SEC EDGAR filings** (offerings/dilution, 8-Ks, M&A, 13D/G stakes) and **Nasdaq trade halts** — deduped & merged, primary sources outranking aggregators
 - **Catalyst scoring** — every headline is classified by a rule-based engine (and optionally refined by an LLM): impact score, direction, urgency, and risk flags drive the 🔥 badges; click a badge for a modal with the verdict + that ticker's news
 - **Visual + audio alerts** — 🔥 (today catalyst), 🚨 (fresh news this cycle), `NEW` / `ACC` / `UP` row markers; browser notification + sound on actionable events; optional **Telegram push alerts** — server-side, so they reach you 24/5 even with no browser open

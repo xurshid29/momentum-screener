@@ -3,7 +3,8 @@
 Implementation spec for Phase 2 of the runner-detection roadmap. See
 [catching-runners.md](catching-runners.md) for the strategy this builds on.
 
-**Status:** spec — pending approval (3 open decisions at the bottom).
+**Status:** ✅ built (2026-05-17). Decisions taken: sidebar on the left edge,
+Telegram alert threshold runner-score ≥ 65, v1 cuts accepted.
 
 ## 1. What it delivers
 

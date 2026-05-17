@@ -7,6 +7,7 @@ import { ScreenerPanel } from '../components/screener/ScreenerPanel';
 import { SelectedStockPanel } from '../components/screener/SelectedStockPanel';
 import { NewsRoomPanel } from '../components/news/NewsRoomPanel';
 import { ChartGrid } from '../components/charts/ChartGrid';
+import { IgnitionSidebar } from '../components/screener/IgnitionSidebar';
 import { SelectionProvider, useSelection } from '../context/SelectionContext';
 import { useLayout } from '../context/LayoutContext';
 import type { CyclePayload } from '../api/types';
@@ -27,7 +28,11 @@ export function DashboardPage() {
       <AutoSelectFirstTicker payload={payload} />
       <div style={{ width: '100%', height: '100%', background: '#0a0a0a' }}>
         <PanelGroup direction="horizontal" autoSaveId="ms-outer">
-          <Panel id="ms-pane-left" order={1} defaultSize={50} minSize={25}>
+          <Panel id="ms-pane-ignition" order={0} defaultSize={16} minSize={11} maxSize={26}>
+            <Card><IgnitionSidebar payload={payload} /></Card>
+          </Panel>
+          <HHandle />
+          <Panel id="ms-pane-left" order={1} defaultSize={chartsVisible ? 42 : 84} minSize={25}>
             <PanelGroup direction="vertical" autoSaveId="ms-left">
               <Panel defaultSize={45} minSize={20}>
                 <Card><ScreenerPanel payload={payload} connected={connected} /></Card>
@@ -46,7 +51,7 @@ export function DashboardPage() {
               the TradingView iframes are torn down, not just hidden. */}
           {chartsVisible && <HHandle />}
           {chartsVisible && (
-            <Panel id="ms-pane-charts" order={2} defaultSize={50} minSize={25}>
+            <Panel id="ms-pane-charts" order={2} defaultSize={42} minSize={25}>
               <Card>
                 <ChartGrid />
               </Card>

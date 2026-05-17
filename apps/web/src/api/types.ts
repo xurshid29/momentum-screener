@@ -85,6 +85,20 @@ export interface EnrichedRow {
   catalyst: CatalystInfo | null;
 }
 
+export interface RunnerScoreBreakdown {
+  float: number;
+  volume: number;
+  catalyst: number;
+  earliness: number;
+  halt: number;
+}
+
+// An enriched row from the Ignition screener — Momentum row fields + runner-score.
+export interface IgnitionRow extends EnrichedRow {
+  runner_score: number;
+  score_breakdown: RunnerScoreBreakdown;
+}
+
 export interface NewsHeadline {
   ticker: string;
   source: NewsSource;
@@ -103,6 +117,7 @@ export interface CyclePayload {
   session: TradingSession;
   config: ScreenerFilterSnapshot;
   rows: EnrichedRow[];
+  ignition: IgnitionRow[];
   banners: { new_with_catalyst: string[]; fresh_news: string[] };
   fresh_news: NewsHeadline[];
 }

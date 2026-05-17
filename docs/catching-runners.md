@@ -138,10 +138,10 @@ becomes a second, higher-priority alert source through the same pipe.
 
 - **Phase 1 — Telegram alerts.** ✅ Done. Server-side push for fresh
   high-catalyst rows; dedup per article; no-ops without the env vars.
-- **Phase 2 — Ignition screener.** Second Finviz screen (sub-$1, float < 15M,
-  volume-led) + the composite runner-score + a compact, always-visible Ignition
-  sidebar (ranked top-N; clicking a row drives the existing chart/quote panels
-  via the selection context). Detailed spec:
+- **Phase 2 — Ignition screener.** ✅ Done. A second, volume-led Finviz screen
+  (sub-$1, float < 15M) run each cycle + the composite runner-score + a compact,
+  always-visible Ignition sidebar, persisted to `ignition_results`, with Telegram
+  alerts on runner-score ≥ 65. Spec:
   [ignition-screener-spec.md](ignition-screener-spec.md).
 - **Phase 3 — Refinements.** Finviz daily-bar backfill for repeat-runner stats;
   surface the EDGAR shelf/dilution flag on rows and alerts.

@@ -71,6 +71,24 @@ export interface ScreenerResultsTable {
   accel_delta: number | null;
 }
 
+// One row per Ignition-screener candidate per cycle. `score_breakdown` is the
+// per-component runner-score (float / volume / catalyst / earliness / halt).
+export interface IgnitionResultsTable {
+  id: Generated<string>;
+  cycle_id: string;
+  ticker: string;
+  runner_score: number;
+  score_breakdown: JSONColumnType<Record<string, number>>;
+  price: number | null;
+  change_pct: number | null;
+  float_m: number | null;
+  rel_volume: number | null;
+  rel_vol_5min: number | null;
+  catalyst_score: number | null;
+  news_source: NewsSource | null;
+  created_at: Generated<Date>;
+}
+
 // 'sec'  — an SEC EDGAR filing (offering, 8-K, M&A, 13D…)
 // 'halt' — a Nasdaq trade halt / volatility pause
 export type NewsSource = 'finviz' | 'yahoo' | 'benzinga' | 'sec' | 'halt';
@@ -152,6 +170,7 @@ export interface Database {
   screener_settings: ScreenerSettingsTable;
   screener_cycles: ScreenerCyclesTable;
   screener_results: ScreenerResultsTable;
+  ignition_results: IgnitionResultsTable;
   news_articles: NewsArticlesTable;
   news_ticker_links: NewsTickerLinksTable;
   news_classifications: NewsClassificationsTable;
