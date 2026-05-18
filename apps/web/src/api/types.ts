@@ -42,6 +42,20 @@ export interface CatalystInfo {
   classifier: Classifier;
 }
 
+// Effective-shelf / dilution status from a 12-month SEC submissions lookback.
+//   'shelf'     — a registration statement on file, not yet known-effective
+//   'effective' — the loaded gun: an effective shelf, no recent takedown
+//   'active'    — a 424B* prospectus within 90d: shares are being sold now
+export type ShelfLevel = 'shelf' | 'effective' | 'active';
+
+export interface ShelfInfo {
+  level: ShelfLevel;
+  latest_form: string;
+  latest_filed_at: string;
+  days_since: number;
+  forms: string[];
+}
+
 export interface ScreenerFilterSnapshot {
   filter: string;
   float_max_m: number;
@@ -83,6 +97,7 @@ export interface EnrichedRow {
   news_url: string | null;
   finviz_url: string;
   catalyst: CatalystInfo | null;
+  shelf: ShelfInfo | null;
 }
 
 export interface RunnerScoreBreakdown {
@@ -91,6 +106,7 @@ export interface RunnerScoreBreakdown {
   catalyst: number;
   earliness: number;
   halt: number;
+  shelf: number;
 }
 
 // An enriched row from the Ignition screener — Momentum row fields + runner-score.

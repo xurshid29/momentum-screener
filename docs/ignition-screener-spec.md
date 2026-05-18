@@ -44,6 +44,7 @@ A new `apps/api/src/services/runner-score.ts` — pure function
 | **Catalyst** | 25 | direction-aware — bullish `score×0.25`, neutral/mixed `score×0.10`, **bearish → 0** |
 | **Change** | −35…0 | extended up: `≥300→−20`, `≥150→−12`, `≥80→−5`; **down-move: `≤−15→−35`, `<0→−12`** |
 | **Halt** | +12 | a halt headline this cycle (T1/T2 = catalyst landing now) |
+| **Shelf** | −15…0 | *Phase 3* — dilution penalty from the SEC shelf lookup: `active`→−15, `effective`→−10, `shelf`→−5 (see `services/shelf.ts`) |
 
 Clamped 0–100. The sidebar ranks by it; the breakdown is shown on hover.
 

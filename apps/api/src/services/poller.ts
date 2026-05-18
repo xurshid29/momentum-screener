@@ -20,6 +20,7 @@ import { fetchHalts, type TradeHalt } from './halts.js';
 import { broadcast } from './sse.js';
 import { sendTelegram, telegramEnabled, escapeHtml } from './telegram.js';
 import { scoreRunner, type RunnerScoreBreakdown } from './runner-score.js';
+import { shelf, type ShelfInfo } from './shelf.js';
 import { classifyByRules, type Classification, type ClassifierInput } from './catalyst-rules.js';
 import { classifyByOpenAI } from './catalyst-openai.js';
 
@@ -76,6 +77,9 @@ export interface EnrichedRow extends ScreenerRow {
   news_url: string | null;
   finviz_url: string;
   catalyst: CatalystInfo | null;
+  // Effective-shelf / dilution status from a 12-month SEC submissions lookback.
+  // The runner's kill-switch — see services/shelf.ts.
+  shelf: ShelfInfo | null;
 }
 
 // A Momentum-style enriched row plus its Ignition-screener runner-score.
@@ -287,6 +291,9 @@ class PollerService {
     for (const r of rows) screenRows.set(r.ticker, r);
     for (const r of ignitionRows) if (!screenRows.has(r.ticker)) screenRows.set(r.ticker, r);
     const tickers = [...screenRows.keys()];
+    // Queue this cycle's tickers for a SEC shelf/dilution lookup. The result
+    // lands asynchronously in the shelf cache and is read below via shelf.get.
+    shelf.track(tickers);
 
     // 2) news — five sources in parallel
     const [finvizNews, yahooNews, bzDelta, edgarDelta, haltDelta] = await Promise.all([
@@ -504,6 +511,7 @@ class PollerService {
         news_url: headline?.url ?? null,
         finviz_url: `https://elite.finviz.com/quote?t=${r.ticker}&ty=c&p=h&b=1`,
         catalyst,
+        shelf: shelf.get(r.ticker),
       };
     };
 
@@ -523,6 +531,7 @@ class PollerService {
           catalyst_direction: e.catalyst?.direction ?? null,
           change_pct: e.change_pct,
           is_halt: e.news_source === 'halt',
+          shelf_level: e.shelf?.level ?? null,
         });
         return { ...e, runner_score: rs.score, score_breakdown: rs.breakdown };
       })
@@ -725,6 +734,7 @@ class PollerService {
               rel_vol_5min: r.rel_vol_5min,
               catalyst_score: r.catalyst?.score ?? null,
               news_source: r.news_source,
+              shelf_level: r.shelf?.level ?? null,
             })),
           )
           .execute();
@@ -902,9 +912,21 @@ function formatTelegramAlert(r: EnrichedRow): string {
     `<b>${c.urgency.toUpperCase()}</b> catalyst · score ${c.score} · ${escapeHtml(c.type)} (${c.direction})`,
     r.news_title ? `“${escapeHtml(r.news_title)}”${r.news_source ? ` — ${r.news_source}` : ''}` : '',
     c.risk_flags.length > 0 ? `⚠️ ${escapeHtml(c.risk_flags.join(', '))}` : '',
+    shelfAlertLine(r.shelf),
     links.join(' · '),
   ];
   return lines.filter(Boolean).join('\n');
+}
+
+// One-line dilution warning for a Telegram alert. Empty when no shelf is on
+// file — the kill-switch line only shows when there is something to flag.
+function shelfAlertLine(s: ShelfInfo | null): string {
+  if (!s) return '';
+  const label =
+    s.level === 'active' ? 'ACTIVE OFFERING'
+    : s.level === 'effective' ? 'EFFECTIVE SHELF'
+    : 'SHELF ON FILE';
+  return `⚠️ ${label} · dilution risk — ${escapeHtml(s.latest_form)}, ${s.days_since}d ago`;
 }
 
 // Render an Ignition row as a Telegram HTML-mode message.
@@ -919,9 +941,10 @@ function formatIgnitionAlert(r: IgnitionRow): string {
   const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}`;
   const lines = [
     `⚡ <b>${escapeHtml(r.ticker)}</b>  ${price}  ${chg}`.trimEnd(),
-    `<b>Ignition ${r.runner_score}</b> · float ${b.float} / vol ${b.volume} / cat ${b.catalyst} / early ${b.earliness} / halt ${b.halt}`,
+    `<b>Ignition ${r.runner_score}</b> · float ${b.float} / vol ${b.volume} / cat ${b.catalyst} / early ${b.earliness} / halt ${b.halt} / shelf ${b.shelf}`,
     meta.join(' · '),
     r.news_title ? `“${escapeHtml(r.news_title)}”` : '',
+    shelfAlertLine(r.shelf),
     `<a href="${escapeHtml(r.finviz_url)}">Finviz</a> · <a href="${tv}">TradingView</a>`,
   ];
   return lines.filter(Boolean).join('\n');

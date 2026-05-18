@@ -1,6 +1,7 @@
 import { Typography, Tooltip, Empty } from 'antd';
 import type { CyclePayload, IgnitionRow } from '../../api/types';
 import { useSelection } from '../../context/SelectionContext';
+import { ShelfBadge } from '../common/ShelfBadge';
 import { fmtPrice, fmtPct, num } from '../../utils/format';
 
 const { Text } = Typography;
@@ -84,9 +85,16 @@ function IgnitionItem({
       }}
     >
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
-        <span style={{ color: '#fff', fontWeight: 600, fontSize: 13 }}>{row.ticker}</span>
+        <span style={{ color: '#fff', fontWeight: 600, fontSize: 13 }}>
+          {row.ticker}
+          {row.shelf && (
+            <span style={{ marginLeft: 4 }}>
+              <ShelfBadge shelf={row.shelf} size={12} />
+            </span>
+          )}
+        </span>
         <Tooltip
-          title={`float ${b.float} · volume ${b.volume} · catalyst ${b.catalyst} · earliness ${b.earliness} · halt ${b.halt}`}
+          title={`float ${b.float} · volume ${b.volume} · catalyst ${b.catalyst} · earliness ${b.earliness} · halt ${b.halt} · shelf ${b.shelf}`}
         >
           <span style={{ color: scoreColor(row.runner_score), fontWeight: 700, fontSize: 14 }}>
             {row.runner_score}

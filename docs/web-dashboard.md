@@ -41,6 +41,7 @@ See **Recent additions** for what shipped lately and **Remaining work** for what
 | Nasdaq trade-halts client | ✅ | `services/halts.ts` |
 | Catalyst classifier (rules + optional LLM) | ✅ | `catalyst-rules.ts`, `catalyst-openai.ts`, `classify-article.ts` |
 | Ignition screener + runner-score | ✅ | `poller.ts`, `runner-score.ts` |
+| SEC shelf/dilution lookup (Phase 3) | ✅ | `services/shelf.ts` |
 | Telegram push alerts | ✅ | `services/telegram.ts` |
 | SSE broadcaster | ✅ | `services/sse.ts` |
 | Persistence (cycles, results, ignition, news) | ✅ | `db/migrations/*.sql` |
@@ -66,6 +67,7 @@ See **Recent additions** for what shipped lately and **Remaining work** for what
 
 ## Recent additions (since the 2026-05-04 snapshot)
 
+- **EDGAR shelf/dilution flag (Phase 3)** — a per-ticker SEC submissions lookup (`data.sec.gov/submissions`) over a 12-month window, grading each screener name's dilution risk `shelf` / `effective` / `active`. The "pump-and-dilute kill-switch": surfaced as a tiered warning marker on Momentum + Ignition rows, a line in Telegram alerts, and a penalty in the runner-score. Catches a shelf loaded *before* the pump — which the `getcurrent` firehose (only a few hours deep) misses. A standalone background service (`shelf.ts`), rate-limited well under SEC's fair-access limit.
 - **SEC EDGAR filings** as a news source — the `getcurrent` firehose matched to screener tickers via the CIK map; surfaces offerings/dilution (424B*, S-1/S-3), 8-Ks, M&A, 13D/G stakes.
 - **Nasdaq trade halts** as a news source — the market-wide halt feed; a T1 ("news pending") halt scores as a major catalyst.
 - **Catalyst classification** — every headline scored (impact / direction / urgency / risk flags) by a rule engine, optionally refined by an LLM; drives the 🔥 badges.
@@ -108,9 +110,9 @@ On connect, the server pushes the last cached cycle so the dashboard isn't empty
 
 ### Runner-detection roadmap — see [`catching-runners.md`](catching-runners.md)
 
-- **Phase 3 — refinements.**
+- **Phase 3 — refinements.** Partially shipped.
+  - ✅ **EDGAR shelf/dilution flag** — a 12-month per-ticker SEC submissions lookback grades each name `shelf` / `effective` / `active`; surfaced on rows + alerts and penalised in the runner-score (`services/shelf.ts`).
   - Backfill ~12 months of Finviz daily bars per float-qualified ticker → a `historical_runs` count (repeat-runner prior). Needed because the live DB only holds weeks of history.
-  - Surface the EDGAR shelf/dilution flag (effective S-1/S-3/F-3 + ATM) on rows and alerts — the pump-and-dilute kill-switch.
 - **PR-wire news source** — GlobeNewswire / ACCESSWIRE firehose matched against the live screener universe. The deliberately-deferred follow-up to EDGAR + halts.
 
 ### Ignition screener — deferred / tuning

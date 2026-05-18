@@ -7,6 +7,7 @@ import { useSelection } from '../../context/SelectionContext';
 import { useHiddenTickers } from '../../hooks/useHiddenTickers';
 import { TickerLink } from '../common/TickerLink';
 import { FireBadge } from '../common/FireBadge';
+import { ShelfBadge } from '../common/ShelfBadge';
 import { fmtPct, fmtFloat, fmtPrice, fmtVolume, fmtMcap, fmtRelVol, fmtBigPct, num } from '../../utils/format';
 import { FiltersDialog } from './FiltersDialog';
 import { CatalystNewsModal } from './CatalystNewsModal';
@@ -84,7 +85,7 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
         title: 'Ticker',
         dataIndex: 'ticker',
         key: 'ticker',
-        width: 110,
+        width: 126,
         render: (t: string, row) => (
           <span>
             <TickerLink
@@ -101,6 +102,11 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
                 type={row.catalyst?.type}
                 onOpen={() => setCatalystModal({ ticker: row.ticker, catalyst: row.catalyst ?? null })}
               />
+            )}
+            {row.shelf && (
+              <span style={{ marginLeft: 6 }}>
+                <ShelfBadge shelf={row.shelf} />
+              </span>
             )}
           </span>
         ),

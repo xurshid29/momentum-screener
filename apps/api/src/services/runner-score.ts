@@ -3,6 +3,7 @@
 // Pure + deterministic. See docs/ignition-screener-spec.md §3 for the weights.
 
 import type { CatalystDirection } from '../db/types.js';
+import type { ShelfLevel } from './shelf.js';
 
 export interface RunnerScoreBreakdown {
   float: number;
@@ -10,6 +11,7 @@ export interface RunnerScoreBreakdown {
   catalyst: number;
   earliness: number;
   halt: number;
+  shelf: number;
 }
 
 export interface RunnerScore {
@@ -25,6 +27,7 @@ export interface RunnerScoreInput {
   catalyst_direction: CatalystDirection | null;
   change_pct: number | null;
   is_halt: boolean;
+  shelf_level: ShelfLevel | null;    // effective shelf / dilution risk
 }
 
 // Smaller float = more violent move per dollar of buying.
@@ -71,6 +74,17 @@ function changeScore(changePct: number | null): number {
   return -12;                 // red
 }
 
+// Dilution penalty. An effective shelf is the runner's kill-switch — the
+// company can sell stock into the spike — so it must drag the score down, not
+// just sit as a cosmetic flag. An active offering (a 424B* in the last 90d) is
+// the worst: shares are being sold right now.
+function shelfScore(level: ShelfLevel | null): number {
+  if (level === 'active') return -15;
+  if (level === 'effective') return -10;
+  if (level === 'shelf') return -5;
+  return 0;
+}
+
 export function scoreRunner(i: RunnerScoreInput): RunnerScore {
   const breakdown: RunnerScoreBreakdown = {
     float: floatScore(i.float_m),
@@ -78,8 +92,10 @@ export function scoreRunner(i: RunnerScoreInput): RunnerScore {
     catalyst: catalystScore(i.catalyst_score, i.catalyst_direction),
     earliness: changeScore(i.change_pct),
     halt: i.is_halt ? 12 : 0,
+    shelf: shelfScore(i.shelf_level),
   };
   const raw =
-    breakdown.float + breakdown.volume + breakdown.catalyst + breakdown.earliness + breakdown.halt;
+    breakdown.float + breakdown.volume + breakdown.catalyst +
+    breakdown.earliness + breakdown.halt + breakdown.shelf;
   return { score: Math.max(0, Math.min(100, Math.round(raw))), breakdown };
 }

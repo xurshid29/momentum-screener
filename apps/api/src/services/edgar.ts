@@ -15,7 +15,10 @@ const GETCURRENT_URL =
   'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=&company=&dateb=&owner=include&count=100&output=atom';
 const COMPANY_TICKERS_URL = 'https://www.sec.gov/files/company_tickers.json';
 
-const USER_AGENT =
+// SEC requires a descriptive User-Agent carrying a contact address on every
+// request — across browse-edgar AND data.sec.gov. Exported so shelf.ts (the
+// per-company submissions lookup) sends the identical UA.
+export const SEC_USER_AGENT =
   process.env.SEC_EDGAR_USER_AGENT?.trim() ||
   'pnldash-momentum-screener (contact@example.com)';
 
@@ -40,8 +43,11 @@ export interface EdgarDelta {
 }
 
 // ── ticker ↔ CIK map ───────────────────────────────────────────────────────
-// company_tickers.json is ~1MB and changes rarely; fetch once per day.
+// company_tickers.json is ~1MB and changes rarely; fetch once per day. Both
+// directions are kept: cikToTicker for the getcurrent firehose (CIK → ticker),
+// tickerToCik for shelf.ts's per-company submissions lookup (ticker → CIK).
 let cikToTicker: Map<number, string> | null = null;
+let tickerToCik: Map<string, number> | null = null;
 let cikMapDay = '';
 
 async function loadCikMap(): Promise<Map<number, string>> {
@@ -51,20 +57,34 @@ async function loadCikMap(): Promise<Map<number, string>> {
     const res = await fetchWithTimeout(COMPANY_TICKERS_URL);
     if (!res.ok) return cikToTicker ?? new Map();
     const json = (await res.json()) as Record<string, { cik_str?: number; ticker?: string }>;
-    const map = new Map<number, string>();
+    const byCik = new Map<number, string>();
+    const byTicker = new Map<string, number>();
     for (const row of Object.values(json)) {
       if (typeof row?.cik_str === 'number' && typeof row?.ticker === 'string' && row.ticker) {
-        map.set(row.cik_str, row.ticker.toUpperCase());
+        const ticker = row.ticker.toUpperCase();
+        byCik.set(row.cik_str, ticker);
+        byTicker.set(ticker, row.cik_str);
       }
     }
-    if (map.size > 0) {
-      cikToTicker = map;
+    if (byCik.size > 0) {
+      cikToTicker = byCik;
+      tickerToCik = byTicker;
       cikMapDay = today;
     }
   } catch {
     /* keep whatever map we already have */
   }
   return cikToTicker ?? new Map();
+}
+
+// Resolve a ticker to its SEC CIK. Returns null for tickers SEC doesn't list
+// (most OTC names, some foreign ADRs). Throws if the CIK map could not be
+// loaded at all, so a transient fetch failure isn't mistaken for "not listed"
+// (the caller retries instead of caching a wrong negative). Used by shelf.ts.
+export async function cikForTicker(ticker: string): Promise<number | null> {
+  await loadCikMap();
+  if (!tickerToCik) throw new Error('SEC CIK map unavailable');
+  return tickerToCik.get(ticker.toUpperCase()) ?? null;
 }
 
 // ── form taxonomy ──────────────────────────────────────────────────────────
@@ -183,7 +203,7 @@ async function fetchWithTimeout(url: string): Promise<Response> {
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
   try {
     return await fetch(url, {
-      headers: { 'User-Agent': USER_AGENT, Accept: 'application/atom+xml, application/json' },
+      headers: { 'User-Agent': SEC_USER_AGENT, Accept: 'application/atom+xml, application/json' },
       signal: ctrl.signal,
     });
   } finally {

@@ -86,6 +86,9 @@ export interface IgnitionResultsTable {
   rel_vol_5min: number | null;
   catalyst_score: number | null;
   news_source: NewsSource | null;
+  // Effective-shelf / dilution level at ignition time: 'shelf' | 'effective'
+  // | 'active' | null. See services/shelf.ts.
+  shelf_level: string | null;
   created_at: Generated<Date>;
 }
 

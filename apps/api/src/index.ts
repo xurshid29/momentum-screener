@@ -14,6 +14,7 @@ import newsRouter from './routes/news.js';
 import prefsRouter from './routes/prefs.js';
 import { poller } from './services/poller.js';
 import { universe } from './services/universe.js';
+import { shelf } from './services/shelf.js';
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -28,6 +29,7 @@ app.get('/health', async (_req, res) => {
     database: dbOk ? 'connected' : 'disconnected',
     poller: poller.status(),
     universe: universe.status(),
+    shelf: shelf.status(),
     timestamp: new Date().toISOString(),
   });
 });
@@ -51,4 +53,5 @@ app.listen(port, () => {
   console.log(`Health check: http://localhost:${port}/health`);
   void poller.start();
   universe.start();
+  shelf.start();
 });

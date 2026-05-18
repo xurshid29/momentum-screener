@@ -131,6 +131,9 @@ becomes a second, higher-priority alert source through the same pipe.
   (S-1/S-3/F-3) plus an ATM is a company's mechanism to sell stock into a spike.
   AEHL's F-3 went effective three days before its pump. Flag effective shelves
   from the EDGAR feed — a shelf + a 500% spike = an offering is coming.
+  *(Built — Phase 3; the per-ticker submissions lookback in `services/shelf.ts`
+  catches a shelf loaded days before the pump, which the getcurrent firehose
+  cannot.)*
 - These setups are also prime **short / fade** candidates once parabolic and
   extended.
 
@@ -143,8 +146,13 @@ becomes a second, higher-priority alert source through the same pipe.
   always-visible Ignition sidebar, persisted to `ignition_results`, with Telegram
   alerts on runner-score ≥ 58 or a bullish strong/major catalyst. Spec:
   [ignition-screener-spec.md](ignition-screener-spec.md).
-- **Phase 3 — Refinements.** Finviz daily-bar backfill for repeat-runner stats;
-  surface the EDGAR shelf/dilution flag on rows and alerts.
+- **Phase 3 — Refinements.** ⚠️ In progress.
+  - ✅ **EDGAR shelf/dilution flag.** A 12-month per-ticker SEC submissions
+    lookback (`data.sec.gov/submissions`) grades each screener name
+    `shelf` / `effective` / `active`. Surfaced as a tiered warning marker on
+    rows, a line in Telegram alerts, and a runner-score penalty — the
+    pump-and-dilute kill-switch (`apps/api/src/services/shelf.ts`).
+  - Finviz daily-bar backfill for repeat-runner stats (`historical_runs`).
 
 ## Latency note
 
