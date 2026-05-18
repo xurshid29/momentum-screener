@@ -41,8 +41,8 @@ A new `apps/api/src/services/runner-score.ts` — pure function
 |---|---|---|
 | **Float** | 30 | `<2M→30`, `<5M→25`, `<10M→16`, `<15M→8`, else 0 |
 | **Volume burst** | 35 | `rel_vol_5min`: `≥3000→35`, `≥1000→27`, `≥500→18`, `≥200→8`; fallback day-RVol `≥10→6` |
-| **Catalyst** | 25 | `catalyst.score × 0.25` (0 if no catalyst) |
-| **Earliness** | −20…0 | penalize late: `change% ≥300→−20`, `≥150→−12`, `≥80→−5`, else 0 |
+| **Catalyst** | 25 | direction-aware — bullish `score×0.25`, neutral/mixed `score×0.10`, **bearish → 0** |
+| **Change** | −35…0 | extended up: `≥300→−20`, `≥150→−12`, `≥80→−5`; **down-move: `≤−15→−35`, `<0→−12`** |
 | **Halt** | +12 | a halt headline this cycle (T1/T2 = catalyst landing now) |
 
 Clamped 0–100. The sidebar ranks by it; the breakdown is shown on hover.

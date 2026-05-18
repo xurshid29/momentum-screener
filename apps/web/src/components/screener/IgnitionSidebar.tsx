@@ -13,6 +13,13 @@ function scoreColor(s: number): string {
   return '#8c8c8c';
 }
 
+// Catalyst marker by direction — a bearish catalyst must not look "hot".
+function catalystIcon(direction: string): string {
+  if (direction === 'bullish') return '🔥';
+  if (direction === 'bearish') return '🔻';
+  return '◆';
+}
+
 // Always-visible ranked feed of the Ignition screener — low-float names in the
 // first minutes of a move, ranked by runner-score. Clicking a row drives the
 // shared selection (charts + Quote panel), same as the Momentum table.
@@ -63,7 +70,7 @@ function IgnitionItem({
   const bits = [
     row.float_m != null ? `${row.float_m.toFixed(1)}M fl` : null,
     row.rel_vol_5min != null ? `${Math.round(row.rel_vol_5min)}% rv5` : null,
-    row.catalyst ? `🔥${row.catalyst.score}` : null,
+    row.catalyst ? `${catalystIcon(row.catalyst.direction)}${row.catalyst.score}` : null,
   ].filter(Boolean);
 
   return (

@@ -66,6 +66,7 @@ const HIGH_IMPACT: Pattern[] = [
 
 // Bearish-direction catalysts (still important — high move potential, just down).
 const BEARISH_IMPACT: Pattern[] = [
+  { re: /\bfiles?\s+(?:for\s+)?(?:chapter\s+(?:7|11)|bankruptcy)\b|\bbankruptcy\s+(?:filing|protection|petition)\b|\bvoluntary\s+(?:chapter\s+(?:7|11)|petition)\b/i, weight: 40, type: 'bankruptcy', direction: 'bearish', materiality: 'high' },
   { re: /\b(SEC|DOJ)\s+(investigation|probe|charges?)/i, weight: 35, type: 'legal_regulatory', direction: 'bearish', materiality: 'high' },
   { re: /\b(class\s+action|securities\s+fraud|sued\s+by)/i, weight: 25, type: 'legal_regulatory', direction: 'bearish', materiality: 'medium' },
   { re: /\bgoing\s+concern|delist(?:ing|ed)/i, weight: 35, type: 'legal_regulatory', direction: 'bearish', materiality: 'high' },

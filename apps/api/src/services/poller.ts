@@ -520,6 +520,7 @@ class PollerService {
           rel_vol_5min: e.rel_vol_5min,
           rel_volume: e.rel_volume,
           catalyst_score: e.catalyst?.score ?? null,
+          catalyst_direction: e.catalyst?.direction ?? null,
           change_pct: e.change_pct,
           is_halt: e.news_source === 'halt',
         });

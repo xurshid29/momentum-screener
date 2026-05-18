@@ -2,6 +2,8 @@
 // signal inputs of a low-float momentum ignition into a single 0–100 number.
 // Pure + deterministic. See docs/ignition-screener-spec.md §3 for the weights.
 
+import type { CatalystDirection } from '../db/types.js';
+
 export interface RunnerScoreBreakdown {
   float: number;
   volume: number;
@@ -17,9 +19,10 @@ export interface RunnerScore {
 
 export interface RunnerScoreInput {
   float_m: number | null;
-  rel_vol_5min: number | null;   // % — 100 = a typical 5-minute volume slice
-  rel_volume: number | null;     // day relative volume (×)
-  catalyst_score: number | null; // 0..100 from the catalyst classifier
+  rel_vol_5min: number | null;       // % — 100 = a typical 5-minute volume slice
+  rel_volume: number | null;         // day relative volume (×)
+  catalyst_score: number | null;     // 0..100 impact from the catalyst classifier
+  catalyst_direction: CatalystDirection | null;
   change_pct: number | null;
   is_halt: boolean;
 }
@@ -47,21 +50,33 @@ function volumeScore(relVol5m: number | null, relVolDay: number | null): number 
   return 0;
 }
 
-// Penalize names that have already run — we want ignition, not exhaustion.
-function earlinessScore(changePct: number | null): number {
+// A catalyst only counts toward an *up*-runner if it's bullish. A bearish
+// catalyst (bankruptcy, offering, probe) is *why* a stock is falling — it must
+// not lift the score. Neutral/mixed get partial credit (news is news).
+function catalystScore(score: number | null, direction: CatalystDirection | null): number {
+  if (score == null || direction === 'bearish') return 0;
+  const weight = direction === 'bullish' ? 0.25 : 0.10;
+  return Math.round(score * weight);
+}
+
+// The move so far: penalize already-extended up-moves (we want ignition, not
+// exhaustion) and — heavily — down-moves (a stock crashing is not a runner).
+function changeScore(changePct: number | null): number {
   const c = changePct ?? 0;
   if (c >= 300) return -20;
   if (c >= 150) return -12;
   if (c >= 80) return -5;
-  return 0;
+  if (c >= 0) return 0;
+  if (c <= -15) return -35;   // crashing — disqualify
+  return -12;                 // red
 }
 
 export function scoreRunner(i: RunnerScoreInput): RunnerScore {
   const breakdown: RunnerScoreBreakdown = {
     float: floatScore(i.float_m),
     volume: volumeScore(i.rel_vol_5min, i.rel_volume),
-    catalyst: i.catalyst_score != null ? Math.round(i.catalyst_score * 0.25) : 0,
-    earliness: earlinessScore(i.change_pct),
+    catalyst: catalystScore(i.catalyst_score, i.catalyst_direction),
+    earliness: changeScore(i.change_pct),
     halt: i.is_halt ? 12 : 0,
   };
   const raw =
