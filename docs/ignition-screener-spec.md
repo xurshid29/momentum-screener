@@ -108,11 +108,12 @@ backtest endpoint/UI is a later add, not Phase 2.
 
 ## 5. Telegram — Ignition alerts
 
-A new `pushIgnitionAlerts()` in the poller: fires when an ignition row's
-`runner_score ≥ 65`, deduped **once per ticker per ET day** (`alertedIgnition`
-set, cleared at midnight). Message: ticker · runner-score + breakdown · price ·
-%chg · float · RVol5m · catalyst · links. Reuses the existing `telegram.ts` —
-higher-priority sibling of the current momentum alerts.
+A `pushIgnitionAlerts()` in the poller fires on either trigger — an ignition
+row's `runner_score ≥ 65`, **or** a bullish strong/major catalyst (catches a
+catalyst-led move before the volume burst lifts the score; bearish catalysts
+never alert). Deduped **once per ticker per ET day** (`alertedIgnition`, cleared
+at midnight). Message: ticker · runner-score + breakdown · price · %chg · float
+· RVol5m · catalyst · links. Reuses the existing `telegram.ts`.
 
 ## 6. Frontend — the Ignition sidebar
 

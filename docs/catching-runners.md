@@ -141,7 +141,7 @@ becomes a second, higher-priority alert source through the same pipe.
 - **Phase 2 — Ignition screener.** ✅ Done. A second, volume-led Finviz screen
   (sub-$1, float < 15M) run each cycle + the composite runner-score + a compact,
   always-visible Ignition sidebar, persisted to `ignition_results`, with Telegram
-  alerts on runner-score ≥ 65. Spec:
+  alerts on runner-score ≥ 65 or a bullish strong/major catalyst. Spec:
   [ignition-screener-spec.md](ignition-screener-spec.md).
 - **Phase 3 — Refinements.** Finviz daily-bar backfill for repeat-runner stats;
   surface the EDGAR shelf/dilution flag on rows and alerts.

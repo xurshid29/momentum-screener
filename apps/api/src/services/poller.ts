@@ -860,12 +860,17 @@ class PollerService {
     }
   }
 
-  // Telegram alert for Ignition rows clearing the runner-score threshold —
-  // once per ticker per ET day.
+  // Telegram alert for an Ignition row — once per ticker per ET day. Fires on
+  // either trigger: the runner-score clearing the threshold (a mechanical
+  // ignition), OR a bullish strong/major catalyst (catches a catalyst-led move
+  // before the volume burst lifts the score). Bearish catalysts never alert.
   private pushIgnitionAlerts(rows: IgnitionRow[]): void {
     if (!telegramEnabled()) return;
     for (const r of rows) {
-      if (r.runner_score < IGNITION.alert_score) continue;
+      const c = r.catalyst;
+      const bullishCatalyst =
+        c != null && c.direction === 'bullish' && (c.urgency === 'strong' || c.urgency === 'major');
+      if (r.runner_score < IGNITION.alert_score && !bullishCatalyst) continue;
       if (this.alertedIgnition.has(r.ticker)) continue;
       this.alertedIgnition.add(r.ticker);
       void sendTelegram(formatIgnitionAlert(r));
