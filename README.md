@@ -10,6 +10,7 @@ This project began as a single bash script (`screener-poll_breakout.sh`) and is 
 - **Ignition screener** — a second, volume-led screen that catches low-float names in the *first minutes* of a move; ranked by a composite runner-score, shown in an always-visible sidebar, persisted for backtesting, and pushed to Telegram
 - **Multi-source catalysts** — Finviz + Yahoo RSS + Benzinga news, plus **SEC EDGAR filings** (offerings/dilution, 8-Ks, M&A, 13D/G stakes) and **Nasdaq trade halts** — deduped & merged, primary sources outranking aggregators
 - **Catalyst scoring** — every headline is classified by a rule-based engine (and optionally refined by an LLM): impact score, direction, urgency, and risk flags drive the 🔥 badges; click a badge for a modal with the verdict + that ticker's news
+- **Dilution kill-switch** — a 12-month per-ticker SEC submissions lookback flags each screener name's effective-shelf risk (`shelf` / `effective` / `active`); the flag rides on rows, Telegram alerts, and the runner-score — a loaded shelf is how a low-float runner gets diluted into the ground
 - **Visual + audio alerts** — 🔥 (today catalyst), 🚨 (fresh news this cycle), `NEW` / `ACC` / `UP` row markers; browser notification + sound on actionable events; optional **Telegram push alerts** — server-side, so they reach you 24/5 even with no browser open
 - **TradingView charts** — embedded Advanced Real-Time widgets, an adjustable `0–4` grid (charts can be hidden entirely), intervals `1m / 5m / 15m / 1h` (per-chart, persisted per user); click "Open in TradingView" to use seconds intervals (`1S / 10S / 30S`) on tradingview.com with your Premium account
 - **Persistence** — every poll cycle, every news article, and every user pref written to Postgres. Enables retrospective analysis: *which news sources/types preceded the biggest moves?*
@@ -154,6 +155,16 @@ See `.env.example`.
   - `REGISTRATION_OPEN` — public sign-up; closed unless set to exactly `true`
   - `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` — enable Telegram push alerts
   - `JWT_EXPIRES_IN` — token lifetime (default `7d`)
+
+## Roadmap
+
+The low-float runner-detection roadmap — see [docs/catching-runners.md](docs/catching-runners.md):
+
+- ✅ **Phase 1** — server-side Telegram push alerts (24/5, no browser needed)
+- ✅ **Phase 2** — the Ignition screener (volume-led screen + composite runner-score + always-visible sidebar)
+- **Phase 3 — refinements** (in progress)
+  - ✅ EDGAR shelf/dilution flag — a 12-month SEC submissions lookback grading each name `shelf` / `effective` / `active`
+  - ⏸️ **Paused** — Finviz daily-bar backfill: ~12 months of `quote_export` daily bars per float-qualified ticker → a repeat-runner `historical_runs` prior
 
 ## Documentation
 

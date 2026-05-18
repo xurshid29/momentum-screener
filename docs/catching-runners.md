@@ -152,7 +152,7 @@ becomes a second, higher-priority alert source through the same pipe.
     `shelf` / `effective` / `active`. Surfaced as a tiered warning marker on
     rows, a line in Telegram alerts, and a runner-score penalty — the
     pump-and-dilute kill-switch (`apps/api/src/services/shelf.ts`).
-  - Finviz daily-bar backfill for repeat-runner stats (`historical_runs`).
+  - ⏸️ **Paused** — Finviz daily-bar backfill for repeat-runner stats (`historical_runs`).
 
 ## Latency note
 

@@ -112,7 +112,7 @@ On connect, the server pushes the last cached cycle so the dashboard isn't empty
 
 - **Phase 3 — refinements.** Partially shipped.
   - ✅ **EDGAR shelf/dilution flag** — a 12-month per-ticker SEC submissions lookback grades each name `shelf` / `effective` / `active`; surfaced on rows + alerts and penalised in the runner-score (`services/shelf.ts`).
-  - Backfill ~12 months of Finviz daily bars per float-qualified ticker → a `historical_runs` count (repeat-runner prior). Needed because the live DB only holds weeks of history.
+  - ⏸️ **Paused** — backfill ~12 months of Finviz daily bars per float-qualified ticker → a `historical_runs` count (repeat-runner prior). Needed because the live DB only holds weeks of history.
 - **PR-wire news source** — GlobeNewswire / ACCESSWIRE firehose matched against the live screener universe. The deliberately-deferred follow-up to EDGAR + halts.
 
 ### Ignition screener — deferred / tuning
