@@ -1,6 +1,6 @@
 # Momentum Screener — Web Dashboard
 
-Status as of 2026-05-17. The bash scanner (`screener-poll_breakout.sh`) and the web dashboard are both functional; the bash version remains the reference implementation. The web port lives in `apps/api` + `apps/web` and runs in parallel without sharing state with it.
+Status as of 2026-05-18. The bash scanner (`screener-poll_breakout.sh`) and the web dashboard are both functional; the bash version remains the reference implementation. The web port lives in `apps/api` + `apps/web` and runs in parallel without sharing state with it.
 
 See **Recent additions** for what shipped lately and **Remaining work** for what's next. The low-float runner-detection strategy + roadmap lives in [`catching-runners.md`](catching-runners.md); the Ignition screener design in [`ignition-screener-spec.md`](ignition-screener-spec.md).
 
@@ -71,8 +71,8 @@ See **Recent additions** for what shipped lately and **Remaining work** for what
 - **Catalyst classification** — every headline scored (impact / direction / urgency / risk flags) by a rule engine, optionally refined by an LLM; drives the 🔥 badges.
 - **Catalyst news modal** — clicking a row's fire badge opens the catalyst verdict + that ticker's news.
 - **Hideable chart pane** — the Charts control accepts `0`; the chart pane unmounts entirely.
-- **Telegram push alerts** — server-side, 24/5, independent of any open browser; fires on fresh high-catalyst rows and Ignition runner-score hits.
-- **Ignition screener (Phase 2)** — a second, volume-led Finviz screen run each cycle; composite runner-score; always-visible sidebar; persisted to `ignition_results` for backtesting.
+- **Telegram push alerts** — server-side, 24/5, independent of any open browser. Fires for the Momentum screener (fresh news + strong/major catalyst) and the Ignition screener (runner-score ≥ 58 **or** a bullish strong/major catalyst). All triggers are direction-aware — a bearish catalyst or a crash never alerts.
+- **Ignition screener (Phase 2)** — a second, volume-led Finviz screen run each cycle; a composite, **direction-aware** runner-score (a bearish catalyst or a down-move sinks the score, so crashes don't rank as ignitions); always-visible sidebar; persisted to `ignition_results` for backtesting.
 - **Registration gating** — public sign-up closed unless `REGISTRATION_OPEN=true`.
 - **Deploy hardening** — CI restarts nginx after rollout (kills stale-upstream 502s) and verifies migrations against the app database after `dbmate up`.
 
@@ -113,10 +113,11 @@ On connect, the server pushes the last cached cycle so the dashboard isn't empty
   - Surface the EDGAR shelf/dilution flag (effective S-1/S-3/F-3 + ATM) on rows and alerts — the pump-and-dilute kill-switch.
 - **PR-wire news source** — GlobeNewswire / ACCESSWIRE firehose matched against the live screener universe. The deliberately-deferred follow-up to EDGAR + halts.
 
-### Ignition screener — deferred v1 cuts
+### Ignition screener — deferred / tuning
 
 - Ignition filter is a code constant — make it user-editable, like the Momentum filter dialog.
 - No backtest UI — tuning the runner-score is ad-hoc psql for now; a query view/endpoint would close the loop.
+- **Retune from data** — the alert threshold (currently 58) and the runner-score weights are first-pass estimates. After several sessions of `ignition_results`, retune both against the actual score-vs-outcome distribution.
 
 ### Dashboard / smaller items
 
