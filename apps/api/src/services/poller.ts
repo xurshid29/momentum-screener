@@ -46,7 +46,7 @@ const IGNITION = {
   top_n: 80,         // fetched from Finviz, then runner-score-ranked
   min_price: 0.10,   // post-filter — sh_price_u10 has no lower bound
   broadcast_n: 25,   // top-N kept in the SSE payload + persisted
-  alert_score: 65,   // runner-score threshold for a Telegram alert
+  alert_score: 58,   // alert threshold — a no-catalyst momentum ignition caps ~60 (float 25 + volume 35)
 };
 
 export interface CyclePayload {

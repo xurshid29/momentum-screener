@@ -4,7 +4,7 @@ Implementation spec for Phase 2 of the runner-detection roadmap. See
 [catching-runners.md](catching-runners.md) for the strategy this builds on.
 
 **Status:** ✅ built (2026-05-17). Decisions taken: sidebar on the left edge,
-Telegram alert threshold runner-score ≥ 65, v1 cuts accepted.
+Telegram alert threshold runner-score ≥ 58, v1 cuts accepted.
 
 ## 1. What it delivers
 
@@ -78,7 +78,7 @@ Files: `poller.ts` (significant but contained — it's `runCycle` + 2 helpers),
 A dedicated table keeps ignition rows fully separate from momentum data — zero
 impact on existing `screener_results` queries — and records the runner-score
 *as it was at ignition time*, which is what makes the score tunable later
-(backtest: "did `score ≥ 65` actually go on to run?").
+(backtest: "did `score ≥ 58` actually go on to run?").
 
 ```sql
 create table ignition_results (
@@ -109,7 +109,7 @@ backtest endpoint/UI is a later add, not Phase 2.
 ## 5. Telegram — Ignition alerts
 
 A `pushIgnitionAlerts()` in the poller fires on either trigger — an ignition
-row's `runner_score ≥ 65`, **or** a bullish strong/major catalyst (catches a
+row's `runner_score ≥ 58`, **or** a bullish strong/major catalyst (catches a
 catalyst-led move before the volume burst lifts the score; bearish catalysts
 never alert). Deduped **once per ticker per ET day** (`alertedIgnition`, cleared
 at midnight). Message: ticker · runner-score + breakdown · price · %chg · float
@@ -161,7 +161,7 @@ mark Phase 2 done). One migration, no new dependency.
 
 1. **Sidebar placement** — left edge (recommended, scan-order
    Ignition→Screener→Charts) or right edge?
-2. **Ignition alert threshold** — runner-score `≥ 65`. Looser (more alerts) or
+2. **Ignition alert threshold** — runner-score `≥ 58`. Looser (more alerts) or
    tighter?
 3. **v1 cuts OK?** — specifically: the ignition filter not user-editable yet,
    and no backtest UI (ad-hoc psql for tuning).
