@@ -56,7 +56,7 @@ See **Recent additions** for what shipped lately and **Remaining work** for what
 | Auth pages; registration gated by `REGISTRATION_OPEN` | ✅ | Register tab hidden when sign-up is closed |
 | Multi-panel resizable dashboard | ✅ | `react-resizable-panels`, sizes via localStorage |
 | Screener live table (SSE) | ✅ | NEW/ACC/UP/NEWS badges, 🔥/🚨 markers |
-| Ignition sidebar | ✅ | Always-visible ranked runner-score feed (left edge) |
+| Ignition sidebar — New + Top split | ✅ | Pinned "New" section above the score-ranked feed (left edge) |
 | Catalyst news modal | ✅ | Click a row's 🔥 badge → catalyst verdict + ticker news |
 | Quote Details — Stats + Sentiment + History | ✅ | Color-coded per CLAUDE.md bands; per-ticker history tab |
 | News Room (current screener tickers) | ✅ | |
@@ -67,6 +67,7 @@ See **Recent additions** for what shipped lately and **Remaining work** for what
 
 ## Recent additions (since the 2026-05-04 snapshot)
 
+- **Ignition sidebar — New/Top split** — the sidebar now pins a "New" section above the score-ranked list: tickers that just entered the Ignition set (< 2 min), surfaced *regardless* of runner-score. Closes a blind spot — a fresh ignition's 5-min RVol isn't measurable yet, so it scored low and sank to the bottom or off the broadcast list entirely. The poller bypasses the `broadcast_n` cutoff for new rows.
 - **EDGAR shelf/dilution flag (Phase 3)** — a per-ticker SEC submissions lookup (`data.sec.gov/submissions`) over a 12-month window, grading each screener name's dilution risk `shelf` / `effective` / `active`. The "pump-and-dilute kill-switch": surfaced as a tiered warning marker on Momentum + Ignition rows, a line in Telegram alerts, and a penalty in the runner-score. Catches a shelf loaded *before* the pump — which the `getcurrent` firehose (only a few hours deep) misses. A standalone background service (`shelf.ts`), rate-limited well under SEC's fair-access limit.
 - **SEC EDGAR filings** as a news source — the `getcurrent` firehose matched to screener tickers via the CIK map; surfaces offerings/dilution (424B*, S-1/S-3), 8-Ks, M&A, 13D/G stakes.
 - **Nasdaq trade halts** as a news source — the market-wide halt feed; a T1 ("news pending") halt scores as a major catalyst.

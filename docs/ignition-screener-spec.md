@@ -133,6 +133,13 @@ New `apps/web/src/components/screener/IgnitionSidebar.tsx`:
 Reads `payload.ignition` — `useScreenerStream` needs no change (same `cycle`
 event).
 
+**Phase 3 refinement.** The sidebar is split into a pinned **New** section
+(tickers in the Ignition set under 2 min — surfaced regardless of runner-score,
+so a fresh name whose 5-min RVol isn't measurable yet isn't buried) above the
+score-ranked **Top** list. Rows carry an `is_new` flag; the poller bypasses the
+`broadcast_n` score cutoff for new rows so a low-scored fresh name still reaches
+the payload.
+
 ## 7. Types
 
 - `IgnitionRow = EnrichedRow & { runner_score: number; score_breakdown: RunnerScoreBreakdown }`

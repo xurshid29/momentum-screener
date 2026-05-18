@@ -46,8 +46,9 @@ const IGNITION = {
   float_max_m: 15,
   top_n: 80,         // fetched from Finviz, then runner-score-ranked
   min_price: 0.10,   // post-filter — sh_price_u10 has no lower bound
-  broadcast_n: 25,   // top-N kept in the SSE payload + persisted
+  broadcast_n: 25,   // top-N (by runner-score) kept in the SSE payload + persisted
   alert_score: 58,   // alert threshold — a no-catalyst momentum ignition caps ~60 (float 25 + volume 35)
+  new_window_ms: 120_000,  // a ticker stays flagged "new" for 2 min after first entering the set
 };
 
 export interface CyclePayload {
@@ -86,6 +87,9 @@ export interface EnrichedRow extends ScreenerRow {
 export interface IgnitionRow extends EnrichedRow {
   runner_score: number;
   score_breakdown: RunnerScoreBreakdown;
+  // True for the first ~2 minutes a ticker is in the Ignition set — drives the
+  // sidebar's pinned "New" section so a fresh low-score name isn't buried.
+  is_new: boolean;
 }
 
 export interface CatalystInfo {
@@ -146,6 +150,11 @@ class PollerService {
   private alertedUrls = new Set<string>();
   // Tickers already Telegram-alerted from the Ignition screener today.
   private alertedIgnition = new Set<string>();
+  // First-seen time (epoch ms) per ticker currently in the Ignition set —
+  // drives the sidebar's "New" section. Self-maintaining: only currently
+  // present tickers are kept, so a ticker that leaves and returns re-counts
+  // as new, and no daily/session clear is needed.
+  private ignitionFirstSeen = new Map<string, number>();
 
   // Last full payload, served by /api/screener/latest for new clients.
   private lastPayload: CyclePayload | null = null;
@@ -520,7 +529,21 @@ class PollerService {
     const enrichedByTicker = new Map<string, EnrichedRow>();
     for (const r of screenRows.values()) enrichedByTicker.set(r.ticker, enrichRow(r));
     const enriched = rows.map((r) => enrichedByTicker.get(r.ticker)!);
-    const ignition: IgnitionRow[] = ignitionRows
+
+    // Track Ignition-set membership so just-arrived names can be surfaced
+    // separately. Register first-sightings, then prune any ticker no longer
+    // present — this keeps each survivor's firstSeen stable while letting a
+    // ticker that leaves and returns re-count as new.
+    const nowMs = Date.now();
+    for (const r of ignitionRows) {
+      if (!this.ignitionFirstSeen.has(r.ticker)) this.ignitionFirstSeen.set(r.ticker, nowMs);
+    }
+    const ignitionPresent = new Set(ignitionRows.map((r) => r.ticker));
+    for (const t of this.ignitionFirstSeen.keys()) {
+      if (!ignitionPresent.has(t)) this.ignitionFirstSeen.delete(t);
+    }
+
+    const scoredIgnition: IgnitionRow[] = ignitionRows
       .map((r) => {
         const e = enrichedByTicker.get(r.ticker)!;
         const rs = scoreRunner({
@@ -533,10 +556,22 @@ class PollerService {
           is_halt: e.news_source === 'halt',
           shelf_level: e.shelf?.level ?? null,
         });
-        return { ...e, runner_score: rs.score, score_breakdown: rs.breakdown };
+        const firstSeen = this.ignitionFirstSeen.get(r.ticker) ?? nowMs;
+        return {
+          ...e,
+          runner_score: rs.score,
+          score_breakdown: rs.breakdown,
+          is_new: nowMs - firstSeen <= IGNITION.new_window_ms,
+        };
       })
-      .sort((a, b) => b.runner_score - a.runner_score)
-      .slice(0, IGNITION.broadcast_n);
+      .sort((a, b) => b.runner_score - a.runner_score);
+
+    // New rows bypass the score cutoff entirely — a fresh low-score name (its
+    // 5-min RVol not yet measurable) must never be buried. Top rows are the
+    // established names, ranked and capped. The payload carries both.
+    const newIgnition = scoredIgnition.filter((r) => r.is_new);
+    const topIgnition = scoredIgnition.filter((r) => !r.is_new).slice(0, IGNITION.broadcast_n);
+    const ignition: IgnitionRow[] = [...newIgnition, ...topIgnition];
 
     // 4) update memory state for next cycle
     for (const r of screenRows.values()) {

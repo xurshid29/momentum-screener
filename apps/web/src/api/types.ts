@@ -113,6 +113,9 @@ export interface RunnerScoreBreakdown {
 export interface IgnitionRow extends EnrichedRow {
   runner_score: number;
   score_breakdown: RunnerScoreBreakdown;
+  // True for the first ~2 minutes a ticker is in the Ignition set — drives the
+  // sidebar's pinned "New" section.
+  is_new: boolean;
 }
 
 export interface NewsHeadline {

@@ -21,38 +21,72 @@ function catalystIcon(direction: string): string {
   return '◆';
 }
 
-// Always-visible ranked feed of the Ignition screener — low-float names in the
-// first minutes of a move, ranked by runner-score. Clicking a row drives the
-// shared selection (charts + Quote panel), same as the Momentum table.
+// A compact section label — sits above the New and Top row groups.
+function SectionHeader({ label, count, color }: { label: string; count: number; color: string }) {
+  return (
+    <div style={{ padding: '3px 8px', borderBottom: '1px solid #2a2a2a' }}>
+      <Text strong style={{ color, fontSize: 10, letterSpacing: 0.6 }}>{label}</Text>
+      <Text type="secondary" style={{ fontSize: 10, marginLeft: 5 }}>{count}</Text>
+    </div>
+  );
+}
+
+// Always-visible feed of the Ignition screener — low-float names in the first
+// minutes of a move. Split into two groups: a pinned "New" section (tickers
+// that just entered the set, surfaced regardless of runner-score so a fresh
+// low-score name is never buried) above the score-ranked "Top" list. Clicking
+// a row drives the shared selection (charts + Quote panel).
 export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
   const { selected, setSelected } = useSelection();
-  const rows = payload?.ignition ?? [];
+  const all = payload?.ignition ?? [];
+  const newRows = all.filter((r) => r.is_new);
+  const topRows = all.filter((r) => !r.is_new);
+
+  const renderRow = (r: IgnitionRow) => (
+    <IgnitionItem key={r.ticker} row={r} selected={r.ticker === selected} onSelect={setSelected} />
+  );
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ padding: '6px 8px', borderBottom: '1px solid #303030' }}>
         <Text strong style={{ color: '#e0e0e0', letterSpacing: 0.5 }}>⚡ Ignition</Text>
-        <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>{rows.length}</Text>
+        <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>{all.length}</Text>
       </div>
-      <div style={{ flex: '1 1 auto', minHeight: 0, overflow: 'auto' }}>
-        {rows.length === 0 ? (
-          <div style={{ padding: 24, textAlign: 'center' }}>
-            <Empty
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description={<Text type="secondary" style={{ fontSize: 12 }}>No ignitions</Text>}
-            />
+
+      {all.length === 0 ? (
+        <div style={{ flex: '1 1 auto', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description={<Text type="secondary" style={{ fontSize: 12 }}>No ignitions</Text>}
+          />
+        </div>
+      ) : (
+        <>
+          {/* New — pinned at the top, never scrolls out of view */}
+          {newRows.length > 0 && (
+            <div
+              style={{
+                flex: '0 0 auto',
+                maxHeight: '45%',
+                overflow: 'auto',
+                background: '#13211a',
+                borderBottom: '2px solid #237804',
+              }}
+            >
+              <SectionHeader label="🆕 NEW" count={newRows.length} color="#73d13d" />
+              {newRows.map(renderRow)}
+            </div>
+          )}
+
+          {/* Top — score-ranked, scrolls */}
+          <div style={{ flex: '1 1 auto', minHeight: 0, overflow: 'auto' }}>
+            {newRows.length > 0 && topRows.length > 0 && (
+              <SectionHeader label="TOP" count={topRows.length} color="#8c8c8c" />
+            )}
+            {topRows.map(renderRow)}
           </div>
-        ) : (
-          rows.map((r) => (
-            <IgnitionItem
-              key={r.ticker}
-              row={r}
-              selected={r.ticker === selected}
-              onSelect={setSelected}
-            />
-          ))
-        )}
-      </div>
+        </>
+      )}
     </div>
   );
 }
