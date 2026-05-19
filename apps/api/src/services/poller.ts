@@ -69,7 +69,7 @@ export interface EnrichedRow extends ScreenerRow {
   status: RowStatus;
   prev_change_pct: number | null;
   accel_delta: number | null;
-  vol_5min: number | null;          // diffed cumulative volume over the last ~5 minutes
+  vol_5min: number | null;          // 5-min-equivalent traded volume (extrapolated during a ticker's first ~5 min)
   rel_vol_5min: number | null;      // (vol_5min / (avg_volume / 78)) * 100
   is_fresh_news: boolean;
   has_today_news: boolean;
@@ -408,6 +408,10 @@ class PollerService {
     // 3) classify rows + compute 5-min relative volume + build payload
     const nowSec = Math.floor(Date.now() / 1000);
     const FIVE_MIN_SEC = 300;
+    // Before a 5-min-old anchor exists, the burst is extrapolated from the
+    // oldest sample once the window is at least this wide — so a fresh
+    // ignition is measurable in ~80s, not 5 min (see the CNEY post-mortem).
+    const MIN_WINDOW_SEC = 75;
     const HISTORY_MAX_SEC = 600;
     // Trading day = 6.5h × 60min ÷ 5min = 78 five-min slices. The 5-min "rate %"
     // baseline is the volume that would flow in a typical such slice.
@@ -428,9 +432,11 @@ class PollerService {
         else if (d > 0) status = 'UP';
       }
 
-      // 5-min volume rate. We diff cumulative-day-volume against the oldest
-      // sample we have that's at least 5 minutes old. If we don't have one
-      // yet (cold start within 5 min), leave null.
+      // 5-min volume rate. Diff cumulative-day-volume against an anchor sample
+      // >= 5 min old for the exact rate. Before such a sample exists, fall back
+      // to the oldest sample we have (once the window is wide enough) and
+      // extrapolate it to a 5-min-equivalent — so a fresh ignition's volume
+      // burst is measurable within ~80s of first appearing, not 5 minutes.
       let vol5min: number | null = null;
       let relVol5min: number | null = null;
       if (r.volume != null) {
@@ -439,11 +445,15 @@ class PollerService {
           h = [];
           this.volHistory.set(r.ticker, h);
         }
-        // Find anchor sample >= 5 min old
-        const anchor = h.find((p) => nowSec - p.ts >= FIVE_MIN_SEC);
-        if (anchor) {
-          const diff = r.volume - anchor.volume;
+        const fiveMinAnchor = h.find((p) => nowSec - p.ts >= FIVE_MIN_SEC);
+        if (fiveMinAnchor) {
+          const diff = r.volume - fiveMinAnchor.volume;
           if (diff >= 0) vol5min = diff;
+        } else if (h.length > 0 && nowSec - h[0].ts >= MIN_WINDOW_SEC) {
+          // Cold start — extrapolate the short window to a 5-min-equivalent.
+          const dt = nowSec - h[0].ts;
+          const diff = r.volume - h[0].volume;
+          if (diff >= 0) vol5min = Math.round(diff * (FIVE_MIN_SEC / dt));
         }
         if (vol5min != null && r.avg_volume && r.avg_volume > 0) {
           const expected5min = r.avg_volume / SLICES_PER_DAY;
@@ -891,14 +901,20 @@ class PollerService {
     });
   }
 
-  // Push a Telegram alert for any fresh, high-impact row — once per article
-  // URL. `is_fresh_news` is already a near one-shot signal (true only while the
-  // article is newer than the source watermark); alertedUrls guards the rest.
+  // Push a Telegram alert for any fresh, high-impact, non-bearish row — once
+  // per article URL. `is_fresh_news` is already a near one-shot signal (true
+  // only while the article is newer than the source watermark); alertedUrls
+  // guards the rest.
   private pushAlerts(rows: EnrichedRow[]): void {
     if (!telegramEnabled()) return;
     for (const r of rows) {
       if (!r.is_fresh_news || !r.catalyst || !r.news_url) continue;
       if (r.catalyst.urgency !== 'strong' && r.catalyst.urgency !== 'major') continue;
+      // Direction-aware, like the Ignition path: a bearish strong/major
+      // catalyst (dilutive offering, SEC probe, regulatory halt) is why a
+      // stock falls — not a runner to chase. Neutral signals such as a T1
+      // "news pending" halt still alert.
+      if (r.catalyst.direction === 'bearish') continue;
       if (this.alertedUrls.has(r.news_url)) continue;
       this.alertedUrls.add(r.news_url);
       void sendTelegram(formatTelegramAlert(r));
@@ -915,7 +931,13 @@ class PollerService {
       const c = r.catalyst;
       const bullishCatalyst =
         c != null && c.direction === 'bullish' && (c.urgency === 'strong' || c.urgency === 'major');
-      if (r.runner_score < IGNITION.alert_score && !bullishCatalyst) continue;
+      // Test the threshold against the score with the shelf penalty removed:
+      // dilution risk ranks the sidebar and rides as the ⚠️ in the message,
+      // but it must not *hide* an ignition from the alert. Detection and risk
+      // are separate concerns.
+      const b = r.score_breakdown;
+      const detectionScore = b.float + b.volume + b.catalyst + b.earliness + b.halt;
+      if (detectionScore < IGNITION.alert_score && !bullishCatalyst) continue;
       if (this.alertedIgnition.has(r.ticker)) continue;
       this.alertedIgnition.add(r.ticker);
       void sendTelegram(formatIgnitionAlert(r));
