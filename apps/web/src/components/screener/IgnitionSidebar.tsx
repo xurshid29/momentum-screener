@@ -1,7 +1,10 @@
-import { Typography, Tooltip, Empty } from 'antd';
+import { Typography, Tooltip, Empty, Button, Popover, List } from 'antd';
+import { CloseOutlined, EyeInvisibleOutlined } from '@ant-design/icons';
 import type { CyclePayload, IgnitionRow } from '../../api/types';
 import { useSelection } from '../../context/SelectionContext';
+import { useHiddenTickers } from '../../hooks/useHiddenTickers';
 import { ShelfBadge } from '../common/ShelfBadge';
+import { TickerLink } from '../common/TickerLink';
 import { fmtPrice, fmtPct, num } from '../../utils/format';
 
 const { Text } = Typography;
@@ -31,6 +34,27 @@ function SectionHeader({ label, count, color }: { label: string; count: number; 
   );
 }
 
+// Unhide list — shown in the header popover. The hidden set is global per
+// user/day, shared with the Momentum screener: unhiding here unhides there too.
+function HiddenList({ tickers, onUnhide }: { tickers: string[]; onUnhide: (t: string) => void }) {
+  return (
+    <List
+      size="small"
+      style={{ minWidth: 150 }}
+      dataSource={tickers}
+      locale={{ emptyText: 'Nothing hidden' }}
+      renderItem={(t) => (
+        <List.Item style={{ padding: '4px 0' }}>
+          <Text strong style={{ flex: 1 }}>{t}</Text>
+          <Button type="link" size="small" onClick={() => onUnhide(t)} style={{ padding: 0, height: 'auto' }}>
+            unhide
+          </Button>
+        </List.Item>
+      )}
+    />
+  );
+}
+
 // Always-visible feed of the Ignition screener — low-float names in the first
 // minutes of a move. Split into two groups: a pinned "New" section (tickers
 // that just entered the set, surfaced regardless of runner-score so a fresh
@@ -38,19 +62,53 @@ function SectionHeader({ label, count, color }: { label: string; count: number; 
 // a row drives the shared selection (charts + Quote panel).
 export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
   const { selected, setSelected } = useSelection();
-  const all = payload?.ignition ?? [];
+  const { hidden, hide, unhide } = useHiddenTickers();
+  const all = (payload?.ignition ?? []).filter((r) => !hidden.has(r.ticker));
   const newRows = all.filter((r) => r.is_new);
   const topRows = all.filter((r) => !r.is_new);
+  const hiddenList = [...hidden].sort();
 
   const renderRow = (r: IgnitionRow) => (
-    <IgnitionItem key={r.ticker} row={r} selected={r.ticker === selected} onSelect={setSelected} />
+    <IgnitionItem
+      key={r.ticker}
+      row={r}
+      selected={r.ticker === selected}
+      onSelect={setSelected}
+      onHide={hide}
+    />
   );
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <div style={{ padding: '6px 8px', borderBottom: '1px solid #303030' }}>
-        <Text strong style={{ color: '#e0e0e0', letterSpacing: 0.5 }}>⚡ Ignition</Text>
-        <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>{all.length}</Text>
+      <div
+        style={{
+          padding: '6px 8px',
+          borderBottom: '1px solid #303030',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+        }}
+      >
+        <span>
+          <Text strong style={{ color: '#e0e0e0', letterSpacing: 0.5 }}>⚡ Ignition</Text>
+          <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>{all.length}</Text>
+        </span>
+        {hiddenList.length > 0 && (
+          <Popover
+            trigger="click"
+            placement="bottomRight"
+            content={<HiddenList tickers={hiddenList} onUnhide={unhide} />}
+          >
+            <Button
+              type="text"
+              size="small"
+              icon={<EyeInvisibleOutlined />}
+              style={{ fontSize: 11, color: '#8c8c8c' }}
+            >
+              {hiddenList.length}
+            </Button>
+          </Popover>
+        )}
       </div>
 
       {all.length === 0 ? (
@@ -95,10 +153,12 @@ function IgnitionItem({
   row,
   selected,
   onSelect,
+  onHide,
 }: {
   row: IgnitionRow;
   selected: boolean;
   onSelect: (t: string) => void;
+  onHide: (t: string) => void;
 }) {
   const b = row.score_breakdown;
   const chg = num(row.change_pct);
@@ -112,36 +172,58 @@ function IgnitionItem({
     <div
       onClick={() => onSelect(row.ticker)}
       style={{
-        padding: '6px 8px',
+        display: 'flex',
+        alignItems: 'stretch',
         borderBottom: '1px solid #2a2a2a',
         cursor: 'pointer',
         background: selected ? '#15395b' : undefined,
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
-        <span style={{ color: '#fff', fontWeight: 600, fontSize: 13 }}>
-          {row.ticker}
-          {row.shelf && (
-            <span style={{ marginLeft: 4 }}>
-              <ShelfBadge shelf={row.shelf} size={12} />
-            </span>
-          )}
-        </span>
-        <Tooltip
-          title={`float ${b.float} · volume ${b.volume} · catalyst ${b.catalyst} · earliness ${b.earliness} · halt ${b.halt} · shelf ${b.shelf}`}
-        >
-          <span style={{ color: scoreColor(row.runner_score), fontWeight: 700, fontSize: 14 }}>
-            {row.runner_score}
+      <div style={{ flex: '1 1 auto', minWidth: 0, padding: '6px 8px' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+          <span>
+            <TickerLink
+              ticker={row.ticker}
+              onSelect={onSelect}
+              stopPropagation
+              style={{ color: '#fff', fontWeight: 600, fontSize: 13 }}
+            />
+            {row.shelf && (
+              <span style={{ marginLeft: 4 }}>
+                <ShelfBadge shelf={row.shelf} size={12} />
+              </span>
+            )}
           </span>
-        </Tooltip>
+          {/* Click (not hover) opens the score breakdown; stopPropagation
+              keeps the click from also selecting the row. */}
+          <Tooltip
+            trigger="click"
+            title={`float ${b.float} · volume ${b.volume} · catalyst ${b.catalyst} · earliness ${b.earliness} · halt ${b.halt} · shelf ${b.shelf}`}
+          >
+            <span
+              onClick={(e) => e.stopPropagation()}
+              style={{ color: scoreColor(row.runner_score), fontWeight: 700, fontSize: 14, cursor: 'pointer' }}
+            >
+              {row.runner_score}
+            </span>
+          </Tooltip>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
+          <Text type="secondary">{fmtPrice(row.price)}</Text>
+          <Text style={{ color: (chg ?? 0) >= 0 ? '#52c41a' : '#ff4d4f' }}>{fmtPct(row.change_pct)}</Text>
+        </div>
+        {bits.length > 0 && (
+          <div style={{ fontSize: 10, color: '#8c8c8c', marginTop: 1 }}>{bits.join(' · ')}</div>
+        )}
       </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
-        <Text type="secondary">{fmtPrice(row.price)}</Text>
-        <Text style={{ color: (chg ?? 0) >= 0 ? '#52c41a' : '#ff4d4f' }}>{fmtPct(row.change_pct)}</Text>
-      </div>
-      {bits.length > 0 && (
-        <div style={{ fontSize: 10, color: '#8c8c8c', marginTop: 1 }}>{bits.join(' · ')}</div>
-      )}
+      <Button
+        type="text"
+        size="small"
+        title="Hide for today"
+        icon={<CloseOutlined style={{ fontSize: 10, color: '#888' }} />}
+        onClick={(e) => { e.stopPropagation(); onHide(row.ticker); }}
+        style={{ width: 22, height: 22, padding: 0, alignSelf: 'center', marginRight: 2, flex: '0 0 auto' }}
+      />
     </div>
   );
 }

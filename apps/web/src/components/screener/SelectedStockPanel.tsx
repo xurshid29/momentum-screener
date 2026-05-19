@@ -212,6 +212,24 @@ function DetailsTab({ ticker, meta, news }: DetailsTabProps) {
         <Text style={{ color: changeColor, fontSize: 14, fontWeight: 600 }}>
           {change != null && change >= 0 ? '+' : ''}{fmtPct(meta?.change_pct)}
         </Text>
+        <span style={{ display: 'inline-flex', gap: 4, alignSelf: 'center' }}>
+          <a
+            href={`https://elite.finviz.com/quote?t=${encodeURIComponent(ticker)}&ty=c&p=h&b=1`}
+            target="_blank"
+            rel="noreferrer"
+            className="screener-link-btn"
+          >
+            <img src="/finviz-icon.png" alt="Finviz" />
+          </a>
+          <a
+            href={`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(ticker)}`}
+            target="_blank"
+            rel="noreferrer"
+            className="screener-link-btn"
+          >
+            <img src="/tradingview-icon.png" alt="TradingView" />
+          </a>
+        </span>
       </div>
 
       {sub && (

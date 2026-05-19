@@ -29,12 +29,15 @@ export function ShelfBadge({ shelf, size = 14 }: { shelf: ShelfInfo; size?: numb
     `${t.label} — ${shelf.latest_form}, ${shelf.days_since}d ago. ${t.desc} ` +
     `Forms seen: ${shelf.forms.join(', ')}.`;
   return (
-    <Tooltip title={title}>
+    // Click — not hover — to open: the triangle sits inside clickable rows, so
+    // stopPropagation keeps a click from also selecting the row.
+    <Tooltip title={title} trigger="click">
       <svg
         width={size}
         height={size}
         viewBox="0 0 16 16"
-        style={{ display: 'inline-block', verticalAlign: 'middle', marginTop: -2, cursor: 'help' }}
+        onClick={(e) => e.stopPropagation()}
+        style={{ display: 'inline-block', verticalAlign: 'middle', marginTop: -2, cursor: 'pointer' }}
       >
         <path fill={t.color} d="M8 2 L15 14.5 L1 14.5 Z" />
         <rect x="7.15" y="6" width="1.7" height="4.2" fill="#1f1f1f" />
