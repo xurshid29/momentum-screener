@@ -116,7 +116,11 @@ jobs:
             # reloads config AND re-resolves api/web DNS. A ~1s blip, but it kills
             # the stale-upstream 502 for good.
             echo "::group::nginx restart"
-            docker compose -f docker-compose.prod.yml exec -T nginx nginx -t
+            # `</dev/null` is load-bearing: this whole script is piped to
+            # `bash -se` over stdin, and `docker compose exec` consumes stdin.
+            # Without the redirect the exec swallows the rest of the script —
+            # the deploy then silently ends here, skipping migrations.
+            docker compose -f docker-compose.prod.yml exec -T nginx nginx -t </dev/null
             docker compose -f docker-compose.prod.yml restart nginx
             echo "::endgroup::"
 
@@ -134,8 +138,10 @@ jobs:
             # in the app's DB, queried straight through the postgres container so
             # a mis-targeted dbmate can't mask a schema that's behind.
             FILES=$(ls db/migrations/*.sql | wc -l | tr -d ' ')
+            # `</dev/null` again — see the nginx step. `docker compose exec`
+            # inside $() would otherwise eat the rest of the script's stdin.
             APPLIED=$(docker compose -f docker-compose.prod.yml exec -T postgres \
-              psql -U pnldash -d pnldash -tAc 'select count(*) from schema_migrations' | tr -d ' \r\n')
+              psql -U pnldash -d pnldash -tAc 'select count(*) from schema_migrations' </dev/null | tr -d ' \r\n')
             echo "migration files: $FILES — applied in app DB: $APPLIED"
             if [ "$FILES" != "$APPLIED" ]; then
               echo "::error::schema behind — $FILES migration files but $APPLIED applied; apply manually with dbmate up"
