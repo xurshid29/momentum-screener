@@ -18,8 +18,9 @@ SEC_EDGAR_USER_AGENT=App Name (you@example.com)          # optional — SEC requ
 JWT_SECRET=your-secret-key-here
 JWT_EXPIRES_IN=7d
 REGISTRATION_OPEN=true                                   # public sign-up — closed unless exactly 'true'
-TELEGRAM_BOT_TOKEN=...                                   # optional — Telegram bot token for push alerts
-TELEGRAM_CHAT_ID=...                                     # optional — destination chat id for alerts
+TELEGRAM_BOT_TOKEN=...                                   # optional — Telegram bot token for push alerts + commands
+TELEGRAM_CHAT_ID=...                                     # optional — destination chat id for alerts + command auth
+TELEGRAM_USER_ID=...                                     # optional — dashboard user uuid the bot acts as for /hidden + /unhide
 ```
 
 ## Database Schema

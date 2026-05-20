@@ -15,6 +15,7 @@ import prefsRouter from './routes/prefs.js';
 import { poller } from './services/poller.js';
 import { universe } from './services/universe.js';
 import { shelf } from './services/shelf.js';
+import { telegramBot } from './services/telegram-bot.js';
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -30,6 +31,7 @@ app.get('/health', async (_req, res) => {
     poller: poller.status(),
     universe: universe.status(),
     shelf: shelf.status(),
+    telegram_bot: telegramBot.status(),
     timestamp: new Date().toISOString(),
   });
 });
@@ -54,4 +56,5 @@ app.listen(port, () => {
   void poller.start();
   universe.start();
   shelf.start();
+  telegramBot.start();
 });

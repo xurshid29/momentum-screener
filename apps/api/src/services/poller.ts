@@ -155,6 +155,10 @@ class PollerService {
   // present tickers are kept, so a ticker that leaves and returns re-counts
   // as new, and no daily/session clear is needed.
   private ignitionFirstSeen = new Map<string, number>();
+  // Runtime mute for Telegram alerts — toggled by the bot's /alerts command.
+  // Resets to false on restart by design (no persistence — the dashboard +
+  // sidebar still surface everything, this only quiets the push channel).
+  private alertsMuted = false;
 
   // Last full payload, served by /api/screener/latest for new clients.
   private lastPayload: CyclePayload | null = null;
@@ -221,6 +225,14 @@ class PollerService {
 
   getLastPayload(): CyclePayload | null {
     return this.lastPayload;
+  }
+
+  areAlertsMuted(): boolean {
+    return this.alertsMuted;
+  }
+
+  setAlertsMuted(muted: boolean): void {
+    this.alertsMuted = muted;
   }
 
   async start() {
@@ -906,7 +918,7 @@ class PollerService {
   // only while the article is newer than the source watermark); alertedUrls
   // guards the rest.
   private pushAlerts(rows: EnrichedRow[]): void {
-    if (!telegramEnabled()) return;
+    if (!telegramEnabled() || this.alertsMuted) return;
     for (const r of rows) {
       if (!r.is_fresh_news || !r.catalyst || !r.news_url) continue;
       if (r.catalyst.urgency !== 'strong' && r.catalyst.urgency !== 'major') continue;
@@ -926,7 +938,7 @@ class PollerService {
   // ignition), OR a bullish strong/major catalyst (catches a catalyst-led move
   // before the volume burst lifts the score). Bearish catalysts never alert.
   private pushIgnitionAlerts(rows: IgnitionRow[]): void {
-    if (!telegramEnabled()) return;
+    if (!telegramEnabled() || this.alertsMuted) return;
     for (const r of rows) {
       const c = r.catalyst;
       const bullishCatalyst =
