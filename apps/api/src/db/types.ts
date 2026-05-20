@@ -114,7 +114,7 @@ export interface NewsTickerLinksTable {
 export type CatalystDirection = 'bullish' | 'bearish' | 'mixed' | 'neutral';
 export type CatalystUrgency = 'ignore' | 'watch' | 'strong' | 'major';
 export type CatalystMateriality = 'high' | 'medium' | 'low' | 'unknown';
-export type Classifier = 'rules' | 'openai_nano' | 'openai_mini' | 'openai';
+export type Classifier = 'rules' | 'openai_nano' | 'openai_mini' | 'openai' | 'anthropic_sonnet';
 
 export interface NewsClassificationsTable {
   article_id: string;

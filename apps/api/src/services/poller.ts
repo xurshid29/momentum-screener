@@ -22,7 +22,7 @@ import { sendTelegram, telegramEnabled, escapeHtml } from './telegram.js';
 import { scoreRunner, type RunnerScoreBreakdown } from './runner-score.js';
 import { shelf, type ShelfInfo } from './shelf.js';
 import { classifyByRules, type Classification, type ClassifierInput } from './catalyst-rules.js';
-import { classifyByOpenAI } from './catalyst-openai.js';
+import { classifyByClaude } from './catalyst-claude.js';
 
 const DEFAULTS: ScreenerFilterSnapshot = {
   // Note: no `sh_float_u50` here. Finviz drops rows with null Float when that
@@ -511,7 +511,7 @@ class PollerService {
             // SEC filings and halts are classified deterministically from
             // their form/reason code — the rule verdict is final, not a
             // baseline for the LLM to refine.
-            needsLLM: !!process.env.OPENAI_API_KEY
+            needsLLM: !!process.env.ANTHROPIC_API_KEY
               && headline.source !== 'sec' && headline.source !== 'halt',
             input,
           };
@@ -650,16 +650,17 @@ class PollerService {
     // Fire-and-forget LLM refinement of any rule-classified articles.
     // Completes in the background; the next cycle's payload picks up the
     // refined scores via the in-memory cache.
-    void this.refineWithOpenAI();
+    void this.refineWithLLM();
   }
 
-  // Run OpenAI on every article still flagged needsLLM (i.e. classified by
-  // rules and persisted, but not yet refined). Bounded concurrency keeps
-  // us from hammering the API. Skipped entirely if a previous run is still
-  // in flight, so a slow API doesn't queue up infinite work.
-  private async refineWithOpenAI() {
+  // Run the LLM classifier on every article still flagged needsLLM (i.e.
+  // classified by rules and persisted, but not yet refined). Bounded
+  // concurrency keeps us from hammering the API. Skipped entirely if a
+  // previous run is still in flight, so a slow API doesn't queue up
+  // infinite work.
+  private async refineWithLLM() {
     if (this.llmInFlight) return;
-    if (!process.env.OPENAI_API_KEY) return;
+    if (!process.env.ANTHROPIC_API_KEY) return;
 
     const pending = [...this.classificationCache.values()].filter(
       (v) => v.needsLLM && v.articleId,
@@ -685,14 +686,14 @@ class PollerService {
     needsLLM: boolean;
     input: ClassifierInput;
   }): Promise<void> {
-    const result = await classifyByOpenAI(entry.input);
+    const result = await classifyByClaude(entry.input);
     if (!result || !entry.articleId) {
       // Give up after one failure — don't burn tokens retrying every cycle.
       entry.needsLLM = false;
       return;
     }
     entry.classification = result;
-    entry.classifier = 'openai_nano';
+    entry.classifier = 'anthropic_sonnet';
     entry.needsLLM = false;
 
     try {
@@ -707,13 +708,13 @@ class PollerService {
           confidence: result.confidence,
           reason: result.reason,
           risk_flags: JSON.stringify(result.risk_flags) as unknown as never,
-          classifier: 'openai_nano',
+          classifier: 'anthropic_sonnet',
           updated_at: new Date(),
         })
         .where('article_id', '=', entry.articleId)
         .execute();
     } catch (err) {
-      console.error('[poller] failed to persist OpenAI classification:', err);
+      console.error('[poller] failed to persist Claude classification:', err);
     }
   }
 

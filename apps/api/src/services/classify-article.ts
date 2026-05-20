@@ -7,7 +7,7 @@
 import { getDb } from '../db/index.js';
 import type { Classification } from './catalyst-rules.js';
 import { classifyByRules, type ClassifierInput } from './catalyst-rules.js';
-import { classifyByOpenAI } from './catalyst-openai.js';
+import { classifyByClaude } from './catalyst-claude.js';
 import type { Classifier } from '../db/types.js';
 
 export interface ArticleClassificationResult {
@@ -109,10 +109,10 @@ export async function getOrClassifyArticle(
       : null,
   };
 
-  // 4) prefer OpenAI; fall back to rule-based on failure.
-  const llm = await classifyByOpenAI(input);
+  // 4) prefer the LLM (Claude Sonnet 4.6); fall back to rule-based on failure.
+  const llm = await classifyByClaude(input);
   const result = llm ?? classifyByRules(input);
-  const classifier: Classifier = llm ? 'openai_nano' : 'rules';
+  const classifier: Classifier = llm ? 'anthropic_sonnet' : 'rules';
 
   // 5) upsert
   if (existing) {

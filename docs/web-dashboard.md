@@ -39,7 +39,7 @@ See **Recent additions** for what shipped lately and **Remaining work** for what
 | Yahoo RSS / Benzinga delta news clients | ✅ | `services/yahoo.ts`, `benzinga.ts` |
 | SEC EDGAR filings client | ✅ | `services/edgar.ts` |
 | Nasdaq trade-halts client | ✅ | `services/halts.ts` |
-| Catalyst classifier (rules + optional LLM) | ✅ | `catalyst-rules.ts`, `catalyst-openai.ts`, `classify-article.ts` |
+| Catalyst classifier (rules + optional LLM) | ✅ | `catalyst-rules.ts`, `catalyst-claude.ts`, `classify-article.ts` |
 | Ignition screener + runner-score | ✅ | `poller.ts`, `runner-score.ts` |
 | SEC shelf/dilution lookup (Phase 3) | ✅ | `services/shelf.ts` |
 | Telegram push alerts | ✅ | `services/telegram.ts` |
@@ -67,6 +67,7 @@ See **Recent additions** for what shipped lately and **Remaining work** for what
 
 ## Recent additions (since the 2026-05-04 snapshot)
 
+- **LLM classifier moved from OpenAI to Anthropic.** Catalyst refinement now uses Claude Sonnet 4.6 via `messages.parse()` with a Zod schema + prompt caching on the static system prompt (Sonnet's 2048-token cache minimum makes this engage out of the box). The rule engine is unchanged. Direction calls on dilution-disguised-as-PR headlines were the motivating gap. Old `openai_*` classifier values stay valid for historical rows; new rows tag `anthropic_sonnet`. Requires `ANTHROPIC_API_KEY` instead of `OPENAI_API_KEY` (one migration adjusts the `news_classifications.classifier` CHECK).
 - **Telegram bot — two-way commands.** The same bot that pushes alerts now answers queries from the configured chat. Long-polling via `getUpdates`; single-chat auth (`TELEGRAM_CHAT_ID`). Commands: `/ignition` and `/momentum` (current top-N), `/status` (poller health), `/ticker SYMBOL` (quick stats for one ticker), `/hidden` + `/unhide` (gated on optional `TELEGRAM_USER_ID`), `/alerts on|off` (runtime mute). New service `services/telegram-bot.ts` reads from `poller.getLastPayload()` — no DB writes except `/unhide`.
 - **Faster volume-burst detection** — `rel_vol_5min` is now extrapolated from a short early window (~80s) instead of waiting a full 5 minutes for an anchor sample, so a fresh ignition's volume burst registers in the runner-score early instead of scoring near-zero through its first violent minutes. The Ignition Telegram alert also no longer lets the shelf/dilution penalty *suppress* it — dilution risk still ranks the row and rides as the ⚠️, but doesn't hide the ignition. (Both came out of the CNEY post-mortem — a +90% mover that scored 15 while ripping, because its volume burst wasn't yet measurable.)
 - **Ignition sidebar — New/Top split** — the sidebar now pins a "New" section above the score-ranked list: tickers that just entered the Ignition set (< 2 min), surfaced *regardless* of runner-score. Closes a blind spot — a fresh ignition's 5-min RVol isn't measurable yet, so it scored low and sank to the bottom or off the broadcast list entirely. The poller bypasses the `broadcast_n` cutoff for new rows.
