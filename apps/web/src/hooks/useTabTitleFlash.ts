@@ -1,17 +1,22 @@
 import { useEffect, useRef } from 'react';
 import type { CyclePayload } from '../api/types';
 
-// Tab-title alerts. Two modes, both only run while the tab is hidden and
-// both reset on focus / unmount:
-//   • flash (higher priority): a NEW ticker with a today-catalyst → 🔥
-//   • static (lower priority): a NEW ticker without news       → 🆕
-// Flash beats static; if a flash is already running we don't downgrade it.
+// Tab-title alerts. Three modes, all only run while the tab is hidden and
+// all reset on focus / unmount. Priority chain — higher in the list wins,
+// and an in-progress flash is never downgraded to a static title:
+//   • flash    (highest): a NEW Momentum ticker with a today-catalyst → 🔥
+//   • ignition (middle):  any Ignition row flagged is_new this cycle  → ⚡
+//   • static   (lowest):  a NEW Momentum ticker without news          → 🆕
 
 const DEFAULT_TITLE = 'PNL Dash';
 const FLASH_INTERVAL_MS = 1000;
 
 function flashTitle(count: number): string {
   return `${DEFAULT_TITLE} (🔥 ${count} news)`;
+}
+
+function ignitionTitle(count: number): string {
+  return `${DEFAULT_TITLE} (⚡ ${count} ignition${count === 1 ? '' : 's'})`;
 }
 
 function staticTitle(count: number): string {
@@ -58,6 +63,7 @@ export function useTabTitleFlash(payload: CyclePayload | null) {
     if (!document.hidden) return;
 
     const newWithCatalyst = payload.banners.new_with_catalyst;
+    const newIgnitionCount = payload.ignition.filter((r) => r.is_new).length;
     const newWithoutNews = payload.rows
       .filter((r) => r.status === 'NEW' && !r.has_today_news)
       .map((r) => r.ticker);
@@ -69,8 +75,11 @@ export function useTabTitleFlash(payload: CyclePayload | null) {
         flippedRef.current = !flippedRef.current;
         document.title = flippedRef.current ? altTitleRef.current : DEFAULT_TITLE;
       }, FLASH_INTERVAL_MS);
-    } else if (newWithoutNews.length > 0) {
+    } else if (newIgnitionCount > 0) {
       // Don't downgrade an in-progress flash to a static title.
+      if (intervalRef.current != null) return;
+      document.title = ignitionTitle(newIgnitionCount);
+    } else if (newWithoutNews.length > 0) {
       if (intervalRef.current != null) return;
       document.title = staticTitle(newWithoutNews.length);
     }
