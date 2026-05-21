@@ -1,6 +1,6 @@
 # Momentum Screener — Web Dashboard
 
-Status as of 2026-05-18. The bash scanner (`screener-poll_breakout.sh`) and the web dashboard are both functional; the bash version remains the reference implementation. The web port lives in `apps/api` + `apps/web` and runs in parallel without sharing state with it.
+Status as of 2026-05-22. The bash scanner (`screener-poll_breakout.sh`) and the web dashboard are both functional; the bash version remains the reference implementation. The web port lives in `apps/api` + `apps/web` and runs in parallel without sharing state with it.
 
 See **Recent additions** for what shipped lately and **Remaining work** for what's next. The low-float runner-detection strategy + roadmap lives in [`catching-runners.md`](catching-runners.md); the Ignition screener design in [`ignition-screener-spec.md`](ignition-screener-spec.md).
 
@@ -67,10 +67,17 @@ See **Recent additions** for what shipped lately and **Remaining work** for what
 
 ## Recent additions (since the 2026-05-04 snapshot)
 
+- **Tab-title surfaces new Ignition entries** — when the tab is hidden, a new `is_new` ignition flips the title to `PNL Dash (⚡ N ignition)`. Static, doesn't downgrade an in-progress 🔥 flash, resets on tab focus. Priority chain: flash (Momentum NEW+catalyst) > ignition > static-no-news.
+- **Ignition: drop score-0 rows from the broadcast** — the volume-led Finviz filter has no change% gate (volume leads price by design), so crashes and dilution-flagged names pass through; the runner-score then clamps them at 0. Those rows used to fill the sidebar bottom anyway. Now filtered at the broadcast layer: `runner_score > 0`. Cold-start fresh entries and volume-led turnarounds (which score 48+) still surface.
+- **Sidebar UX cleanup** — shelf-badge popover and ignition-score breakdown now open on **click**, not hover (and stop the click from also selecting the row); sidebar ticker symbols are `TickerLink`s (click copies + toasts); per-row × hide button uses the same global `useHiddenTickers` mechanism as the Momentum table; Finviz/TradingView icon buttons added to the Quote Details header for the selected ticker.
+- **CI deploy bug fix (load-bearing)** — the rollout script is piped to `ssh ... 'bash -se'` over stdin, and `docker compose exec -T` was silently consuming stdin and swallowing the rest of the script after `nginx -t`. Every deploy since the "deploy hardening" change was skipping the nginx restart **and** the migration step, yet still reporting success. Fix: `</dev/null` on every `docker compose exec` in the deploy. **Any future edits to the deploy script must keep this redirect** or the same silent truncation returns.
+- **Telegram alert tuning** — three related changes bundled (the CNEY post-mortem):
+  - **Momentum alerts are bullish-only** — `pushAlerts` skips bearish strong/major catalysts (dilutive offerings, SEC probes, regulatory halts). Neutral signals (T1 "news pending" halts) still alert.
+  - **Volume cold-start fix** — `rel_vol_5min` is extrapolated from the oldest sample once ~75s of history exists; volume burst measurable ~80s after a ticker appears, not 5 min.
+  - **Shelf penalty no longer suppresses the Ignition alert** — `pushIgnitionAlerts` tests the threshold against the score *minus* the shelf component. Dilution still ranks the row and rides as the ⚠️, but doesn't hide the ignition.
 - **Session-aware Ignition filter — looser pre-market gate.** The Ignition Finviz screen now uses a relaxed current-volume floor (`sh_curvol_o100` vs the regular-session `sh_curvol_o500`) when `session === 'premarket'`. Pre-market liquidity is thin enough that a sub-2M-float pump can rip +100% before crossing 500K cumulative shares, so the standard filter gated it out until the move was largely over. The relvol > 2 gate stays the same. Came out of the WHLR post-mortem — first appeared at +146% under the old filter.
 - **LLM classifier moved from OpenAI to Anthropic.** Catalyst refinement now uses Claude Sonnet 4.6 via `messages.parse()` with a Zod schema + prompt caching on the static system prompt (Sonnet's 2048-token cache minimum makes this engage out of the box). The rule engine is unchanged. Direction calls on dilution-disguised-as-PR headlines were the motivating gap. Old `openai_*` classifier values stay valid for historical rows; new rows tag `anthropic_sonnet`. Requires `ANTHROPIC_API_KEY` instead of `OPENAI_API_KEY` (one migration adjusts the `news_classifications.classifier` CHECK).
 - **Telegram bot — two-way commands.** The same bot that pushes alerts now answers queries from the configured chat. Long-polling via `getUpdates`; single-chat auth (`TELEGRAM_CHAT_ID`). Commands: `/ignition` and `/momentum` (current top-N), `/status` (poller health), `/ticker SYMBOL` (quick stats for one ticker), `/hidden` + `/unhide` (gated on optional `TELEGRAM_USER_ID`), `/alerts on|off` (runtime mute). New service `services/telegram-bot.ts` reads from `poller.getLastPayload()` — no DB writes except `/unhide`.
-- **Faster volume-burst detection** — `rel_vol_5min` is now extrapolated from a short early window (~80s) instead of waiting a full 5 minutes for an anchor sample, so a fresh ignition's volume burst registers in the runner-score early instead of scoring near-zero through its first violent minutes. The Ignition Telegram alert also no longer lets the shelf/dilution penalty *suppress* it — dilution risk still ranks the row and rides as the ⚠️, but doesn't hide the ignition. (Both came out of the CNEY post-mortem — a +90% mover that scored 15 while ripping, because its volume burst wasn't yet measurable.)
 - **Ignition sidebar — New/Top split** — the sidebar now pins a "New" section above the score-ranked list: tickers that just entered the Ignition set (< 2 min), surfaced *regardless* of runner-score. Closes a blind spot — a fresh ignition's 5-min RVol isn't measurable yet, so it scored low and sank to the bottom or off the broadcast list entirely. The poller bypasses the `broadcast_n` cutoff for new rows.
 - **EDGAR shelf/dilution flag (Phase 3)** — a per-ticker SEC submissions lookup (`data.sec.gov/submissions`) over a 12-month window, grading each screener name's dilution risk `shelf` / `effective` / `active`. The "pump-and-dilute kill-switch": surfaced as a tiered warning marker on Momentum + Ignition rows, a line in Telegram alerts, and a penalty in the runner-score. Catches a shelf loaded *before* the pump — which the `getcurrent` firehose (only a few hours deep) misses. A standalone background service (`shelf.ts`), rate-limited well under SEC's fair-access limit.
 - **SEC EDGAR filings** as a news source — the `getcurrent` firehose matched to screener tickers via the CIK map; surfaces offerings/dilution (424B*, S-1/S-3), 8-Ks, M&A, 13D/G stakes.
@@ -111,6 +118,43 @@ Finviz's `v=131` `Average Volume` is an implicit-K decimal (`"42.99"` = 42,990 s
 
 On connect, the server pushes the last cached cycle so the dashboard isn't empty for ~20s. `useScreenerAlerts` dedupes by `cycle_id` and skips the first payload so reconnects don't replay stale audio. Telegram alerts dedupe per article URL (news) / per ticker per ET day (ignition).
 
+## Empirical session performance (2026-05-18 → 2026-05-21)
+
+A four-day sample of `ignition_results` rows (peak chg ≥ 10%), measured by *end-of-session* P&L from first detection (`last_chg − first_chg`, accounting for drawdowns):
+
+| Session | Profitable days | Win rate | Avg final P&L | Notes |
+|---|---|---|---:|---|
+| **Regular** (09:30–16:00 ET / 18:30–01:00 UTC+5) | 3 of 4 | 50–76% | +5 to +8 | Steady; one bad day (-18). Best session you can trade live in UTC+5. |
+| **After-hours** (16:00–20:00 ET / 01:00–05:00 UTC+5) | 3 of 3 | 52–76% | +3 to +22 | Most profitable, but user asleep. Telegram alerts useful as overnight intel. |
+| **Pre-market** (04:00–09:30 ET / 13:00–18:30 UTC+5) | 1 of 4 outlier | 14–35% | **−15 to −30** | **Consistently money-losing if held from first detection to session close.** Drawdowns swamp the upside. |
+
+**Key takeaway:** the Ignition screener's edge lives in AH and Regular; pre-market is a buy-the-top-and-bleed pattern. Pre-market alerts still fire useful continuations (a name that rips in PM often runs further in Regular), but **holding from first PM detection through session close consistently loses money**. The `move_after = peak − first` upside metric used internally is one-sided (`max ≥ first` by construction, so it's always ≥0); to evaluate trade outcomes use `final_pnl = last − first` and `drawdown = first − floor` together.
+
+Worked diagnostic query — per-session per-ticker outcomes with drawdown:
+
+```sql
+with rows as (
+  select c.session, (c.polled_at at time zone 'America/New_York')::date et_date,
+    i.ticker, c.polled_at, i.change_pct,
+    row_number() over (partition by c.session, (c.polled_at at time zone 'America/New_York')::date, i.ticker order by c.polled_at) rn_asc,
+    row_number() over (partition by c.session, (c.polled_at at time zone 'America/New_York')::date, i.ticker order by c.polled_at desc) rn_desc,
+    min(i.change_pct) over (partition by c.session, (c.polled_at at time zone 'America/New_York')::date, i.ticker) min_chg,
+    max(i.change_pct) over (partition by c.session, (c.polled_at at time zone 'America/New_York')::date, i.ticker) peak_chg
+  from ignition_results i join screener_cycles c on c.id = i.cycle_id
+  where c.polled_at > now() - interval '6 days'
+)
+select et_date, session, ticker,
+  max(change_pct) filter (where rn_asc = 1)  as entry,
+  peak_chg, min_chg as floor,
+  max(change_pct) filter (where rn_desc = 1) as last_chg,
+  max(change_pct) filter (where rn_asc = 1) - min_chg as drawdown,
+  max(change_pct) filter (where rn_desc = 1) - max(change_pct) filter (where rn_asc = 1) as final_pnl
+from rows
+group by et_date, session, ticker, peak_chg, min_chg
+having peak_chg >= 10
+order by et_date, session, peak_chg desc;
+```
+
 ## Remaining work / roadmap
 
 ### Runner-detection roadmap — see [`catching-runners.md`](catching-runners.md)
@@ -125,6 +169,9 @@ On connect, the server pushes the last cached cycle so the dashboard isn't empty
 - Ignition filter is a code constant — make it user-editable, like the Momentum filter dialog.
 - No backtest UI — tuning the runner-score is ad-hoc psql for now; a query view/endpoint would close the loop.
 - **Retune from data** — the alert threshold (currently 58) and the runner-score weights are first-pass estimates. After several sessions of `ignition_results`, retune both against the actual score-vs-outcome distribution.
+- **PM-specific alert handling** — given the empirical-findings section above (PM is consistently money-losing on hold-to-close), consider either raising the alert threshold during `session === 'premarket'` (e.g. require runner_score ≥ 65), or suppressing PM alerts entirely for the user with `TELEGRAM_USER_ID` set, or adding a separate "PM entry recommendation" flag that only fires when `up_after` is plausibly still ahead (e.g. first_chg below some ceiling).
+- **LLM classifier cache verification** — check `usage.cache_creation_input_tokens` vs `cache_read_input_tokens` from the Anthropic SDK after a few classifications; if reads stay 0, the system prompt is under Sonnet's 2048-token cache minimum and we should pad it with more worked examples (also improves quality).
+- **`regulatory_approval` catalyst type** — the SBFM Health Canada amoxicillin case (May 21) classified as `fda_clinical` because the schema doesn't have a separate bucket for non-FDA drug approvals. Adding it to the Zod enum + system prompt is a one-line change; no DB migration (catalyst_type is unconstrained `text`).
 
 ### Dashboard / smaller items
 
@@ -177,3 +224,9 @@ source .env && psql "$DATABASE_URL" -c \
 ### Migrations
 
 The poller's column writes match `apps/api/src/db/types.ts`. Bumping those types without a matching migration causes `column "X" does not exist` errors in the poll cycle. The CI deploy runs `dbmate up` and verifies the schema against the app database; if it reports a schema behind, apply manually on the droplet with `dbmate up`.
+
+### Deploy-script stdin footgun (fixed, but don't reintroduce)
+
+The rollout step in `.github/workflows/build-images.yml` pipes the deploy script to `ssh ... 'bash -se'` over stdin. Any `docker compose exec -T <svc> <cmd>` inside that script will consume bash's stdin (the script body itself) and silently truncate the rest of the deploy — bash hits EOF and exits 0, the workflow reports success, but the nginx restart and `dbmate up` never ran. This was caught after the EDGAR shelf migration's CI run reported success but the column didn't actually exist on the droplet.
+
+**Every `docker compose exec` in the deploy script must end with `</dev/null`.** Two call sites exist today (the nginx `nginx -t` check and the migration-verification `psql ... select count(*) from schema_migrations`) — both are redirected. If you add a third, add `</dev/null` or you'll reintroduce the silent-truncation bug.
