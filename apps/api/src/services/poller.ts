@@ -43,6 +43,13 @@ const DELTA_LOOKBACK_SEC = 1800;
 // See docs/ignition-screener-spec.md.
 const IGNITION = {
   filter: 'ind_stocksonly,sh_price_u10,sh_relvol_o2,sh_curvol_o500',
+  // Pre-market liquidity is thin: a nano-float ripping +100% can still be
+  // sitting below 500K cumulative shares, so the regular-session filter
+  // gates it out until the move is mostly over (see the WHLR post-mortem —
+  // it first appeared at +146.65% under the standard filter). The pre-market
+  // variant drops the volume floor to 100K while keeping the relvol > 2
+  // gate so we don't flood with thin-print noise.
+  premarket_filter: 'ind_stocksonly,sh_price_u10,sh_relvol_o2,sh_curvol_o100',
   float_max_m: 15,
   top_n: 80,         // fetched from Finviz, then runner-score-ranked
   min_price: 0.10,   // post-filter — sh_price_u10 has no lower bound
@@ -287,7 +294,9 @@ class PollerService {
     }
 
     // 1) screener — two screens in parallel: the configured Momentum screen
-    // and the volume-led Ignition screen.
+    // and the volume-led Ignition screen. The Ignition filter is session-
+    // aware: pre-market uses a looser current-volume floor (the WHLR fix).
+    const ignitionFilter = session === 'premarket' ? IGNITION.premarket_filter : IGNITION.filter;
     const [rows, ignitionRaw] = await Promise.all([
       fetchScreener({
         filter: this.config.filter,
@@ -296,7 +305,7 @@ class PollerService {
         session,
       }),
       fetchScreener({
-        filter: IGNITION.filter,
+        filter: ignitionFilter,
         floatMaxM: IGNITION.float_max_m,
         topN: IGNITION.top_n,
         session,

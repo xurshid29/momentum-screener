@@ -25,6 +25,7 @@ post-filtered in code:
 | Param | Value | Why |
 |---|---|---|
 | Finviz filter | `ind_stocksonly,sh_price_u10,sh_relvol_o2,sh_curvol_o500` | under $10 (includes sub-$1), relvol > 2, real volume > 500K — **no change% filter** (volume leads, not price) |
+| Pre-market filter | `ind_stocksonly,sh_price_u10,sh_relvol_o2,sh_curvol_o100` | session-aware override (premarket only) — same gates with the volume floor dropped to 100K so nano-floats become visible before they've already ripped through the regular-session threshold (the WHLR post-mortem) |
 | `floatMaxM` | `15` | post-filter ceiling (vs Momentum's 35) |
 | `topN` | `80` | fetch wide, then runner-score-rank down to the displayed top ~15 |
 | code post-filter | `price >= 0.10` | drop sub-dime junk (`sh_price_u10` has no lower bound) |
