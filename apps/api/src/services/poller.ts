@@ -597,11 +597,18 @@ class PollerService {
       })
       .sort((a, b) => b.runner_score - a.runner_score);
 
+    // Drop rows the runner-score has already disqualified (clamped to 0).
+    // The volume-led Finviz filter has no change% gate by design, so it lets
+    // through crashes and low-quality dilution-flagged names — the score
+    // tags them as non-ignitions; the broadcast shouldn't carry them. This
+    // does NOT hide cold-start fresh entries (they score ≥ float-component
+    // ≈ 15-30) or volume-led turnaround setups (they score 48+).
+    const candidates = scoredIgnition.filter((r) => r.runner_score > 0);
     // New rows bypass the score cutoff entirely — a fresh low-score name (its
     // 5-min RVol not yet measurable) must never be buried. Top rows are the
     // established names, ranked and capped. The payload carries both.
-    const newIgnition = scoredIgnition.filter((r) => r.is_new);
-    const topIgnition = scoredIgnition.filter((r) => !r.is_new).slice(0, IGNITION.broadcast_n);
+    const newIgnition = candidates.filter((r) => r.is_new);
+    const topIgnition = candidates.filter((r) => !r.is_new).slice(0, IGNITION.broadcast_n);
     const ignition: IgnitionRow[] = [...newIgnition, ...topIgnition];
 
     // 4) update memory state for next cycle
