@@ -60,6 +60,33 @@ function CatalystBadge({
   );
 }
 
+// Above/below-VWAP arrow shown next to the change%. The VWAP itself is
+// anchored to the ticker's first detection in this session (see EnrichedRow
+// in services/poller.ts) — so this answers "is price still above where most
+// volume traded since the move started?", which is the practical proxy for
+// "is the momentum still in play?". The tooltip carries the exact VWAP and
+// the % delta vs current price.
+function VwapMark({
+  vwap,
+  aboveVwap,
+  price,
+}: {
+  vwap: number | null;
+  aboveVwap: boolean | null;
+  price: number | null;
+}) {
+  if (vwap == null || aboveVwap == null) return null;
+  const delta = price != null && vwap > 0 ? ((price - vwap) / vwap) * 100 : null;
+  const color = aboveVwap ? '#52c41a' : '#ff4d4f';
+  const arrow = aboveVwap ? '▲' : '▼';
+  const tip = `VWAP $${vwap.toFixed(2)}${delta != null ? ` · ${delta >= 0 ? '+' : ''}${delta.toFixed(1)}% vs price` : ''} · anchored to first detection this session`;
+  return (
+    <Tooltip title={tip}>
+      <span style={{ color, fontSize: 10, marginRight: 4, cursor: 'help' }}>{arrow}</span>
+    </Tooltip>
+  );
+}
+
 // A compact section label — sits above the New and Top row groups.
 function SectionHeader({ label, count, color }: { label: string; count: number; color: string }) {
   return (
@@ -265,7 +292,10 @@ function IgnitionItem({
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
           <Text type="secondary">{fmtPrice(row.price)}</Text>
-          <Text style={{ color: (chg ?? 0) >= 0 ? '#52c41a' : '#ff4d4f' }}>{fmtPct(row.change_pct)}</Text>
+          <span>
+            <VwapMark vwap={row.vwap} aboveVwap={row.above_vwap} price={row.price} />
+            <Text style={{ color: (chg ?? 0) >= 0 ? '#52c41a' : '#ff4d4f' }}>{fmtPct(row.change_pct)}</Text>
+          </span>
         </div>
         {bits.length > 0 && (
           <div style={{ fontSize: 10, color: '#8c8c8c', marginTop: 1 }}>{bits.join(' · ')}</div>

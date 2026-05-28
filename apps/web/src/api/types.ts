@@ -90,6 +90,10 @@ export interface EnrichedRow {
   status: RowStatus;
   prev_change_pct: number | null;
   accel_delta: number | null;
+  // Anchored VWAP since first detection in the current session. Null on cycle 1
+  // (no delta yet) and whenever price/volume is missing. Resets per session.
+  vwap: number | null;
+  above_vwap: boolean | null;
   is_fresh_news: boolean;
   has_today_news: boolean;
   news_title: string | null;

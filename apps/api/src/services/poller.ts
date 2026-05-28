@@ -86,6 +86,15 @@ export interface EnrichedRow extends ScreenerRow {
   accel_delta: number | null;
   vol_5min: number | null;          // 5-min-equivalent traded volume (extrapolated during a ticker's first ~5 min)
   rel_vol_5min: number | null;      // (vol_5min / (avg_volume / 78)) * 100
+  // Anchored VWAP since the ticker first appeared in *this session*. Computed
+  // in-memory from cycle-to-cycle volume deltas × the per-cycle price. Reset
+  // on session boundary (PM / regular / AH each carry their own anchor).
+  // Null on the first cycle (no delta yet) and whenever price or volume is
+  // missing. Diverges from chart VWAP when a ticker traded heavily before we
+  // first saw it — but for the "is the move still in play?" question it's
+  // anchored to the move itself, which is the right signal here.
+  vwap: number | null;
+  above_vwap: boolean | null;
   is_fresh_news: boolean;
   has_today_news: boolean;
   news_title: string | null;
@@ -139,6 +148,11 @@ class PollerService {
   // Per-ticker rolling volume samples (timestamp seconds, cumulative day volume).
   // Used to compute the last-5-minutes volume diff. Trimmed to ~10 minutes deep.
   private volHistory = new Map<string, Array<{ ts: number; volume: number }>>();
+  // Per-ticker anchored VWAP tallies. cumPxVol and cumVol accumulate
+  // (Δvolume × price) across cycles since first detection in the current
+  // session; lastVolume is the previous cycle's cumulative day volume, used
+  // to derive the delta. Reset on session boundary alongside volHistory.
+  private vwapState = new Map<string, { cumPxVol: number; cumVol: number; lastVolume: number }>();
   private bzHeadlineCache = new Map<string, NewsHeadline>(); // ticker -> latest headline (any source merged)
   private bzWatermark = Math.floor(Date.now() / 1000) - DELTA_LOOKBACK_SEC;
   // SEC EDGAR + Nasdaq halts are delta feeds too — a watermark per source
@@ -298,6 +312,7 @@ class PollerService {
     if (session !== this.lastSession) {
       this.prevChange.clear();
       this.volHistory.clear();
+      this.vwapState.clear();
       this.lastSession = session;
     }
 
@@ -495,6 +510,30 @@ class PollerService {
         while (h.length > 0 && nowSec - h[0].ts > HISTORY_MAX_SEC) h.shift();
       }
 
+      // Anchored VWAP — see EnrichedRow.vwap doc. First cycle seeds lastVolume
+      // and returns null (no delta yet). Subsequent cycles accumulate
+      // Δvolume × current price; reset is handled by the session-boundary
+      // clear above, so each session carries its own anchor.
+      let vwap: number | null = null;
+      let aboveVwap: boolean | null = null;
+      if (r.price != null && r.price > 0 && r.volume != null) {
+        const st = this.vwapState.get(r.ticker);
+        if (!st) {
+          this.vwapState.set(r.ticker, { cumPxVol: 0, cumVol: 0, lastVolume: r.volume });
+        } else {
+          const dv = r.volume - st.lastVolume;
+          if (dv > 0) {
+            st.cumPxVol += dv * r.price;
+            st.cumVol += dv;
+          }
+          st.lastVolume = r.volume;
+          if (st.cumVol > 0) {
+            vwap = +(st.cumPxVol / st.cumVol).toFixed(4);
+            aboveVwap = r.price >= vwap;
+          }
+        }
+      }
+
       const headline = cycleNews.get(r.ticker) ?? null;
       const hasNews = !!headline;
       const isFresh = freshTickers.has(r.ticker);
@@ -552,6 +591,8 @@ class PollerService {
         accel_delta: accelDelta,
         vol_5min: vol5min,
         rel_vol_5min: relVol5min,
+        vwap,
+        above_vwap: aboveVwap,
         is_fresh_news: isFresh,
         has_today_news: hasNews,
         news_title: headline?.title ?? null,
