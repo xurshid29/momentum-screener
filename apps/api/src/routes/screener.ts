@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
 import { authService } from '../services/auth.js';
 import { poller } from '../services/poller.js';
+import { dailyBars, getRecentBars } from '../services/daily-bars.js';
 import { addClient } from '../services/sse.js';
 import { getDb } from '../db/index.js';
 
@@ -85,6 +86,42 @@ router.get('/ignition-history', authMiddleware, async (req, res) => {
     .limit(limit)
     .execute();
   res.json({ data: rows });
+});
+
+// POST /api/screener/swing/backfill
+// Enqueue tickers for daily-bar backfill in the DailyBarsService. Either an
+// explicit list (`{ tickers: ['AAPL', ...] }`) or no body to seed from the
+// current Momentum + Ignition payloads. Returns service status immediately —
+// fetches drain on the service's own ~1s timer, max ~250 bars per ticker per
+// fetch. Used to bootstrap before the periodic Swing-universe scan lands.
+const backfillSchema = z.object({
+  tickers: z.array(z.string().min(1).max(16)).max(500).optional(),
+});
+router.post('/swing/backfill', authMiddleware, (req, res) => {
+  const parsed = backfillSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ error: 'Validation failed', details: parsed.error.errors });
+  let tickers = parsed.data.tickers ?? [];
+  if (tickers.length === 0) {
+    const p = poller.getLastPayload();
+    const seen = new Set<string>();
+    for (const r of p?.rows ?? []) seen.add(r.ticker);
+    for (const r of p?.ignition ?? []) seen.add(r.ticker);
+    tickers = [...seen];
+  }
+  dailyBars.trackUniverse(tickers);
+  res.json({ data: { enqueued: tickers.length, status: dailyBars.status() } });
+});
+
+// GET /api/screener/swing/bars?ticker=X&days=N
+// Read back the persisted daily bars for one ticker. Useful for verifying a
+// backfill landed and for ad-hoc inspection. Returns bars in ascending date
+// order, which is what the (forthcoming) swing-score expects.
+router.get('/swing/bars', authMiddleware, async (req, res) => {
+  const ticker = typeof req.query.ticker === 'string' ? req.query.ticker.toUpperCase() : null;
+  if (!ticker) return res.status(400).json({ error: 'ticker query param required' });
+  const days = Math.min(parseInt(String(req.query.days ?? '250'), 10) || 250, 1000);
+  const bars = await getRecentBars(ticker, days);
+  res.json({ data: bars });
 });
 
 // GET /api/screener/cycles/:id/results

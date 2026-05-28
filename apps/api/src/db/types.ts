@@ -92,6 +92,23 @@ export interface IgnitionResultsTable {
   created_at: Generated<Date>;
 }
 
+// Per-ticker daily OHLCV bars. Powers the Swing screener's daily-timeframe
+// signals (SMAs, 52w high, ATR, base/breakout detection). Loaded from Finviz
+// quote_export and refreshed nightly. See docs/swing-screener-spec.md §4.1.
+export interface DailyBarsTable {
+  ticker: string;
+  // Postgres `date` round-trips as a `Date` here because the pg driver parses
+  // it on the way in; on the way out Kysely accepts either a JS Date or a
+  // 'YYYY-MM-DD' string, so we widen the insert type.
+  date: ColumnType<Date, Date | string, Date | string>;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number | null;
+  volume: number | null;
+  fetched_at: Generated<Date>;
+}
+
 // 'sec'  — an SEC EDGAR filing (offering, 8-K, M&A, 13D…)
 // 'halt' — a Nasdaq trade halt / volatility pause
 export type NewsSource = 'finviz' | 'yahoo' | 'benzinga' | 'sec' | 'halt';
@@ -174,6 +191,7 @@ export interface Database {
   screener_cycles: ScreenerCyclesTable;
   screener_results: ScreenerResultsTable;
   ignition_results: IgnitionResultsTable;
+  daily_bars: DailyBarsTable;
   news_articles: NewsArticlesTable;
   news_ticker_links: NewsTickerLinksTable;
   news_classifications: NewsClassificationsTable;

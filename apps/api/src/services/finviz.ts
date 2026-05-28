@@ -325,3 +325,55 @@ function splitTickers(field: string): string[] {
     .map((t) => t.trim().toUpperCase())
     .filter((t) => /^[A-Z0-9][A-Z0-9.-]{0,6}$/.test(t));
 }
+
+// ─── daily-bar history ────────────────────────────────────────────────────
+
+export interface DailyBar {
+  date: string;   // YYYY-MM-DD (normalised from Finviz's MM/DD/YYYY)
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+// Fetch a ticker's daily-bar history from Finviz `quote_export?p=d`. Header:
+// `Date,Open,High,Low,Close,Volume`; date format `MM/DD/YYYY`; volume is a raw
+// integer (no K/M scaling). Returns chronological-ascending bars; an empty
+// array on either an empty body (unknown ticker / Finviz transient) or a row
+// that can't be parsed.
+export async function fetchFinvizDailyBars(ticker: string): Promise<DailyBar[]> {
+  const url = `${FINVIZ_BASE}/quote_export?t=${encodeURIComponent(ticker)}&p=d&auth=${token()}`;
+  let rows: string[][];
+  try {
+    rows = await fetchCsv(url);
+  } catch {
+    return [];
+  }
+  // Header + at least one bar.
+  if (rows.length < 2) return [];
+
+  const out: DailyBar[] = [];
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    if (r.length < 6) continue;
+    const isoDate = normaliseDate(r[0]);
+    if (!isoDate) continue;
+    const open = num(r[1]);
+    const high = num(r[2]);
+    const low = num(r[3]);
+    const close = num(r[4]);
+    const volume = num(r[5]);
+    if (open == null || high == null || low == null || close == null || volume == null) continue;
+    out.push({ date: isoDate, open, high, low, close, volume });
+  }
+  return out;
+}
+
+// MM/DD/YYYY → YYYY-MM-DD. Returns null on anything that doesn't match.
+function normaliseDate(s: string | undefined): string | null {
+  if (!s) return null;
+  const m = s.trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!m) return null;
+  return `${m[3]}-${m[1]}-${m[2]}`;
+}

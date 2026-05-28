@@ -21,6 +21,7 @@ import { broadcast } from './sse.js';
 import { sendTelegram, telegramEnabled, escapeHtml } from './telegram.js';
 import { scoreRunner, type RunnerScoreBreakdown } from './runner-score.js';
 import { shelf, type ShelfInfo } from './shelf.js';
+import { dailyBars } from './daily-bars.js';
 import { classifyByRules, type Classification, type ClassifierInput } from './catalyst-rules.js';
 import { classifyByClaude } from './catalyst-claude.js';
 
@@ -309,6 +310,10 @@ class PollerService {
       // doesn't replay the whole backlog as "fresh".
       this.secWatermark = Math.floor(now.getTime() / 1000);
       this.haltWatermark = Math.floor(now.getTime() / 1000);
+      // Mark every cached daily-bar ticker stale so yesterday's just-closed
+      // bar gets fetched today. The actual fetches happen on the daily-bars
+      // service's own drain loop — this is just an invalidation signal.
+      dailyBars.invalidateAll();
       this.lastEtDate = todayEt;
     }
     // A session boundary (notably the 4pm regular→after-hours flip) swaps the
