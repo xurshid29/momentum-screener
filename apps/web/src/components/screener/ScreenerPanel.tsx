@@ -1,5 +1,5 @@
 import { useMemo, useState, type MouseEvent } from 'react';
-import { Table, Tag, Typography, Tooltip, Badge, Button, Space, Popover, List } from 'antd';
+import { Table, Tabs, Tag, Typography, Tooltip, Badge, Button, Space, Popover, List } from 'antd';
 import { FilterOutlined, CloseOutlined, EyeInvisibleOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import type { CatalystInfo, CyclePayload, EnrichedRow, RowStatus, TradingSession } from '../../api/types';
@@ -40,10 +40,13 @@ const SESSION_COLOR: Record<TradingSession, string> = {
   closed: '#8c8c8c',
 };
 
+type ScreenerTab = 'momentum' | 'swing';
+
 export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
   const { selected, setSelected } = useSelection();
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [catalystModal, setCatalystModal] = useState<{ ticker: string; catalyst: CatalystInfo | null } | null>(null);
+  const [activeTab, setActiveTab] = useState<ScreenerTab>('momentum');
   const { hidden, hide, unhide } = useHiddenTickers();
 
   const columns: ColumnsType<EnrichedRow> = useMemo(
@@ -205,68 +208,71 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
   const hiddenOutside = [...hidden].filter((t) => !allRows.some((r) => r.ticker === t));
   const hiddenList = [...hiddenInScreener, ...hiddenOutside];
 
+  // Header controls — Filters is Momentum-specific (the live config it edits
+  // is the Momentum filter); the rest (hidden popover + live indicator) are
+  // universal across tabs.
+  const extraControls = (
+    <Space size="middle" style={{ paddingRight: 8 }}>
+      {hiddenList.length > 0 && (
+        <Popover
+          trigger="click"
+          placement="bottomRight"
+          content={
+            <List
+              size="small"
+              style={{ minWidth: 160 }}
+              dataSource={hiddenList}
+              locale={{ emptyText: 'Nothing hidden' }}
+              renderItem={(t) => (
+                <List.Item style={{ padding: '4px 0' }}>
+                  <Text strong style={{ flex: 1 }}>{t}</Text>
+                  <Button
+                    type="link"
+                    size="small"
+                    onClick={() => unhide(t)}
+                    style={{ padding: 0, height: 'auto' }}
+                  >
+                    unhide
+                  </Button>
+                </List.Item>
+              )}
+            />
+          }
+        >
+          <Button size="small" icon={<EyeInvisibleOutlined />}>
+            {hiddenList.length} hidden
+          </Button>
+        </Popover>
+      )}
+      {activeTab === 'momentum' && (
+        <Tooltip title="Edit filters">
+          <Button size="small" icon={<FilterOutlined />} onClick={() => setFiltersOpen(true)}>
+            Filters
+          </Button>
+        </Tooltip>
+      )}
+      <Badge
+        status={connected ? 'success' : 'default'}
+        text={
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            {connected ? 'live' : 'offline'}
+            {payload?.session && (
+              <>
+                {' · '}
+                <span style={{ color: SESSION_COLOR[payload.session] }}>
+                  {SESSION_LABEL[payload.session]}
+                </span>
+              </>
+            )}
+            {payload?.polled_at && ` · ${new Date(payload.polled_at).toLocaleTimeString()}`}
+          </Text>
+        }
+      />
+    </Space>
+  );
+
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <div style={{ padding: '6px 8px', borderBottom: '1px solid #303030', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <Text strong style={{ color: '#e0e0e0' }}>
-          Screener — {rows.length} rows
-        </Text>
-        <Space size="middle">
-          {hiddenList.length > 0 && (
-            <Popover
-              trigger="click"
-              placement="bottomRight"
-              content={
-                <List
-                  size="small"
-                  style={{ minWidth: 160 }}
-                  dataSource={hiddenList}
-                  locale={{ emptyText: 'Nothing hidden' }}
-                  renderItem={(t) => (
-                    <List.Item style={{ padding: '4px 0' }}>
-                      <Text strong style={{ flex: 1 }}>{t}</Text>
-                      <Button
-                        type="link"
-                        size="small"
-                        onClick={() => unhide(t)}
-                        style={{ padding: 0, height: 'auto' }}
-                      >
-                        unhide
-                      </Button>
-                    </List.Item>
-                  )}
-                />
-              }
-            >
-              <Button size="small" icon={<EyeInvisibleOutlined />}>
-                {hiddenList.length} hidden
-              </Button>
-            </Popover>
-          )}
-          <Tooltip title="Edit filters">
-            <Button size="small" icon={<FilterOutlined />} onClick={() => setFiltersOpen(true)}>
-              Filters
-            </Button>
-          </Tooltip>
-          <Badge
-            status={connected ? 'success' : 'default'}
-            text={
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                {connected ? 'live' : 'offline'}
-                {payload?.session && (
-                  <>
-                    {' · '}
-                    <span style={{ color: SESSION_COLOR[payload.session] }}>
-                      {SESSION_LABEL[payload.session]}
-                    </span>
-                  </>
-                )}
-                {payload?.polled_at && ` · ${new Date(payload.polled_at).toLocaleTimeString()}`}
-              </Text>
-            }
-          />
-        </Space>
-      </div>
       <FiltersDialog
         open={filtersOpen}
         onClose={() => setFiltersOpen(false)}
@@ -277,24 +283,45 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
         catalyst={catalystModal?.catalyst ?? null}
         onClose={() => setCatalystModal(null)}
       />
-      <div style={{ flex: '1 1 auto', minHeight: 0, overflow: 'auto' }}>
-        <Table<EnrichedRow>
-          rowKey="ticker"
-          size="small"
-          columns={columns}
-          dataSource={rows}
-          pagination={false}
-          sticky
-          rowClassName={(r) => (r.is_fresh_news ? 'screener-row-fresh' : '')}
-          onRow={(r) => ({
-            onClick: () => setSelected(r.ticker),
-            style: {
-              cursor: 'pointer',
-              background: r.ticker === selected ? '#15395b' : undefined,
-            },
-          })}
-        />
-      </div>
+      <Tabs
+        size="small"
+        activeKey={activeTab}
+        onChange={(k) => setActiveTab(k as ScreenerTab)}
+        className="tabs-fill-height"
+        tabBarStyle={{ margin: 0, padding: '0 8px', borderBottom: '1px solid #303030' }}
+        tabBarExtraContent={extraControls}
+        items={[
+          {
+            key: 'momentum',
+            label: `Momentum · ${rows.length}`,
+            children: (
+              <div style={{ height: '100%', overflow: 'auto' }}>
+                <Table<EnrichedRow>
+                  rowKey="ticker"
+                  size="small"
+                  columns={columns}
+                  dataSource={rows}
+                  pagination={false}
+                  sticky
+                  rowClassName={(r) => (r.is_fresh_news ? 'screener-row-fresh' : '')}
+                  onRow={(r) => ({
+                    onClick: () => setSelected(r.ticker),
+                    style: {
+                      cursor: 'pointer',
+                      background: r.ticker === selected ? '#15395b' : undefined,
+                    },
+                  })}
+                />
+              </div>
+            ),
+          },
+          {
+            key: 'swing',
+            label: 'Swing',
+            children: <SwingStub />,
+          },
+        ]}
+      />
     </div>
   );
 }
@@ -340,5 +367,81 @@ function CatalystBadge({
     <span title={tooltip} onClick={open} style={{ marginLeft: 6, cursor: 'pointer' }}>
       <FireBadge score={score} />
     </span>
+  );
+}
+
+// Placeholder for the Swing screener tab — shows what's coming so the tab
+// isn't empty while the backend is being built. See docs/swing-screener-spec.md
+// for the locked-in v1 design (universe, score weights, cadence, data deps).
+function SwingStub() {
+  return (
+    <div style={{ padding: '20px 24px', height: '100%', overflow: 'auto' }}>
+      <Text strong style={{ color: '#e0e0e0', fontSize: 16, display: 'block', marginBottom: 8 }}>
+        Swing screener — coming soon
+      </Text>
+      <Text type="secondary" style={{ display: 'block', marginBottom: 24, maxWidth: 720 }}>
+        Multi-day setups (1–5 day holds): clean breakouts from tight bases,
+        gap-and-hold on durable catalysts, trend continuations off the 20-day
+        SMA. Different universe than Momentum/Ignition — $2–$50, float
+        5–100M, mcap ≥ $50M. Full design in <code>docs/swing-screener-spec.md</code>.
+      </Text>
+
+      <StubSection title="Planned columns">
+        <StubItem k="Score">0–100, weighted: Trend 25 + Strength 15 + Setup 25 + Volume 15 + Catalyst 20 (shelf penalty −25 max)</StubItem>
+        <StubItem k="Setup flags">base · breakout · close strength</StubItem>
+        <StubItem k="Dist 52WH">distance from 52-week high</StubItem>
+        <StubItem k="vs 20-SMA">price relative to 20-day moving average</StubItem>
+        <StubItem k="Vol vs Avg">today's volume × 20-day average</StubItem>
+        <StubItem k="Cat / Shelf">same as Momentum, catalyst durability weighs heavier</StubItem>
+      </StubSection>
+
+      <StubSection title="Implementation progress">
+        <StubStep done>Spec doc</StubStep>
+        <StubStep done>UI scaffold (this tab)</StubStep>
+        <StubStep>Daily-bar backfill (Phase 3b — hard prerequisite)</StubStep>
+        <StubStep>Swing scan + score + persistence</StubStep>
+        <StubStep>Real Swing table</StubStep>
+        <StubStep>Telegram /swing command</StubStep>
+      </StubSection>
+    </div>
+  );
+}
+
+function StubSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <Text
+        strong
+        style={{
+          color: '#888',
+          fontSize: 11,
+          textTransform: 'uppercase',
+          letterSpacing: 0.5,
+          display: 'block',
+          marginBottom: 8,
+        }}
+      >
+        {title}
+      </Text>
+      <div style={{ paddingLeft: 4 }}>{children}</div>
+    </div>
+  );
+}
+
+function StubItem({ k, children }: { k: string; children: React.ReactNode }) {
+  return (
+    <div style={{ display: 'flex', gap: 12, padding: '3px 0', fontSize: 13, lineHeight: 1.5 }}>
+      <span style={{ color: '#e0e0e0', minWidth: 110, fontWeight: 500 }}>{k}</span>
+      <Text type="secondary" style={{ flex: 1 }}>{children}</Text>
+    </div>
+  );
+}
+
+function StubStep({ done = false, children }: { done?: boolean; children: React.ReactNode }) {
+  return (
+    <div style={{ padding: '3px 0', fontSize: 13, color: done ? '#52c41a' : '#8c8c8c' }}>
+      <span style={{ marginRight: 8 }}>{done ? '✓' : '○'}</span>
+      {children}
+    </div>
   );
 }

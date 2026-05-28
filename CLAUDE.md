@@ -4,7 +4,7 @@ Project: a real-time low-float momentum screener with a multi-panel web dashboar
 
 The web service runs a singleton `PollerService` that does the same Finviz + Yahoo + Benzinga work as the bash script (plus SEC EDGAR filings and Nasdaq trade halts), persists every cycle to Postgres, and pushes live deltas to the browser via SSE.
 
-**Status & roadmap — start here for any continuation:** what's built, recent work, and what's next live in [`docs/web-dashboard.md`](docs/web-dashboard.md). The low-float runner-detection strategy and its phased plan: [`docs/catching-runners.md`](docs/catching-runners.md); the Ignition screener spec: [`docs/ignition-screener-spec.md`](docs/ignition-screener-spec.md).
+**Status & roadmap — start here for any continuation:** what's built, recent work, and what's next live in [`docs/web-dashboard.md`](docs/web-dashboard.md). The low-float runner-detection strategy and its phased plan: [`docs/catching-runners.md`](docs/catching-runners.md); the Ignition screener spec: [`docs/ignition-screener-spec.md`](docs/ignition-screener-spec.md); the in-progress multi-day Swing screener spec: [`docs/swing-screener-spec.md`](docs/swing-screener-spec.md).
 
 ## Environment Variables
 
