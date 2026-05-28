@@ -172,6 +172,27 @@ export interface HistoryRow {
   cycle_id: string;
 }
 
+// One persisted Ignition-screener row joined with its cycle. Returned by
+// /api/screener/ignition-history?ticker=X — used by the Quote Details
+// "Ignition" tab to show how runner_score evolved cycle-by-cycle.
+export interface IgnitionHistoryRow {
+  id: string;
+  ticker: string;
+  runner_score: number;
+  score_breakdown: RunnerScoreBreakdown;
+  price: number | null;
+  change_pct: number | null;
+  float_m: number | null;
+  rel_volume: number | null;
+  rel_vol_5min: number | null;
+  catalyst_score: number | null;
+  news_source: NewsSource | null;
+  shelf_level: ShelfLevel | null;
+  polled_at: string;
+  session: TradingSession;
+  cycle_id: string;
+}
+
 // ─── news ──────────────────────────────────────────────────────────────────
 export interface NewsClassification {
   impact_score: number;
