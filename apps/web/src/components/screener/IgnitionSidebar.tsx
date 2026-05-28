@@ -1,11 +1,14 @@
+import { useState, type MouseEvent } from 'react';
 import { Typography, Tooltip, Empty, Button, Popover, List } from 'antd';
 import { CloseOutlined, EyeInvisibleOutlined } from '@ant-design/icons';
-import type { CyclePayload, IgnitionRow } from '../../api/types';
+import type { CatalystInfo, CyclePayload, IgnitionRow } from '../../api/types';
 import { useSelection } from '../../context/SelectionContext';
 import { useHiddenTickers } from '../../hooks/useHiddenTickers';
+import { FireBadge } from '../common/FireBadge';
 import { ShelfBadge } from '../common/ShelfBadge';
 import { TickerLink } from '../common/TickerLink';
 import { fmtPrice, fmtPct, num } from '../../utils/format';
+import { CatalystNewsModal } from './CatalystNewsModal';
 
 const { Text } = Typography;
 
@@ -17,11 +20,44 @@ function scoreColor(s: number): string {
   return '#8c8c8c';
 }
 
-// Catalyst marker by direction — a bearish catalyst must not look "hot".
-function catalystIcon(direction: string): string {
-  if (direction === 'bullish') return '🔥';
-  if (direction === 'bearish') return '🔻';
-  return '◆';
+// News indicator for a sidebar row — mirrors the Momentum table's CatalystBadge.
+// • ✨ — news exists, classifier hasn't tagged it yet (score == null) or score
+//   is below the FireBadge floor.
+// • 🔥-badge — classified catalyst with score ≥ 15; tier color encodes strength.
+// Clicking opens the shared CatalystNewsModal (same modal as Momentum).
+function CatalystBadge({
+  score,
+  reason,
+  type,
+  onOpen,
+}: {
+  score: number | null;
+  reason?: string;
+  type?: string;
+  onOpen: () => void;
+}) {
+  const open = (e: MouseEvent) => {
+    e.stopPropagation();
+    onOpen();
+  };
+  if (score == null) {
+    return (
+      <span
+        title="Catalyst score pending — click for news"
+        onClick={open}
+        style={{ marginLeft: 4, opacity: 0.55, cursor: 'pointer', fontSize: 11 }}
+      >
+        ✨
+      </span>
+    );
+  }
+  if (score < 15) return null;
+  const tooltip = `${score} · ${type ?? ''}${reason ? ` — ${reason}` : ''} · click for news`.trim();
+  return (
+    <span title={tooltip} onClick={open} style={{ marginLeft: 4, cursor: 'pointer' }}>
+      <FireBadge score={score} size={12} />
+    </span>
+  );
 }
 
 // A compact section label — sits above the New and Top row groups.
@@ -63,6 +99,7 @@ function HiddenList({ tickers, onUnhide }: { tickers: string[]; onUnhide: (t: st
 export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
   const { selected, setSelected } = useSelection();
   const { hidden, hide, unhide } = useHiddenTickers();
+  const [catalystModal, setCatalystModal] = useState<{ ticker: string; catalyst: CatalystInfo | null } | null>(null);
   const all = (payload?.ignition ?? []).filter((r) => !hidden.has(r.ticker));
   const newRows = all.filter((r) => r.is_new);
   const topRows = all.filter((r) => !r.is_new);
@@ -75,11 +112,17 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
       selected={r.ticker === selected}
       onSelect={setSelected}
       onHide={hide}
+      onOpenCatalyst={() => setCatalystModal({ ticker: r.ticker, catalyst: r.catalyst ?? null })}
     />
   );
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      <CatalystNewsModal
+        ticker={catalystModal?.ticker ?? null}
+        catalyst={catalystModal?.catalyst ?? null}
+        onClose={() => setCatalystModal(null)}
+      />
       <div
         style={{
           padding: '6px 8px',
@@ -154,18 +197,19 @@ function IgnitionItem({
   selected,
   onSelect,
   onHide,
+  onOpenCatalyst,
 }: {
   row: IgnitionRow;
   selected: boolean;
   onSelect: (t: string) => void;
   onHide: (t: string) => void;
+  onOpenCatalyst: () => void;
 }) {
   const b = row.score_breakdown;
   const chg = num(row.change_pct);
   const bits = [
     row.float_m != null ? `${row.float_m.toFixed(1)}M fl` : null,
     row.rel_vol_5min != null ? `${Math.round(row.rel_vol_5min)}% rv5` : null,
-    row.catalyst ? `${catalystIcon(row.catalyst.direction)}${row.catalyst.score}` : null,
   ].filter(Boolean);
 
   return (
@@ -192,6 +236,17 @@ function IgnitionItem({
               <span style={{ marginLeft: 4 }}>
                 <ShelfBadge shelf={row.shelf} size={12} />
               </span>
+            )}
+            {row.is_fresh_news && (
+              <span title="Fresh news this cycle" style={{ marginLeft: 4, fontSize: 11 }}>🚨</span>
+            )}
+            {row.has_today_news && (
+              <CatalystBadge
+                score={row.catalyst?.score ?? null}
+                reason={row.catalyst?.reason}
+                type={row.catalyst?.type}
+                onOpen={onOpenCatalyst}
+              />
             )}
           </span>
           {/* Click (not hover) opens the score breakdown; stopPropagation
