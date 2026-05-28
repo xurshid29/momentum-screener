@@ -1,4 +1,4 @@
-import { useMemo, useState, type MouseEvent } from 'react';
+import { useMemo, useState } from 'react';
 import { Table, Tabs, Tag, Typography, Tooltip, Badge, Button, Space, Popover, List } from 'antd';
 import { FilterOutlined, CloseOutlined, EyeInvisibleOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
@@ -6,11 +6,12 @@ import type { CatalystInfo, CyclePayload, EnrichedRow, RowStatus, TradingSession
 import { useSelection } from '../../context/SelectionContext';
 import { useHiddenTickers } from '../../hooks/useHiddenTickers';
 import { TickerLink } from '../common/TickerLink';
-import { FireBadge } from '../common/FireBadge';
+import { CatalystBadge } from '../common/CatalystBadge';
 import { ShelfBadge } from '../common/ShelfBadge';
 import { fmtPct, fmtFloat, fmtPrice, fmtVolume, fmtMcap, fmtRelVol, fmtBigPct, num } from '../../utils/format';
 import { FiltersDialog } from './FiltersDialog';
 import { CatalystNewsModal } from './CatalystNewsModal';
+import { SwingTable } from './SwingTable';
 
 const { Text } = Typography;
 
@@ -317,8 +318,13 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
           },
           {
             key: 'swing',
-            label: 'Swing',
-            children: <SwingStub />,
+            label: `Swing${payload?.swing && payload.swing.length ? ` · ${payload.swing.length}` : ''}`,
+            children: (
+              <SwingTable
+                rows={payload?.swing ?? []}
+                onOpenCatalyst={(ticker, catalyst) => setCatalystModal({ ticker, catalyst })}
+              />
+            ),
           },
         ]}
       />
@@ -326,122 +332,3 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
   );
 }
 
-// Catalyst marker for a screener row. Color + flame count signal strength
-// at a glance; tooltip carries the precise score and reason. Clicking opens
-// the catalyst/news modal for the ticker.
-//   ≥70  🔥🔥 red    — major catalyst
-//   40+  🔥    orange — strong
-//   15+  🔥    yellow — weak
-//   <15  —            — hidden
-function CatalystBadge({
-  score,
-  reason,
-  type,
-  onOpen,
-}: {
-  score: number | null;
-  reason?: string;
-  type?: string;
-  onOpen: () => void;
-}) {
-  // Stop the click bubbling to the row so opening the modal doesn't also
-  // re-select the row underneath.
-  const open = (e: MouseEvent) => {
-    e.stopPropagation();
-    onOpen();
-  };
-  if (score == null) {
-    return (
-      <span
-        title="Catalyst score pending — click for news"
-        onClick={open}
-        style={{ marginLeft: 6, opacity: 0.55, cursor: 'pointer' }}
-      >
-        ✨
-      </span>
-    );
-  }
-  if (score < 15) return null;
-  const tooltip = `${score} · ${type ?? ''}${reason ? ` — ${reason}` : ''} · click for news`.trim();
-  return (
-    <span title={tooltip} onClick={open} style={{ marginLeft: 6, cursor: 'pointer' }}>
-      <FireBadge score={score} />
-    </span>
-  );
-}
-
-// Placeholder for the Swing screener tab — shows what's coming so the tab
-// isn't empty while the backend is being built. See docs/swing-screener-spec.md
-// for the locked-in v1 design (universe, score weights, cadence, data deps).
-function SwingStub() {
-  return (
-    <div style={{ padding: '20px 24px', height: '100%', overflow: 'auto' }}>
-      <Text strong style={{ color: '#e0e0e0', fontSize: 16, display: 'block', marginBottom: 8 }}>
-        Swing screener — coming soon
-      </Text>
-      <Text type="secondary" style={{ display: 'block', marginBottom: 24, maxWidth: 720 }}>
-        Multi-day setups (1–5 day holds): clean breakouts from tight bases,
-        gap-and-hold on durable catalysts, trend continuations off the 20-day
-        SMA. Different universe than Momentum/Ignition — $2–$50, float
-        5–100M, mcap ≥ $50M. Full design in <code>docs/swing-screener-spec.md</code>.
-      </Text>
-
-      <StubSection title="Planned columns">
-        <StubItem k="Score">0–100, weighted: Trend 25 + Strength 15 + Setup 25 + Volume 15 + Catalyst 20 (shelf penalty −25 max)</StubItem>
-        <StubItem k="Setup flags">base · breakout · close strength</StubItem>
-        <StubItem k="Dist 52WH">distance from 52-week high</StubItem>
-        <StubItem k="vs 20-SMA">price relative to 20-day moving average</StubItem>
-        <StubItem k="Vol vs Avg">today's volume × 20-day average</StubItem>
-        <StubItem k="Cat / Shelf">same as Momentum, catalyst durability weighs heavier</StubItem>
-      </StubSection>
-
-      <StubSection title="Implementation progress">
-        <StubStep done>Spec doc</StubStep>
-        <StubStep done>UI scaffold (this tab)</StubStep>
-        <StubStep>Daily-bar backfill (Phase 3b — hard prerequisite)</StubStep>
-        <StubStep>Swing scan + score + persistence</StubStep>
-        <StubStep>Real Swing table</StubStep>
-        <StubStep>Telegram /swing command</StubStep>
-      </StubSection>
-    </div>
-  );
-}
-
-function StubSection({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div style={{ marginBottom: 20 }}>
-      <Text
-        strong
-        style={{
-          color: '#888',
-          fontSize: 11,
-          textTransform: 'uppercase',
-          letterSpacing: 0.5,
-          display: 'block',
-          marginBottom: 8,
-        }}
-      >
-        {title}
-      </Text>
-      <div style={{ paddingLeft: 4 }}>{children}</div>
-    </div>
-  );
-}
-
-function StubItem({ k, children }: { k: string; children: React.ReactNode }) {
-  return (
-    <div style={{ display: 'flex', gap: 12, padding: '3px 0', fontSize: 13, lineHeight: 1.5 }}>
-      <span style={{ color: '#e0e0e0', minWidth: 110, fontWeight: 500 }}>{k}</span>
-      <Text type="secondary" style={{ flex: 1 }}>{children}</Text>
-    </div>
-  );
-}
-
-function StubStep({ done = false, children }: { done?: boolean; children: React.ReactNode }) {
-  return (
-    <div style={{ padding: '3px 0', fontSize: 13, color: done ? '#52c41a' : '#8c8c8c' }}>
-      <span style={{ marginRight: 8 }}>{done ? '✓' : '○'}</span>
-      {children}
-    </div>
-  );
-}

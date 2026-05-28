@@ -1,10 +1,10 @@
-import { useState, type MouseEvent } from 'react';
+import { useState } from 'react';
 import { Typography, Tooltip, Empty, Button, Popover, List } from 'antd';
 import { CloseOutlined, EyeInvisibleOutlined } from '@ant-design/icons';
 import type { CatalystInfo, CyclePayload, IgnitionRow } from '../../api/types';
 import { useSelection } from '../../context/SelectionContext';
 import { useHiddenTickers } from '../../hooks/useHiddenTickers';
-import { FireBadge } from '../common/FireBadge';
+import { CatalystBadge } from '../common/CatalystBadge';
 import { ShelfBadge } from '../common/ShelfBadge';
 import { TickerLink } from '../common/TickerLink';
 import { fmtPrice, fmtPct, num } from '../../utils/format';
@@ -18,46 +18,6 @@ function scoreColor(s: number): string {
   if (s >= 55) return '#fa8c16';
   if (s >= 40) return '#fadb14';
   return '#8c8c8c';
-}
-
-// News indicator for a sidebar row — mirrors the Momentum table's CatalystBadge.
-// • ✨ — news exists, classifier hasn't tagged it yet (score == null) or score
-//   is below the FireBadge floor.
-// • 🔥-badge — classified catalyst with score ≥ 15; tier color encodes strength.
-// Clicking opens the shared CatalystNewsModal (same modal as Momentum).
-function CatalystBadge({
-  score,
-  reason,
-  type,
-  onOpen,
-}: {
-  score: number | null;
-  reason?: string;
-  type?: string;
-  onOpen: () => void;
-}) {
-  const open = (e: MouseEvent) => {
-    e.stopPropagation();
-    onOpen();
-  };
-  if (score == null) {
-    return (
-      <span
-        title="Catalyst score pending — click for news"
-        onClick={open}
-        style={{ marginLeft: 4, opacity: 0.55, cursor: 'pointer', fontSize: 11 }}
-      >
-        ✨
-      </span>
-    );
-  }
-  if (score < 15) return null;
-  const tooltip = `${score} · ${type ?? ''}${reason ? ` — ${reason}` : ''} · click for news`.trim();
-  return (
-    <span title={tooltip} onClick={open} style={{ marginLeft: 4, cursor: 'pointer' }}>
-      <FireBadge score={score} size={12} />
-    </span>
-  );
 }
 
 // Above/below-VWAP arrow shown next to the change%. The VWAP itself is
@@ -272,6 +232,7 @@ function IgnitionItem({
                 reason={row.catalyst?.reason}
                 type={row.catalyst?.type}
                 onOpen={onOpenCatalyst}
+                size={12}
               />
             )}
           </span>
