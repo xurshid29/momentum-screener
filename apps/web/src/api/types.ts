@@ -90,8 +90,10 @@ export interface EnrichedRow {
   status: RowStatus;
   prev_change_pct: number | null;
   accel_delta: number | null;
-  // Anchored VWAP since first detection in the current session. Null on cycle 1
-  // (no delta yet) and whenever price/volume is missing. Resets per session.
+  // Anchored VWAP since first detection today. Persists across PM → regular →
+  // AH so a pre-market spike's volume keeps weighting the indicator (matches a
+  // chart's day-session VWAP). Null on cycle 1 (no delta yet) and whenever
+  // price/volume is missing. Resets at midnight ET.
   vwap: number | null;
   above_vwap: boolean | null;
   is_fresh_news: boolean;

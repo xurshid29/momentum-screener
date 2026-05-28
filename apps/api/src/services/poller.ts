@@ -86,13 +86,12 @@ export interface EnrichedRow extends ScreenerRow {
   accel_delta: number | null;
   vol_5min: number | null;          // 5-min-equivalent traded volume (extrapolated during a ticker's first ~5 min)
   rel_vol_5min: number | null;      // (vol_5min / (avg_volume / 78)) * 100
-  // Anchored VWAP since the ticker first appeared in *this session*. Computed
-  // in-memory from cycle-to-cycle volume deltas × the per-cycle price. Reset
-  // on session boundary (PM / regular / AH each carry their own anchor).
-  // Null on the first cycle (no delta yet) and whenever price or volume is
-  // missing. Diverges from chart VWAP when a ticker traded heavily before we
-  // first saw it — but for the "is the move still in play?" question it's
-  // anchored to the move itself, which is the right signal here.
+  // Anchored VWAP since the ticker first appeared *today*. Computed in-memory
+  // from cycle-to-cycle volume deltas × the per-cycle price. Persists across
+  // PM → regular → AH within a single ET day so a pre-market spike's volume
+  // keeps weighting the indicator into the regular session — matches a chart
+  // "Session/Day" VWAP. Null on the first cycle (no delta yet) and whenever
+  // price or volume is missing.
   vwap: number | null;
   above_vwap: boolean | null;
   is_fresh_news: boolean;
@@ -149,9 +148,11 @@ class PollerService {
   // Used to compute the last-5-minutes volume diff. Trimmed to ~10 minutes deep.
   private volHistory = new Map<string, Array<{ ts: number; volume: number }>>();
   // Per-ticker anchored VWAP tallies. cumPxVol and cumVol accumulate
-  // (Δvolume × price) across cycles since first detection in the current
-  // session; lastVolume is the previous cycle's cumulative day volume, used
-  // to derive the delta. Reset on session boundary alongside volHistory.
+  // (Δvolume × price) across cycles since first detection *today*; lastVolume
+  // is the previous cycle's cumulative day volume, used to derive the delta.
+  // Persists across PM → regular → AH so a pre-market spike's volume keeps
+  // weighting the VWAP into regular hours (matches a chart's day-session VWAP).
+  // Reset at midnight ET only.
   private vwapState = new Map<string, { cumPxVol: number; cumVol: number; lastVolume: number }>();
   private bzHeadlineCache = new Map<string, NewsHeadline>(); // ticker -> latest headline (any source merged)
   private bzWatermark = Math.floor(Date.now() / 1000) - DELTA_LOOKBACK_SEC;
@@ -300,6 +301,10 @@ class PollerService {
       this.classificationCache.clear();
       this.alertedUrls.clear();
       this.alertedIgnition.clear();
+      // Anchored VWAP must reset across days so yesterday's tallies don't
+      // contaminate today's. Session-boundary changes inside a day deliberately
+      // *don't* clear it (see lastSession block below).
+      this.vwapState.clear();
       // Reset the SEC/halt delta watermarks so the new day's first cycle
       // doesn't replay the whole backlog as "fresh".
       this.secWatermark = Math.floor(now.getTime() / 1000);
@@ -312,7 +317,12 @@ class PollerService {
     if (session !== this.lastSession) {
       this.prevChange.clear();
       this.volHistory.clear();
-      this.vwapState.clear();
+      // vwapState is *not* cleared here. The Finviz `volume` field is cumulative
+      // for the whole day, so volume deltas keep accumulating coherently across
+      // PM → regular → AH. Keeping the tally lets the anchored VWAP match a
+      // chart's "Session" VWAP that includes the extended-hours move (e.g. a
+      // pre-market spike still weights the regular-session VWAP). Reset at
+      // midnight ET below.
       this.lastSession = session;
     }
 

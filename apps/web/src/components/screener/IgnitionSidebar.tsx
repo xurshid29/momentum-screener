@@ -61,11 +61,10 @@ function CatalystBadge({
 }
 
 // Above/below-VWAP arrow shown next to the change%. The VWAP itself is
-// anchored to the ticker's first detection in this session (see EnrichedRow
-// in services/poller.ts) — so this answers "is price still above where most
-// volume traded since the move started?", which is the practical proxy for
-// "is the momentum still in play?". The tooltip carries the exact VWAP and
-// the % delta vs current price.
+// anchored to the ticker's first detection today and persists across PM →
+// regular → AH (see EnrichedRow.vwap in services/poller.ts) — so a pre-market
+// spike's volume keeps weighting the indicator into the regular session.
+// Tooltip carries the exact VWAP and the % delta vs current price.
 function VwapMark({
   vwap,
   aboveVwap,
@@ -79,7 +78,7 @@ function VwapMark({
   const delta = price != null && vwap > 0 ? ((price - vwap) / vwap) * 100 : null;
   const color = aboveVwap ? '#52c41a' : '#ff4d4f';
   const arrow = aboveVwap ? '▲' : '▼';
-  const tip = `VWAP $${vwap.toFixed(2)}${delta != null ? ` · ${delta >= 0 ? '+' : ''}${delta.toFixed(1)}% vs price` : ''} · anchored to first detection this session`;
+  const tip = `VWAP $${vwap.toFixed(2)}${delta != null ? ` · ${delta >= 0 ? '+' : ''}${delta.toFixed(1)}% vs price` : ''} · anchored to first detection today`;
   return (
     <Tooltip title={tip}>
       <span style={{ color, fontSize: 10, marginRight: 4, cursor: 'help' }}>{arrow}</span>
