@@ -20,8 +20,14 @@ import { fetchHalts, type TradeHalt } from './halts.js';
 import { broadcast } from './sse.js';
 import { sendTelegram, telegramEnabled, escapeHtml } from './telegram.js';
 import { scoreRunner, type RunnerScoreBreakdown } from './runner-score.js';
+import {
+  scoreSwing,
+  type SwingScoreBreakdown,
+  type SwingSetupFlags,
+  type SwingDailyContext,
+} from './swing-score.js';
 import { shelf, type ShelfInfo } from './shelf.js';
-import { dailyBars } from './daily-bars.js';
+import { dailyBars, getRecentBarsForTickers } from './daily-bars.js';
 import { classifyByRules, type Classification, type ClassifierInput } from './catalyst-rules.js';
 import { classifyByClaude } from './catalyst-claude.js';
 
@@ -67,6 +73,27 @@ const IGNITION = {
   new_window_ms: 120_000,  // a ticker stays flagged "new" for 2 min after first entering the set
 };
 
+// Swing screener — multi-day setups. Runs inside the same 20s poll loop but
+// on a much slower cadence (every `cadence_cycles` cycles ≈ 20 min) since
+// daily-bar signals don't change intraday. See docs/swing-screener-spec.md.
+const SWING = {
+  // Universe: $2–$50, avg-vol ≥ 500K (real liquidity), today's RVol ≥ 1.5
+  // (real interest today). Float bounds and mcap floor are post-filtered in
+  // code since Finviz drops null-field rows when those gates are in-filter.
+  filter: 'ind_stocksonly,sh_price_o2,sh_price_u50,sh_avgvol_o500,sh_relvol_o1.5',
+  float_min_m: 5,
+  float_max_m: 100,
+  mcap_min_m: 50,
+  top_n: 100,
+  broadcast_n: 25,
+  cadence_cycles: 60,                  // ~20 min at the 20s interval
+  alert_score: 65,
+  // Force a refresh once per ET day at/after 16:30 ET — that's when today's
+  // close has landed in Finviz quote_export, so the daily-bars service can
+  // populate today's complete bar and we can score `close_in_top_q`.
+  post_close_minute_et: 16 * 60 + 30,
+};
+
 export interface CyclePayload {
   cycle_id: string;
   polled_at: string;
@@ -79,6 +106,7 @@ export interface CyclePayload {
   };
   fresh_news: NewsHeadline[];
   ignition: IgnitionRow[];
+  swing: SwingRow[];
 }
 
 export interface EnrichedRow extends ScreenerRow {
@@ -114,6 +142,15 @@ export interface IgnitionRow extends EnrichedRow {
   // True for the first ~2 minutes a ticker is in the Ignition set — drives the
   // sidebar's pinned "New" section so a fresh low-score name isn't buried.
   is_new: boolean;
+}
+
+// A Momentum-style enriched row plus its Swing-screener score and the
+// daily-bar context snapshot the score was computed from.
+export interface SwingRow extends EnrichedRow {
+  swing_score: number;
+  score_breakdown: SwingScoreBreakdown;
+  setup_flags: SwingSetupFlags;
+  daily_context: SwingDailyContext;
 }
 
 export interface CatalystInfo {
@@ -186,6 +223,15 @@ class PollerService {
   // present tickers are kept, so a ticker that leaves and returns re-counts
   // as new, and no daily/session clear is needed.
   private ignitionFirstSeen = new Map<string, number>();
+  // Swing screener cadence — fetch + score every SWING.cadence_cycles cycles
+  // (~20 min) plus a forced 16:30 ET post-close refresh. Between scans we
+  // re-broadcast lastSwingRows unchanged.
+  private swingCounter = 0;
+  private lastSwingRows: SwingRow[] = [];
+  private lastSwingComputedAt = 0;
+  private lastForcedSwingPostCloseDate = '';
+  // Tickers already Telegram-alerted from the Swing screener today.
+  private alertedSwing = new Set<string>();
   // Runtime mute for Telegram alerts — toggled by the bot's /alerts command.
   // Resets to false on restart by design (no persistence — the dashboard +
   // sidebar still surface everything, this only quiets the push channel).
@@ -204,6 +250,14 @@ class PollerService {
       bz_watermark: this.bzWatermark,
       sec_watermark: this.secWatermark,
       halt_watermark: this.haltWatermark,
+      swing: {
+        cycle_counter: this.swingCounter,
+        cached_rows: this.lastSwingRows.length,
+        last_computed_at: this.lastSwingComputedAt
+          ? new Date(this.lastSwingComputedAt).toISOString()
+          : null,
+        last_post_close_refresh: this.lastForcedSwingPostCloseDate || null,
+      },
       telegram_enabled: telegramEnabled(),
       config: this.config,
     };
@@ -302,6 +356,8 @@ class PollerService {
       this.classificationCache.clear();
       this.alertedUrls.clear();
       this.alertedIgnition.clear();
+      this.alertedSwing.clear();
+      this.lastForcedSwingPostCloseDate = '';
       // Anchored VWAP must reset across days so yesterday's tallies don't
       // contaminate today's. Session-boundary changes inside a day deliberately
       // *don't* clear it (see lastSession block below).
@@ -331,11 +387,25 @@ class PollerService {
       this.lastSession = session;
     }
 
-    // 1) screener — two screens in parallel: the configured Momentum screen
-    // and the volume-led Ignition screen. The Ignition filter is session-
-    // aware: pre-market uses a looser current-volume floor (the WHLR fix).
+    // Swing cadence — fetch + score on the first cycle, every Nth cycle
+    // (~20 min), and once after the 16:30 ET close. On non-trigger cycles
+    // we re-broadcast the cached lastSwingRows so the SSE payload still
+    // carries the most-recent computed swing list.
+    this.swingCounter += 1;
+    const etMin = etMinuteOfDay(now);
+    const isPostCloseTrigger =
+      etMin >= SWING.post_close_minute_et &&
+      session !== 'closed' &&
+      this.lastForcedSwingPostCloseDate !== todayEt;
+    const shouldRefreshSwing =
+      this.swingCounter === 1 ||
+      this.swingCounter % SWING.cadence_cycles === 0 ||
+      isPostCloseTrigger;
+
+    // 1) screener — two or three screens in parallel. Momentum + Ignition
+    // every cycle; Swing only on the cadence-trigger cycles above.
     const ignitionFilter = session === 'premarket' ? IGNITION.premarket_filter : IGNITION.filter;
-    const [rows, ignitionRaw] = await Promise.all([
+    const [rows, ignitionRaw, swingRaw] = await Promise.all([
       fetchScreener({
         filter: this.config.filter,
         floatMaxM: this.config.float_max_m,
@@ -348,16 +418,35 @@ class PollerService {
         topN: IGNITION.top_n,
         session,
       }).catch(() => [] as ScreenerRow[]),
+      shouldRefreshSwing
+        ? fetchScreener({
+            filter: SWING.filter,
+            floatMaxM: SWING.float_max_m,
+            topN: SWING.top_n,
+            session,
+          }).catch(() => [] as ScreenerRow[])
+        : Promise.resolve([] as ScreenerRow[]),
     ]);
     // sh_price_u10 has no lower bound — drop sub-dime junk.
     const ignitionRows = ignitionRaw.filter(
       (r) => r.price != null && r.price >= IGNITION.min_price,
     );
+    // Swing post-filters (Finviz can't gate float min, mcap min in-string
+    // without dropping null-field rows). Apply both in code.
+    const swingRows = swingRaw.filter(
+      (r) =>
+        r.float_m != null &&
+        r.float_m >= SWING.float_min_m &&
+        r.float_m <= SWING.float_max_m &&
+        r.mcap_m != null &&
+        r.mcap_m >= SWING.mcap_min_m,
+    );
 
-    // Enrich the union of both screens once; derive each view afterward.
+    // Enrich the union of all active screens once; derive each view afterward.
     const screenRows = new Map<string, ScreenerRow>();
     for (const r of rows) screenRows.set(r.ticker, r);
     for (const r of ignitionRows) if (!screenRows.has(r.ticker)) screenRows.set(r.ticker, r);
+    for (const r of swingRows) if (!screenRows.has(r.ticker)) screenRows.set(r.ticker, r);
     const tickers = [...screenRows.keys()];
     // Queue this cycle's tickers for a SEC shelf/dilution lookup. The result
     // lands asynchronously in the shelf cache and is read below via shelf.get.
@@ -675,14 +764,64 @@ class PollerService {
     const topIgnition = candidates.filter((r) => !r.is_new).slice(0, IGNITION.broadcast_n);
     const ignition: IgnitionRow[] = [...newIgnition, ...topIgnition];
 
+    // 3b) Swing scoring — only on the cadence-trigger cycles. Reads daily
+    // bars from the daily_bars table (populated by the DailyBarsService);
+    // scores each ticker in the post-filtered Swing universe; sorts desc;
+    // truncates to SWING.broadcast_n. On non-trigger cycles we keep the
+    // previous cached list (lastSwingRows) so the SSE clients still see it.
+    let scoredSwing: SwingRow[] = this.lastSwingRows;
+    let swingFreshlyScored = false;
+    if (shouldRefreshSwing) {
+      const swingTickers = swingRows.map((r) => r.ticker);
+      // Queue every swing-universe ticker for daily-bar backfill — tickers
+      // already fresh in the service are no-ops, new ones get queued.
+      dailyBars.trackUniverse(swingTickers);
+      const barsByTicker = await getRecentBarsForTickers(swingTickers, 252);
+      const scored: SwingRow[] = [];
+      for (const r of swingRows) {
+        const e = enrichedByTicker.get(r.ticker)!;
+        const result = scoreSwing({
+          price: e.price,
+          volume: e.volume,
+          bars: barsByTicker.get(r.ticker) ?? [],
+          catalyst_score: e.catalyst?.score ?? null,
+          catalyst_direction: e.catalyst?.direction ?? null,
+          catalyst_urgency: e.catalyst?.urgency ?? null,
+          catalyst_type: e.catalyst?.type ?? null,
+          shelf_level: e.shelf?.level ?? null,
+        });
+        if (!result) continue;
+        scored.push({
+          ...e,
+          swing_score: result.score,
+          score_breakdown: result.breakdown,
+          setup_flags: result.flags,
+          daily_context: result.context,
+        });
+      }
+      scored.sort((a, b) => b.swing_score - a.swing_score);
+      const truncated = scored.slice(0, SWING.broadcast_n);
+      // Replace only if the new scan actually produced rows — a transient
+      // Finviz hiccup shouldn't blank out the swing list.
+      if (truncated.length > 0) {
+        this.lastSwingRows = truncated;
+        this.lastSwingComputedAt = Date.now();
+        scoredSwing = truncated;
+        swingFreshlyScored = true;
+      }
+      if (isPostCloseTrigger) this.lastForcedSwingPostCloseDate = todayEt;
+    }
+
     // 4) update memory state for next cycle
     for (const r of screenRows.values()) {
       if (r.change_pct != null) this.prevChange.set(r.ticker, r.change_pct);
     }
 
-    // 5) persist
+    // 5) persist — Swing rows only on the cycles that re-scored, so the
+    // swing_results table holds one snapshot per ~20 min, not per 20 s.
     const cycleId = await this.persistCycle(
-      session, enriched, ignition, bzDelta?.articles, finvizNews, yahooNews,
+      session, enriched, ignition, swingFreshlyScored ? scoredSwing : [],
+      bzDelta?.articles, finvizNews, yahooNews,
       edgarDelta?.filings, haltDelta?.halts,
     );
 
@@ -699,6 +838,7 @@ class PollerService {
       config: this.config,
       rows: enriched,
       ignition,
+      swing: scoredSwing,
       banners: { new_with_catalyst: newWithCatalyst, fresh_news: freshList },
       fresh_news: enriched
         .filter((r) => r.is_fresh_news && r.news_title)
@@ -716,7 +856,7 @@ class PollerService {
     this.firstPoll = false;
     broadcast('cycle', payload);
     console.log(
-      `[poller] ${nowHms()} — ${enriched.length} rows, ${ignition.length} ignition, ${newWithCatalyst.length} new+catalyst, ${freshList.length} fresh`,
+      `[poller] ${nowHms()} — ${enriched.length} rows, ${ignition.length} ignition, ${scoredSwing.length} swing${swingFreshlyScored ? ' (refreshed)' : ''}, ${newWithCatalyst.length} new+catalyst, ${freshList.length} fresh`,
     );
 
     // Telegram alerts — fresh high-impact rows + Ignition runner-score hits.
@@ -802,6 +942,7 @@ class PollerService {
     session: TradingSession,
     rows: EnrichedRow[],
     ignitionRows: IgnitionRow[],
+    swingRows: SwingRow[],
     bzArticles: import('./benzinga.js').BenzingaArticle[] | undefined,
     finvizNews: Awaited<ReturnType<typeof fetchFinvizNews>>,
     yahooNews: Awaited<ReturnType<typeof fetchYahooNews>>,
@@ -872,6 +1013,37 @@ class PollerService {
               rel_vol_5min: r.rel_vol_5min,
               catalyst_score: r.catalyst?.score ?? null,
               news_source: r.news_source,
+              shelf_level: r.shelf?.level ?? null,
+            })),
+          )
+          .execute();
+      }
+
+      if (swingRows.length > 0) {
+        await trx
+          .insertInto('swing_results')
+          .values(
+            swingRows.map((r) => ({
+              cycle_id: cycle.id,
+              ticker: r.ticker,
+              swing_score: r.swing_score,
+              score_breakdown: JSON.stringify(r.score_breakdown) as unknown as never,
+              price: r.price,
+              change_pct: r.change_pct,
+              float_m: r.float_m,
+              mcap_m: r.mcap_m,
+              volume: r.volume,
+              avg_volume_20: r.daily_context.avg_volume_20,
+              sma_20: r.daily_context.sma_20,
+              sma_50: r.daily_context.sma_50,
+              sma_200: r.daily_context.sma_200,
+              high_52w: r.daily_context.high_52w,
+              atr_14: r.daily_context.atr_14,
+              in_base: r.setup_flags.in_base,
+              broke_out: r.setup_flags.broke_out,
+              close_in_top_q: r.setup_flags.close_in_top_q,
+              catalyst_score: r.catalyst?.score ?? null,
+              catalyst_type: r.catalyst?.type ?? null,
               shelf_level: r.shelf?.level ?? null,
             })),
           )
@@ -1116,6 +1288,25 @@ function etDateString(dt: Date): string {
     month: '2-digit',
     day: '2-digit',
   }).format(dt);
+}
+
+// Minute-of-day in ET (0–1439). Used for the Swing post-close trigger
+// (16:30 ET = 990); cheaper than re-running the full Intl parse twice.
+function etMinuteOfDay(at: Date): number {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    })
+      .formatToParts(at)
+      .filter((p) => p.type !== 'literal')
+      .map((p) => [p.type, p.value]),
+  );
+  let hour = parseInt(parts.hour, 10);
+  if (hour === 24) hour = 0;
+  return hour * 60 + parseInt(parts.minute, 10);
 }
 
 // Maps a moment to its US-equities trading session by ET wall-clock:

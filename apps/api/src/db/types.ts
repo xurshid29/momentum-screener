@@ -92,6 +92,33 @@ export interface IgnitionResultsTable {
   created_at: Generated<Date>;
 }
 
+// One row per Swing-screener candidate per scan. See docs/swing-screener-spec.md §5.
+export interface SwingResultsTable {
+  id: Generated<string>;
+  cycle_id: string;
+  ticker: string;
+  swing_score: number;
+  score_breakdown: JSONColumnType<Record<string, number>>;
+  price: number | null;
+  change_pct: number | null;
+  float_m: number | null;
+  mcap_m: number | null;
+  volume: number | null;
+  avg_volume_20: number | null;
+  sma_20: number | null;
+  sma_50: number | null;
+  sma_200: number | null;
+  high_52w: number | null;
+  atr_14: number | null;
+  in_base: boolean | null;
+  broke_out: boolean | null;
+  close_in_top_q: boolean | null;
+  catalyst_score: number | null;
+  catalyst_type: string | null;
+  shelf_level: string | null;
+  created_at: Generated<Date>;
+}
+
 // Per-ticker daily OHLCV bars. Powers the Swing screener's daily-timeframe
 // signals (SMAs, 52w high, ATR, base/breakout detection). Loaded from Finviz
 // quote_export and refreshed nightly. See docs/swing-screener-spec.md §4.1.
@@ -191,6 +218,7 @@ export interface Database {
   screener_cycles: ScreenerCyclesTable;
   screener_results: ScreenerResultsTable;
   ignition_results: IgnitionResultsTable;
+  swing_results: SwingResultsTable;
   daily_bars: DailyBarsTable;
   news_articles: NewsArticlesTable;
   news_ticker_links: NewsTickerLinksTable;

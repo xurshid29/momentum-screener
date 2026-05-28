@@ -124,6 +124,41 @@ export interface IgnitionRow extends EnrichedRow {
   is_new: boolean;
 }
 
+export interface SwingScoreBreakdown {
+  trend: number;
+  strength: number;
+  setup: number;        // composite: base + breakout + close strength
+  volume: number;
+  catalyst: number;
+  shelf: number;        // ≤ 0 — penalty
+}
+
+export interface SwingSetupFlags {
+  in_base: boolean;
+  broke_out: boolean;       // the 10-day breakout — the alert trigger
+  broke_out_5d: boolean;    // smaller 5-day breakout
+  close_in_top_q: boolean;
+}
+
+export interface SwingDailyContext {
+  sma_20: number | null;
+  sma_50: number | null;
+  sma_200: number | null;
+  high_52w: number | null;
+  atr_14: number | null;
+  avg_volume_20: number | null;
+  dist_52w_high_pct: number | null;  // (price - high_52w) / high_52w * 100
+}
+
+// A Momentum-style enriched row plus its Swing-screener score and the daily-
+// bar context snapshot the score was computed from. See docs/swing-screener-spec.md.
+export interface SwingRow extends EnrichedRow {
+  swing_score: number;
+  score_breakdown: SwingScoreBreakdown;
+  setup_flags: SwingSetupFlags;
+  daily_context: SwingDailyContext;
+}
+
 export interface NewsHeadline {
   ticker: string;
   source: NewsSource;
@@ -143,6 +178,7 @@ export interface CyclePayload {
   config: ScreenerFilterSnapshot;
   rows: EnrichedRow[];
   ignition: IgnitionRow[];
+  swing: SwingRow[];
   banners: { new_with_catalyst: string[]; fresh_news: string[] };
   fresh_news: NewsHeadline[];
 }

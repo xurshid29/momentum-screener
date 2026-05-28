@@ -199,6 +199,51 @@ async function upsertBars(ticker: string, bars: DailyBar[]): Promise<number> {
   return written;
 }
 
+// Bulk version of getRecentBars for the Swing scan — one query, then split
+// per ticker. Returns ascending-order bars per ticker; tickers with no bars
+// are absent from the map (callers should treat as []).
+export async function getRecentBarsForTickers(
+  tickers: string[],
+  days = 250,
+): Promise<Map<string, DailyBar[]>> {
+  const out = new Map<string, DailyBar[]>();
+  if (tickers.length === 0) return out;
+  const upper = tickers.map((t) => t.toUpperCase());
+  const db = getDb();
+  const rows = await db
+    .selectFrom('daily_bars')
+    .select(['ticker', 'date', 'open', 'high', 'low', 'close', 'volume'])
+    .where('ticker', 'in', upper)
+    .orderBy('ticker', 'asc')
+    .orderBy('date', 'desc')
+    .execute();
+  // Group by ticker, keep only the `days` most recent per ticker (rows arrive
+  // sorted desc, so we can stop pushing when the per-ticker counter caps).
+  const counts = new Map<string, number>();
+  for (const r of rows) {
+    const t = r.ticker;
+    const cnt = counts.get(t) ?? 0;
+    if (cnt >= days) continue;
+    counts.set(t, cnt + 1);
+    let arr = out.get(t);
+    if (!arr) {
+      arr = [];
+      out.set(t, arr);
+    }
+    arr.push({
+      date: r.date instanceof Date ? r.date.toISOString().slice(0, 10) : String(r.date),
+      open: Number(r.open),
+      high: Number(r.high),
+      low: Number(r.low),
+      close: Number(r.close),
+      volume: Number(r.volume),
+    });
+  }
+  // Reverse each per-ticker list to ascending date order.
+  for (const arr of out.values()) arr.reverse();
+  return out;
+}
+
 // Read helper for callers (the Swing scan, the manual trigger endpoint).
 // Returns the most-recent `days` bars in ascending date order — the shape
 // the scoring code expects.
