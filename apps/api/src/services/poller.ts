@@ -55,6 +55,14 @@ const IGNITION = {
   min_price: 0.10,   // post-filter — sh_price_u10 has no lower bound
   broadcast_n: 25,   // top-N (by runner-score) kept in the SSE payload + persisted
   alert_score: 58,   // alert threshold — a no-catalyst momentum ignition caps ~60 (float 25 + volume 35)
+  // Suppress alerts when first detection is already too extended to trade. The
+  // 05-21/05-22 sample showed every "alert fired at +50%+" name (WHLR +146→
+  // −119, FRGT +93→−104, ORIS +54→−59, ATPC +89→−14) bled to the close,
+  // while the winners (SBFM +3→+47, MRM +6→+18, AKTX +50→+93, CODX +21→+31)
+  // all entered below this cap. We still keep the row in the SSE payload —
+  // only the Telegram push is gated, so a name that pulls back under the cap
+  // and re-fires the score gets a fresh second-leg alert.
+  alert_entry_chg_max: 40,
   new_window_ms: 120_000,  // a ticker stays flagged "new" for 2 min after first entering the set
 };
 
@@ -968,6 +976,10 @@ class PollerService {
       const detectionScore = b.float + b.volume + b.catalyst + b.earliness + b.halt;
       if (detectionScore < IGNITION.alert_score && !bullishCatalyst) continue;
       if (this.alertedIgnition.has(r.ticker)) continue;
+      // Entry change% cap — see IGNITION.alert_entry_chg_max comment. We skip
+      // *without* adding to alertedIgnition, so a pullback under the cap on a
+      // later cycle still earns a fresh alert (the second-leg setup).
+      if (r.change_pct != null && r.change_pct > IGNITION.alert_entry_chg_max) continue;
       this.alertedIgnition.add(r.ticker);
       void sendTelegram(formatIgnitionAlert(r));
     }
