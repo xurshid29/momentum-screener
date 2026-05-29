@@ -12,7 +12,7 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import dayjs, { type Dayjs } from 'dayjs';
-import { Table, Tag, Typography, Tooltip, DatePicker, Segmented, Empty, Spin } from 'antd';
+import { Table, Tag, Typography, DatePicker, Segmented, Empty, Spin } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type {
   CatalystInfo,
