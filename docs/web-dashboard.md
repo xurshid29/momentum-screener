@@ -1,6 +1,8 @@
 # Momentum Screener — Web Dashboard
 
-Status as of 2026-05-29 (late). The bash scanner (`screener-poll_breakout.sh`) and the web dashboard are both functional; the bash version remains the reference implementation. The web port lives in `apps/api` + `apps/web` and runs in parallel without sharing state with it.
+Status as of 2026-05-29 (end of day). The bash scanner (`screener-poll_breakout.sh`) and the web dashboard are both functional; the bash version remains the reference implementation. The web port lives in `apps/api` + `apps/web` and runs in parallel without sharing state with it.
+
+**Snapshot for a continuing session** — the screener has four tabs now (`[Momentum] [Continuation] [Swing] [History]`), the Ignition sidebar stays always-visible on the left, three Telegram alert paths fire (Momentum / Ignition / Swing / Continuation-dual-signal 🎯), and one cached SQL view (Continuation) refreshes every ~10 min from `ignition_results`. The intended next direction is **tuning from data, not new features** — see `Remaining work / roadmap`. Every Swing-spec step (1–6) and the Continuation/History/dual-signal additions are now shipped; the gap going forward is grading the live alerts against actual outcomes.
 
 See **Recent additions** for what shipped lately and **Remaining work** for what's next. The low-float runner-detection strategy + roadmap lives in [`catching-runners.md`](catching-runners.md); the Ignition screener design in [`ignition-screener-spec.md`](ignition-screener-spec.md); the multi-day Swing screener design in [`swing-screener-spec.md`](swing-screener-spec.md).
 
@@ -27,9 +29,10 @@ See **Recent additions** for what shipped lately and **Remaining work** for what
                                 ↓ SSE (live) + REST (history/prefs)
 ┌─────────────────────────────────────────────────────────────────┐
 │ apps/web  (React + Antd + Vite + react-resizable-panels)        │
-│  Ignition sidebar │ [Momentum] [Swing] [Continuation] tabs ·    │
-│  (left edge)      │ Quote Details · News Room            │ 0–4  │
-│                   │ (3 stacked panels)                  │ charts│
+│  Ignition sidebar │ [Momentum] [Continuation] [Swing]           │
+│  (left edge)      │ [History] tabs · Quote Details ·            │
+│                   │ News Room (3 stacked panels)        │ 0–4   │
+│                                                          │ charts│
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -48,7 +51,9 @@ See **Recent additions** for what shipped lately and **Remaining work** for what
 | Catalyst classifier (rules + optional LLM) | ✅ | `catalyst-rules.ts`, `catalyst-claude.ts`, `classify-article.ts` |
 | Ignition screener + runner-score | ✅ | `poller.ts`, `runner-score.ts` |
 | Swing screener + swing-score | ✅ | `poller.ts`, `swing-score.ts`, `daily-bar-features.ts` |
-| Continuation list (Ignition repeat-aggregation) | ✅ | `services/continuation.ts`, cached & refreshed every ~10 min |
+| Continuation list (Ignition repeat-aggregation) | ✅ | `services/continuation.ts`, cached & refreshed every ~10 min; news lookup is a 3-day window |
+| Dual-signal 🎯 Telegram alert | ✅ | `pushDualSignalAlerts` in `poller.ts` — Continuation ∩ live Ignition with `score ≥ 40`, dedup per ET day |
+| History-by-day endpoint | ✅ | `GET /api/screener/history-by-day` — per-(ticker, session) aggregation of `ignition_results` or `screener_results` for a chosen ET date, with the day's top catalyst classification left-joined |
 | Daily-bar backfill service (Phase 3b) | ✅ | `services/daily-bars.ts`, Finviz `quote_export` |
 | SEC shelf/dilution lookup (Phase 3) | ✅ | `services/shelf.ts` |
 | Telegram push alerts (Momentum / Ignition / Swing) | ✅ | `services/telegram.ts`, `pushSwingAlerts` in `poller.ts` |
@@ -65,7 +70,7 @@ See **Recent additions** for what shipped lately and **Remaining work** for what
 |---|---|---|
 | Auth pages; registration gated by `REGISTRATION_OPEN` | ✅ | Register tab hidden when sign-up is closed |
 | Multi-panel resizable dashboard | ✅ | `react-resizable-panels`, sizes via localStorage |
-| Screener live table (SSE) — `[Momentum] [Swing] [Continuation]` tabs | ✅ | Momentum: NEW/ACC/UP/NEWS badges, 🔥/🚨 markers. Swing: score + setup flags (B/↑10/↑5/C) + vs 52WH + vs 20-SMA + Vol×Avg. Continuation: days seen + score day-1→today trajectory + price range + live M/I/S presence strip |
+| Screener live table (SSE) — `[Momentum] [Continuation] [Swing] [History]` tabs | ✅ | Momentum: NEW/ACC/UP/NEWS badges, 🔥/🚨 markers. Continuation: days seen + score day-1→today trajectory + price range + live M/I/S presence strip, 3-day news lookup. Swing: score + setup flags (B/↑10/↑5/C) + vs 52WH + vs 20-SMA + Vol×Avg. History: DatePicker + Ignition/Momentum toggle, per-(ticker, session) rollup with catalyst column |
 | Ignition sidebar — New + Top split | ✅ | Pinned "New" section above the score-ranked feed (left edge); ▲/▼ above/below anchored-VWAP arrow next to chg% |
 | Catalyst news modal | ✅ | Click a row's 🔥 badge → catalyst verdict + ticker news |
 | Quote Details — Stats + Sentiment + History + Ignition | ✅ | Color-coded per CLAUDE.md bands; per-ticker Momentum history *and* Ignition history sub-tabs |
@@ -77,6 +82,8 @@ See **Recent additions** for what shipped lately and **Remaining work** for what
 
 ## Recent additions (since the 2026-05-04 snapshot)
 
+- **History tab — shipped (2026-05-29).** Fourth tab inside the Screener panel — `[Momentum] [Continuation] [Swing] [History]`. Pick an ET trading date + Ignition or Momentum, see every ticker that appeared on that day grouped by session (PM / REG / AH / closed). Per-`(ticker, session)` row with: first → last ET time, peak runner-score (Ignition) or status (Momentum, collapsed via `coalesce(NEW > ACC > UP > NEWS)`), two-tone chg range, price range with cumulative %lift, ticks. The day's most-impactful catalyst classification rides as a clickable 🔥/✨ badge next to each ticker. Static query — no SSE, refetches on date or screen change. `GET /api/screener/history-by-day?date=YYYY-MM-DD&screen=ignition|momentum`; single `sql` template branched at the CTE level for the two source tables; day_catalyst CTE for the news join. ~600 ms on a busy day.
+- **Continuation refinements — shipped (2026-05-29).** Tab order is `[Momentum] [Continuation] [Swing]` (Continuation as the bridge between intraday and multi-day). Days column sorts ASC by default so early-stage setups float to the top (5-6-day rows are already extended — CODX at day 5 was $7+, well past entry). Shared `common/TickerLinks.tsx` extracted — Finviz + TradingView icons on Momentum, Continuation, and Swing all use it. News/catalyst badge on Continuation reads off the row's own data with a **3-day lookback** (multi-day window so a catalyst from 2 days ago still surfaces); the 🚨 "this cycle" indicator stays driven by the live payload.
 - **Dual-signal 🎯 Telegram alert — shipped (2026-05-29).** Fires once per ticker per ET day when a ticker on the Continuation list (≥ 2 days of Ignition history) also clears `runner_score ≥ 40` in the live cycle. The CODX-day-2/3 trigger — the *confirmation* that the move is multi-day, not just a one-session pump. Bullish-only (skips bearish catalysts and crashing moves). Lower score floor than the vanilla Ignition alert (40 vs 58) since the multi-day prior already de-risks the signal. Message leads with `Day N · score first → today` so the trajectory is immediate.
 - **Continuation tab — shipped (2026-05-29).** Third tab inside the Screener panel — `[Momentum] [Swing] [Continuation]`. Surfaces every ticker that appeared in `ignition_results` on **≥ 2 distinct ET days within the last 5**, ordered by *today's-list-presence DESC* → *days_seen DESC* → *today_peak DESC*. Pure derivative of the Ignition stream — no separate scan, no new persistence. Columns: Ticker (with live shelf badge looked up from `payload.{rows,ignition,swing}`), Days seen (color-tiered), Window (`first → last` ET dates), **Score Day-1 → Today** with trajectory arrow ↑/→/↓/· (climbing = conviction growing, falling = move rolling over), Price range with cumulative %lift, and a compact **`M I S`** live-presence strip showing which of Momentum/Ignition/Swing currently flag the ticker. The CTE-based aggregation costs ~1.5 s on the prod-sized dataset, so the poller caches the result and refreshes it every ~10 min (every 30 cycles); errors keep the previous list so a transient DB blip doesn't blank the tab. The motivating insight (catching-runners.md): a name that keeps showing up in Ignition day after day isn't an intraday flicker — it's the multi-day setup that CODX/SBFM/FATN all illustrate. Click a Continuation row + look at its 1-h chart = the swing-trader's eye-line.
 - **Swing screener — shipped (2026-05-29).** A separate multi-day setup screen running inside the same poll loop on a ~20-min cadence + a forced 16:30 ET post-close refresh. Different universe than Momentum/Ignition: `$2–$50`, float `5M–100M`, mcap `≥ $50M`. Score 0–100 (Trend 25 + Strength 15 + Setup 25 + Volume 15 + Catalyst 20, shelf penalty −25); setup composite = base detection + 10/5-day breakout + close-strength. Surfaced as a `[Momentum] [Swing]` tab pair in the Screener panel — Ignition sidebar stays put (different axis: real-time discovery vs daily-setup detection). Persisted to `swing_results` (one snapshot per scan, full daily-bar context frozen for backtests). Telegram `/swing` command + alerts at `score ≥ 65` with `broke_out` or a fresh bullish strong/major catalyst. Full spec: [`swing-screener-spec.md`](swing-screener-spec.md).
@@ -174,6 +181,36 @@ order by et_date, session, peak_chg desc;
 
 ## Remaining work / roadmap
 
+**Next-session orientation — the actionable items live under "Tuning from data"
+below.** Building has largely caught up to the spec; the gap is grading the
+shipped alerts/scores against actual outcomes so the thresholds and weights
+can be retuned from real distributions rather than first-pass guesses. The
+shipped pipeline is dense enough now that adding more features without that
+feedback loop will be wasted work.
+
+### Tuning from data (priority — earliest valuable work for a continuing session)
+
+- **Forward outcome tracking** — daily 16:30 ET job that joins each prior
+  `swing_results` / `ignition_results` / Continuation-alerted snapshot to
+  the next N daily bars, computes `final_chg` / `peak_chg` / `drawdown` /
+  `final_pnl`, persists to `*_outcomes` tables. Makes "did the score predict
+  the move?" one SQL JOIN. One-time prerequisite: a `daily_bars` backfill
+  for every persisted ticker (the live backfill only covers the Swing
+  universe today).
+- **Retune scores from outcomes** — once outcome data has a couple of weeks
+  of depth, regress final P&L against each component-score bucket. Most
+  likely candidates for adjustment: Swing `Catalyst 20` weight (durable vs
+  promo class might need higher gap), Ignition `change_score` (the
+  empirical PM-fade finding suggests a steeper penalty on already-extended
+  PM entries), dual-signal `min_ignition_score = 40` threshold.
+- **Dual-signal alert outcome study** — separate forward-track. The 🎯
+  alert is the highest-conviction signal we ship; its hit rate over the
+  next 1, 3, 5 trading days is the most important number to know.
+- **PM-specific alert handling** — see the §"Empirical session performance"
+  analysis above. The Ignition PM hit rate is materially below Regular;
+  the right next move is raising the PM alert threshold (or attaching a
+  "PM entry recommendation" flag tied to `entry_change_pct < ceiling`).
+
 ### Runner-detection roadmap — see [`catching-runners.md`](catching-runners.md)
 
 - **Phase 3 — refinements.** Fully shipped.
@@ -198,6 +235,20 @@ order by et_date, session, peak_chg desc;
 - **PM-specific alert handling** — given the empirical-findings section above (PM is consistently money-losing on hold-to-close), consider either raising the alert threshold during `session === 'premarket'` (e.g. require runner_score ≥ 65), or suppressing PM alerts entirely for the user with `TELEGRAM_USER_ID` set, or adding a separate "PM entry recommendation" flag that only fires when `up_after` is plausibly still ahead (e.g. first_chg below some ceiling).
 - **LLM classifier cache verification** — check `usage.cache_creation_input_tokens` vs `cache_read_input_tokens` from the Anthropic SDK after a few classifications; if reads stay 0, the system prompt is under Sonnet's 2048-token cache minimum and we should pad it with more worked examples (also improves quality).
 - **`regulatory_approval` catalyst type** — the SBFM Health Canada amoxicillin case (May 21) classified as `fda_clinical` because the schema doesn't have a separate bucket for non-FDA drug approvals. Adding it to the Zod enum + system prompt is a one-line change; no DB migration (catalyst_type is unconstrained `text`).
+
+### Continuation / Dual-signal — deferred / tuning
+
+- **`/dual` Telegram command** — answer with the current Continuation ∩ live Ignition intersection on demand, same shape as `/swing` / `/ignition` / `/momentum`. Mirrors the dual-signal alert criteria.
+- **🎯 visual marker in the dashboard** — show on Continuation rows that *currently* qualify (dual-signal active), even if not freshly alerted. Either a column or a separate badge in the existing M/I/S live-presence strip.
+- **Cache cadence retune** — `CONTINUATION_REFRESH_CYCLES = 30` (~10 min) is a guess at the right cost/freshness balance. If the SQL gets faster (e.g. an index on `screener_cycles((polled_at at time zone 'America/New_York')::date)`), drop the cadence to every cycle.
+- **News window** — currently 3 days (`NEWS_LOOKBACK_DAYS`). Once outcome data exists, check whether 2 days / 5 days correlates better with successful Continuation trades.
+
+### History tab — follow-ups
+
+- **Daily summary header** — top-of-day stats (total tickers, busiest session, biggest mover by chg, biggest mover by score). Visible at a glance without scrolling the table.
+- **Cross-day diff** — checkbox to highlight tickers that also appeared on the *previous* ET trading day. Visual continuation hint — every name highlighted has a built-in Day-N story.
+- **Date range / heatmap** — pick a 5–7 day window, get a heatmap of which tickers appeared in which (date, session) cells. Surfaces the multi-day pattern that the single-day view can only hint at.
+- **Per-session filter chip** — quick "show only PM rows" without sort gymnastics.
 
 ### Dashboard / smaller items
 
