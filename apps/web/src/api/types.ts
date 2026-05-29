@@ -159,6 +159,33 @@ export interface SwingRow extends EnrichedRow {
   daily_context: SwingDailyContext;
 }
 
+// One row of the History-by-day endpoint — per-(ticker, session) aggregation
+// of one ET trading day's worth of either the Ignition or Momentum screen.
+// `peak_score` is populated for Ignition rows; `status` is populated for
+// Momentum rows. Catalyst fields are the day's most-impactful classification
+// for the ticker (left-joined, null when none).
+export interface HistoryByDayRow {
+  ticker: string;
+  session: TradingSession;
+  ticks: number;
+  first_at: string;
+  last_at: string;
+  peak_score: number | null;
+  status: RowStatus;
+  min_chg: number | null;
+  max_chg: number | null;
+  min_price: number | null;
+  max_price: number | null;
+  catalyst_score: number | null;
+  catalyst_direction: string | null;
+  catalyst_urgency: string | null;
+  catalyst_type: string | null;
+  news_title: string | null;
+  news_source: string | null;
+}
+
+export type HistoryByDayScreen = 'ignition' | 'momentum';
+
 // Continuation candidate — a ticker that appeared in the Ignition list on
 // 2+ distinct ET trading days within the last 5 days. Pure derivative of
 // ignition_results; the source of truth for the "the same name keeps showing

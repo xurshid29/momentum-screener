@@ -14,6 +14,7 @@ import { FiltersDialog } from './FiltersDialog';
 import { CatalystNewsModal } from './CatalystNewsModal';
 import { SwingTable } from './SwingTable';
 import { ContinuationTable } from './ContinuationTable';
+import { HistoryByDayPanel } from './HistoryByDayPanel';
 
 const { Text } = Typography;
 
@@ -43,7 +44,7 @@ const SESSION_COLOR: Record<TradingSession, string> = {
   closed: '#8c8c8c',
 };
 
-type ScreenerTab = 'momentum' | 'swing' | 'continuation';
+type ScreenerTab = 'momentum' | 'swing' | 'continuation' | 'history';
 
 export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
   const { selected, setSelected } = useSelection();
@@ -316,6 +317,16 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
             children: (
               <SwingTable
                 rows={payload?.swing ?? []}
+                onOpenCatalyst={(ticker, catalyst) => setCatalystModal({ ticker, catalyst })}
+              />
+            ),
+          },
+          {
+            key: 'history',
+            label: 'History',
+            children: (
+              <HistoryByDayPanel
+                payload={payload}
                 onOpenCatalyst={(ticker, catalyst) => setCatalystModal({ ticker, catalyst })}
               />
             ),

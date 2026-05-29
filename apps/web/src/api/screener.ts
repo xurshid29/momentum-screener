@@ -1,5 +1,12 @@
 import { apiClient } from './client';
-import type { CyclePayload, HistoryRow, IgnitionHistoryRow, ScreenerFilterSnapshot } from './types';
+import type {
+  CyclePayload,
+  HistoryByDayRow,
+  HistoryByDayScreen,
+  HistoryRow,
+  IgnitionHistoryRow,
+  ScreenerFilterSnapshot,
+} from './types';
 
 export const screenerApi = {
   async latest(): Promise<CyclePayload> {
@@ -17,6 +24,13 @@ export const screenerApi = {
   async ignitionHistory(ticker: string, limit = 200): Promise<IgnitionHistoryRow[]> {
     const res = await apiClient.get<IgnitionHistoryRow[]>(
       `/api/screener/ignition-history?ticker=${encodeURIComponent(ticker)}&limit=${limit}`,
+    );
+    return res.data;
+  },
+
+  async historyByDay(date: string, screen: HistoryByDayScreen): Promise<HistoryByDayRow[]> {
+    const res = await apiClient.get<HistoryByDayRow[]>(
+      `/api/screener/history-by-day?date=${encodeURIComponent(date)}&screen=${screen}`,
     );
     return res.data;
   },

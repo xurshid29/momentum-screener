@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { sql } from 'kysely';
 import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
 import { authService } from '../services/auth.js';
@@ -122,6 +123,140 @@ router.get('/swing/bars', authMiddleware, async (req, res) => {
   const days = Math.min(parseInt(String(req.query.days ?? '250'), 10) || 250, 1000);
   const bars = await getRecentBars(ticker, days);
   res.json({ data: bars });
+});
+
+// GET /api/screener/history-by-day?date=YYYY-MM-DD&screen=ignition|momentum
+// Per-(ticker, session) aggregation of one ET trading day's worth of either
+// the Ignition screen or the Momentum screen. Catalyst column = the most-
+// impactful news classification that landed for the ticker on that ET day
+// (left-joined; null when no news/classification exists). Drives the
+// dashboard's "History" tab.
+const historyByDaySchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  screen: z.enum(['ignition', 'momentum']).default('ignition'),
+});
+router.get('/history-by-day', authMiddleware, async (req, res) => {
+  const parsed = historyByDaySchema.safeParse(req.query);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Validation failed', details: parsed.error.errors });
+  }
+  const { date, screen } = parsed.data;
+  const db = getDb();
+
+  // Common-shape row regardless of source. Per-ticker, per-session rollup
+  // plus the day's most-impactful catalyst (if any). `peak_score` is null
+  // for Momentum rows since the Momentum table doesn't carry a per-row
+  // composite score the way ignition_results does — Momentum uses `status`
+  // (NEW/ACC/UP/NEWS) for that role, surfaced separately.
+  const result = await sql<{
+    ticker: string;
+    session: string;
+    ticks: number;
+    first_at: string;
+    last_at: string;
+    peak_score: number | null;
+    status: string | null;
+    min_chg: number | null;
+    max_chg: number | null;
+    min_price: number | null;
+    max_price: number | null;
+    catalyst_score: number | null;
+    catalyst_direction: string | null;
+    catalyst_urgency: string | null;
+    catalyst_type: string | null;
+    news_title: string | null;
+    news_source: string | null;
+  }>`
+    ${
+      screen === 'ignition'
+        ? sql`
+            with rows as (
+              select i.ticker, c.session, c.polled_at,
+                     i.runner_score, i.change_pct, i.price
+              from ignition_results i
+              join screener_cycles c on c.id = i.cycle_id
+              where (c.polled_at at time zone 'America/New_York')::date = ${date}::date
+            ),
+            agg as (
+              select ticker, session,
+                     count(*)::int                   as ticks,
+                     min(polled_at)::text            as first_at,
+                     max(polled_at)::text            as last_at,
+                     max(runner_score)::float        as peak_score,
+                     null::text                      as status,
+                     min(change_pct)::float          as min_chg,
+                     max(change_pct)::float          as max_chg,
+                     min(price)::float               as min_price,
+                     max(price)::float               as max_price
+              from rows
+              group by ticker, session
+            )
+          `
+        : sql`
+            with rows as (
+              select r.ticker, c.session, c.polled_at,
+                     r.change_pct, r.price, r.status
+              from screener_results r
+              join screener_cycles c on c.id = r.cycle_id
+              where (c.polled_at at time zone 'America/New_York')::date = ${date}::date
+            ),
+            agg as (
+              select ticker, session,
+                     count(*)::int                   as ticks,
+                     min(polled_at)::text            as first_at,
+                     max(polled_at)::text            as last_at,
+                     null::float                     as peak_score,
+                     -- Status precedence: NEW > ACC > UP > NEWS > —. NEW
+                     -- only fires once per ticker per cycle so it's the
+                     -- strongest day-level signal.
+                     coalesce(
+                       max(status) filter (where status = 'NEW'),
+                       max(status) filter (where status = 'ACC'),
+                       max(status) filter (where status = 'UP'),
+                       max(status) filter (where status = 'NEWS')
+                     )                               as status,
+                     min(change_pct)::float          as min_chg,
+                     max(change_pct)::float          as max_chg,
+                     min(price)::float               as min_price,
+                     max(price)::float               as max_price
+              from rows
+              group by ticker, session
+            )
+          `
+    },
+    day_catalyst as (
+      select distinct on (ntl.ticker)
+             ntl.ticker,
+             nc.impact_score::int   as catalyst_score,
+             nc.direction::text     as catalyst_direction,
+             nc.urgency::text       as catalyst_urgency,
+             nc.catalyst_type       as catalyst_type,
+             na.title               as news_title,
+             na.source::text        as news_source
+      from news_ticker_links ntl
+      join news_articles na on na.id = ntl.article_id
+      left join news_classifications nc on nc.article_id = na.id
+      where (na.published_at at time zone 'America/New_York')::date = ${date}::date
+        and ntl.ticker in (select ticker from agg)
+      -- Per-ticker, prefer the highest impact_score; tie-break on most-recent.
+      order by ntl.ticker, nc.impact_score desc nulls last, na.published_at desc
+    )
+    select agg.ticker, agg.session, agg.ticks,
+           agg.first_at, agg.last_at,
+           agg.peak_score, agg.status,
+           agg.min_chg, agg.max_chg,
+           agg.min_price, agg.max_price,
+           dc.catalyst_score, dc.catalyst_direction, dc.catalyst_urgency,
+           dc.catalyst_type, dc.news_title, dc.news_source
+    from agg
+    left join day_catalyst dc on dc.ticker = agg.ticker
+    order by
+      case agg.session when 'premarket' then 1 when 'regular' then 2 when 'afterhours' then 3 else 4 end,
+      agg.peak_score desc nulls last,
+      agg.max_chg desc nulls last
+  `.execute(db);
+
+  res.json({ data: result.rows });
 });
 
 // GET /api/screener/cycles/:id/results
