@@ -13,10 +13,12 @@ import { useMemo } from 'react';
 import { Table, Typography, Tooltip, Button, Empty } from 'antd';
 import { CloseOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import type { ContinuationRow, CyclePayload } from '../../api/types';
+import type { CatalystInfo, ContinuationRow, CyclePayload, EnrichedRow } from '../../api/types';
 import { useSelection } from '../../context/SelectionContext';
 import { useHiddenTickers } from '../../hooks/useHiddenTickers';
 import { TickerLink } from '../common/TickerLink';
+import { TickerLinks } from '../common/TickerLinks';
+import { CatalystBadge } from '../common/CatalystBadge';
 import { ShelfBadge } from '../common/ShelfBadge';
 
 const { Text } = Typography;
@@ -24,6 +26,7 @@ const { Text } = Typography;
 interface Props {
   rows: ContinuationRow[];
   payload: CyclePayload | null;
+  onOpenCatalyst: (ticker: string, catalyst: CatalystInfo | null) => void;
 }
 
 // Same banding as the other tables' scoreColor — keeps the score language
@@ -42,7 +45,7 @@ function fmtMD(iso: string): string {
   return iso.slice(5);
 }
 
-export function ContinuationTable({ rows: allRows, payload }: Props) {
+export function ContinuationTable({ rows: allRows, payload, onOpenCatalyst }: Props) {
   const { selected, setSelected } = useSelection();
   const { hidden, hide } = useHiddenTickers();
 
@@ -64,14 +67,19 @@ export function ContinuationTable({ rows: allRows, payload }: Props) {
     return { mom, ig, sw };
   }, [payload]);
 
-  // For the shelf badge on the ticker column — look up in the live payloads
-  // since ContinuationRow is bare metadata (no shelf field of its own).
-  const shelfLookup = useMemo(() => {
-    const m = new Map<string, NonNullable<CyclePayload['rows'][number]['shelf']>>();
+  // ContinuationRow is bare metadata (no shelf / catalyst / news_url fields
+  // of its own) — to render the same badges as the other tabs we look the
+  // ticker up in the live payloads. Built once per cycle. Last-write-wins
+  // across the three screens is fine: the catalyst object is shared state.
+  const liveLookup = useMemo(() => {
+    const m = new Map<string, EnrichedRow>();
     if (payload) {
-      for (const r of payload.rows) if (r.shelf) m.set(r.ticker, r.shelf);
-      for (const r of payload.ignition) if (r.shelf) m.set(r.ticker, r.shelf);
-      for (const r of payload.swing) if (r.shelf) m.set(r.ticker, r.shelf);
+      // Order matters only in that later writes win on duplicate tickers;
+      // since all three screens read from the same enrichedByTicker map on
+      // the backend, the row object is the same regardless.
+      for (const r of payload.rows) m.set(r.ticker, r);
+      for (const r of payload.ignition) if (!m.has(r.ticker)) m.set(r.ticker, r);
+      for (const r of payload.swing) if (!m.has(r.ticker)) m.set(r.ticker, r);
     }
     return m;
   }, [payload]);
@@ -79,11 +87,21 @@ export function ContinuationTable({ rows: allRows, payload }: Props) {
   const columns: ColumnsType<ContinuationRow> = useMemo(
     () => [
       {
+        title: '',
+        key: 'links',
+        width: 76,
+        render: (_v, row) => {
+          const live = liveLookup.get(row.ticker);
+          return <TickerLinks ticker={row.ticker} finvizUrl={live?.finviz_url} />;
+        },
+      },
+      {
         title: 'Ticker',
         key: 'ticker',
-        width: 110,
+        width: 140,
         render: (_v, row) => {
-          const shelf = shelfLookup.get(row.ticker) ?? null;
+          const live = liveLookup.get(row.ticker);
+          const shelf = live?.shelf ?? null;
           return (
             <span>
               <TickerLink
@@ -92,6 +110,17 @@ export function ContinuationTable({ rows: allRows, payload }: Props) {
                 stopPropagation
                 style={{ color: '#fff', fontWeight: 600 }}
               />
+              {live?.is_fresh_news && (
+                <span title="Fresh news this cycle"> 🚨</span>
+              )}
+              {live?.has_today_news && (
+                <CatalystBadge
+                  score={live.catalyst?.score ?? null}
+                  reason={live.catalyst?.reason}
+                  type={live.catalyst?.type}
+                  onOpen={() => onOpenCatalyst(row.ticker, live.catalyst ?? null)}
+                />
+              )}
               {shelf && (
                 <span style={{ marginLeft: 6 }}>
                   <ShelfBadge shelf={shelf} />
@@ -105,15 +134,18 @@ export function ContinuationTable({ rows: allRows, payload }: Props) {
         title: 'Days',
         dataIndex: 'days_seen',
         key: 'days_seen',
-        width: 56,
+        width: 64,
         align: 'right',
-        // Days seen is the headline signal — larger = stronger setup. Green
-        // tier kicks in at 4+ (a full trading week of repeat ignition).
+        // Earlier-stage setups (fewer days seen) are the actionable entries —
+        // 5–6-day tickers tend to be the already-extended runners. Sort ASC
+        // by default; the user can flip via the sorter for the established
+        // setups view.
         render: (d: number) => {
           const color = d >= 4 ? '#52c41a' : d >= 3 ? '#faad14' : '#bfbfbf';
           return <span style={{ color, fontWeight: 700, fontSize: 13 }}>{d}</span>;
         },
         sorter: (a, b) => a.days_seen - b.days_seen,
+        defaultSortOrder: 'ascend',
       },
       {
         title: 'Window',
@@ -221,7 +253,7 @@ export function ContinuationTable({ rows: allRows, payload }: Props) {
         ),
       },
     ],
-    [setSelected, hide, liveSets, shelfLookup],
+    [setSelected, hide, liveSets, liveLookup, onOpenCatalyst],
   );
 
   if (allRows.length === 0) {

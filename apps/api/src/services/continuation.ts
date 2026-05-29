@@ -85,8 +85,13 @@ export async function getContinuationCandidates(todayEt: string): Promise<Contin
     from per_day
     group by ticker
     having count(*) >= ${MIN_DAYS_SEEN}
+    -- days_seen ASC by design: fewer days = earlier in the move = the
+    -- actionable entry. 5-6-day tickers are almost always already extended
+    -- (CODX at day 5 was $7+, far past the entry); 2-3-day rows are the
+    -- ones still forming. UI lets the user flip the sorter for the
+    -- established-setups view.
     order by (max(day_peak_score) filter (where et_date = ${todayEt}::date)) is not null desc,
-             count(*) desc,
+             count(*) asc,
              max(day_peak_score) filter (where et_date = ${todayEt}::date) desc nulls last,
              max(day_peak_score) desc
     limit ${RESULT_LIMIT}

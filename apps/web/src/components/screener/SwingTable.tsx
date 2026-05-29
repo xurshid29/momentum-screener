@@ -12,6 +12,7 @@ import type { CatalystInfo, SwingRow, SwingSetupFlags } from '../../api/types';
 import { useSelection } from '../../context/SelectionContext';
 import { useHiddenTickers } from '../../hooks/useHiddenTickers';
 import { TickerLink } from '../common/TickerLink';
+import { TickerLinks } from '../common/TickerLinks';
 import { CatalystBadge } from '../common/CatalystBadge';
 import { ShelfBadge } from '../common/ShelfBadge';
 import { fmtPct, fmtPrice, num } from '../../utils/format';
@@ -44,6 +45,12 @@ export function SwingTable({ rows: allRows, onOpenCatalyst }: Props) {
 
   const columns: ColumnsType<SwingRow> = useMemo(
     () => [
+      {
+        title: '',
+        key: 'links',
+        width: 76,
+        render: (_v, row) => <TickerLinks ticker={row.ticker} finvizUrl={row.finviz_url} />,
+      },
       {
         title: 'Ticker',
         key: 'ticker',

@@ -6,6 +6,7 @@ import type { CatalystInfo, CyclePayload, EnrichedRow, RowStatus, TradingSession
 import { useSelection } from '../../context/SelectionContext';
 import { useHiddenTickers } from '../../hooks/useHiddenTickers';
 import { TickerLink } from '../common/TickerLink';
+import { TickerLinks } from '../common/TickerLinks';
 import { CatalystBadge } from '../common/CatalystBadge';
 import { ShelfBadge } from '../common/ShelfBadge';
 import { fmtPct, fmtFloat, fmtPrice, fmtVolume, fmtMcap, fmtRelVol, fmtBigPct, num } from '../../utils/format';
@@ -57,26 +58,7 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
         title: '',
         key: 'links',
         width: 76,
-        render: (_v, row) => (
-          <Space size={4} onClick={(e) => e.stopPropagation()}>
-            <a
-              href={row.finviz_url}
-              target="_blank"
-              rel="noreferrer"
-              className="screener-link-btn"
-            >
-              <img src="/finviz-icon.png" alt="Finviz" />
-            </a>
-            <a
-              href={`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(row.ticker)}`}
-              target="_blank"
-              rel="noreferrer"
-              className="screener-link-btn"
-            >
-              <img src="/tradingview-icon.png" alt="TradingView" />
-            </a>
-          </Space>
-        ),
+        render: (_v, row) => <TickerLinks ticker={row.ticker} finvizUrl={row.finviz_url} />,
       },
       {
         title: '',
@@ -318,22 +300,23 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
             ),
           },
           {
-            key: 'swing',
-            label: `Swing${payload?.swing && payload.swing.length ? ` · ${payload.swing.length}` : ''}`,
-            children: (
-              <SwingTable
-                rows={payload?.swing ?? []}
-                onOpenCatalyst={(ticker, catalyst) => setCatalystModal({ ticker, catalyst })}
-              />
-            ),
-          },
-          {
             key: 'continuation',
             label: `Continuation${payload?.continuation && payload.continuation.length ? ` · ${payload.continuation.length}` : ''}`,
             children: (
               <ContinuationTable
                 rows={payload?.continuation ?? []}
                 payload={payload}
+                onOpenCatalyst={(ticker, catalyst) => setCatalystModal({ ticker, catalyst })}
+              />
+            ),
+          },
+          {
+            key: 'swing',
+            label: `Swing${payload?.swing && payload.swing.length ? ` · ${payload.swing.length}` : ''}`,
+            children: (
+              <SwingTable
+                rows={payload?.swing ?? []}
+                onOpenCatalyst={(ticker, catalyst) => setCatalystModal({ ticker, catalyst })}
               />
             ),
           },
