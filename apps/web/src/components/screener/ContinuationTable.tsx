@@ -102,6 +102,26 @@ export function ContinuationTable({ rows: allRows, payload, onOpenCatalyst }: Pr
         render: (_v, row) => {
           const live = liveLookup.get(row.ticker);
           const shelf = live?.shelf ?? null;
+          // News badge reads off the row's own 3-day-window catalyst data
+          // (see services/continuation.ts) — covers catalysts that landed
+          // yesterday or 2 days ago, which is the actionable timeframe for
+          // a Continuation entry. The 🚨 stays driven by liveLookup since
+          // it specifically means "this cycle", not "this window".
+          const hasRecentNews = row.news_title != null;
+          // Synthesize a CatalystInfo-shaped object for the modal so it can
+          // open the same shared CatalystNewsModal with the right context.
+          const synthesizedCatalyst: CatalystInfo | null =
+            row.catalyst_score != null && row.catalyst_direction && row.catalyst_urgency && row.catalyst_type
+              ? {
+                  score: row.catalyst_score,
+                  direction: row.catalyst_direction as CatalystInfo['direction'],
+                  urgency: row.catalyst_urgency as CatalystInfo['urgency'],
+                  type: row.catalyst_type,
+                  reason: row.catalyst_reason ?? '',
+                  risk_flags: [],
+                  classifier: 'rules',
+                }
+              : null;
           return (
             <span>
               <TickerLink
@@ -113,12 +133,12 @@ export function ContinuationTable({ rows: allRows, payload, onOpenCatalyst }: Pr
               {live?.is_fresh_news && (
                 <span title="Fresh news this cycle"> 🚨</span>
               )}
-              {live?.has_today_news && (
+              {hasRecentNews && (
                 <CatalystBadge
-                  score={live.catalyst?.score ?? null}
-                  reason={live.catalyst?.reason}
-                  type={live.catalyst?.type}
-                  onOpen={() => onOpenCatalyst(row.ticker, live.catalyst ?? null)}
+                  score={row.catalyst_score}
+                  reason={row.catalyst_reason ?? undefined}
+                  type={row.catalyst_type ?? undefined}
+                  onOpen={() => onOpenCatalyst(row.ticker, synthesizedCatalyst)}
                 />
               )}
               {shelf && (

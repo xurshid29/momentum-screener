@@ -173,6 +173,18 @@ export interface ContinuationRow {
   peak_window: number;          // peak runner_score across the full window
   min_price: number;
   max_price: number;
+  // Most recent news landing within the last ~3 days, joined with its
+  // catalyst classification. catalyst_* fields stay null when the article
+  // hasn't been classified yet — the CatalystBadge then renders ✨.
+  news_title: string | null;
+  news_url: string | null;
+  news_source: string | null;
+  news_published_at: string | null;
+  catalyst_score: number | null;
+  catalyst_direction: string | null;
+  catalyst_urgency: string | null;
+  catalyst_type: string | null;
+  catalyst_reason: string | null;
 }
 
 export interface NewsHeadline {
