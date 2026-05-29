@@ -100,6 +100,17 @@ const SWING = {
 // natural change rate. See services/continuation.ts for the query cost.
 const CONTINUATION_REFRESH_CYCLES = 30;
 
+// Dual-signal alert — fires when a ticker on the Continuation list (≥ 2 days
+// of Ignition history) also has a meaningful Ignition score *this* cycle.
+// That's the CODX-day-2/3 trigger: not the first day's spike (caught by the
+// vanilla Ignition alert), but the *confirmation* that the multi-day move is
+// real. Score floor is lower than Ignition's 58 because the multi-day prior
+// already de-risks the signal. Bullish-only — a continuation candidate that
+// also has bearish news landing today is a fade in progress, not a runner.
+const DUAL_SIGNAL = {
+  min_ignition_score: 40,
+};
+
 export interface CyclePayload {
   cycle_id: string;
   polled_at: string;
@@ -239,6 +250,8 @@ class PollerService {
   private lastForcedSwingPostCloseDate = '';
   // Tickers already Telegram-alerted from the Swing screener today.
   private alertedSwing = new Set<string>();
+  // Tickers already Telegram-alerted from the Continuation dual-signal today.
+  private alertedDualSignal = new Set<string>();
   // Continuation list cache. The SQL aggregation over 5 days of ignition_results
   // costs ~1.5 s on the prod-sized dataset — too much for every 20 s cycle.
   // Refresh every CONTINUATION_REFRESH_CYCLES cycles (~10 min) and re-broadcast
@@ -379,6 +392,7 @@ class PollerService {
       this.alertedUrls.clear();
       this.alertedIgnition.clear();
       this.alertedSwing.clear();
+      this.alertedDualSignal.clear();
       this.lastForcedSwingPostCloseDate = '';
       // Anchored VWAP must reset across days so yesterday's tallies don't
       // contaminate today's. Session-boundary changes inside a day deliberately
@@ -908,6 +922,7 @@ class PollerService {
       this.pushAlerts(enriched);
       this.pushIgnitionAlerts(ignition);
       if (swingFreshlyScored) this.pushSwingAlerts(scoredSwing);
+      this.pushDualSignalAlerts(ignition);
     }
 
     // Fire-and-forget LLM refinement of any rule-classified articles.
@@ -1256,6 +1271,35 @@ class PollerService {
     }
   }
 
+  // Dual-signal alert — fires the first time a Continuation ticker (≥ 2 days
+  // of Ignition history) also clears the live Ignition score floor on the
+  // same cycle. The CODX-day-2/3 trigger: the *confirmation* that the move
+  // is multi-day, not just a one-session pump. Dedup once per ticker per ET
+  // day. Bullish-only: a continuation candidate with a fresh bearish
+  // catalyst is a fade-in-progress, not a runner. No entry-change% cap here
+  // because the multi-day prior is itself the entry-quality filter (these
+  // names are already extended *by design* — we want to alert the trader
+  // anyway so they can read the chart and decide).
+  private pushDualSignalAlerts(rows: IgnitionRow[]): void {
+    if (!telegramEnabled() || this.alertsMuted) return;
+    if (this.lastContinuation.length === 0) return;
+    // Index the continuation list once per cycle for O(1) ticker lookup.
+    const contBy = new Map<string, ContinuationCandidate>();
+    for (const c of this.lastContinuation) contBy.set(c.ticker, c);
+    for (const r of rows) {
+      const cont = contBy.get(r.ticker);
+      if (!cont) continue;
+      if (this.alertedDualSignal.has(r.ticker)) continue;
+      if (r.runner_score < DUAL_SIGNAL.min_ignition_score) continue;
+      // Skip bearish catalysts and crashing moves — same direction-awareness
+      // as the Ignition alert path.
+      if (r.catalyst?.direction === 'bearish') continue;
+      if (r.change_pct != null && r.change_pct < 0) continue;
+      this.alertedDualSignal.add(r.ticker);
+      void sendTelegram(formatDualSignalAlert(r, cont));
+    }
+  }
+
   // Telegram alert for a Swing row — once per ticker per ET day. Trigger:
   // swing_score ≥ SWING.alert_score AND either the 10-day breakout flag is
   // set OR a bullish strong/major catalyst landed this cycle. The catalyst
@@ -1334,6 +1378,32 @@ function formatIgnitionAlert(r: IgnitionRow): string {
   const lines = [
     `⚡ <b>${escapeHtml(r.ticker)}</b>  ${price}  ${chg}`.trimEnd(),
     `<b>Ignition ${r.runner_score}</b> · float ${b.float} / vol ${b.volume} / cat ${b.catalyst} / early ${b.earliness} / halt ${b.halt} / shelf ${b.shelf}`,
+    meta.join(' · '),
+    r.news_title ? `“${escapeHtml(r.news_title)}”` : '',
+    shelfAlertLine(r.shelf),
+    `<a href="${escapeHtml(r.finviz_url)}">Finviz</a> · <a href="${tv}">TradingView</a>`,
+  ];
+  return lines.filter(Boolean).join('\n');
+}
+
+// Render a dual-signal alert — a Continuation candidate (≥ 2 days of
+// Ignition history) that also has a meaningful live Ignition score this
+// cycle. The narrative is "this isn't day 1 — the move is confirming";
+// the message leads with the day count + score trajectory rather than
+// the raw runner-score, then folds in the live Ignition meta + catalyst.
+function formatDualSignalAlert(r: IgnitionRow, c: ContinuationCandidate): string {
+  const price = r.price == null ? '' : `$${r.price.toFixed(2)}`;
+  const chg = r.change_pct == null ? '' : `${r.change_pct >= 0 ? '+' : ''}${r.change_pct.toFixed(1)}%`;
+  const firstSeenMd = c.first_seen.slice(5);  // MM-DD
+  const trajectory = `Day ${c.days_seen} · score ${Math.round(c.first_day_peak)} → ${Math.round(r.runner_score)}`;
+  const meta: string[] = [];
+  if (r.float_m != null) meta.push(`float ${r.float_m.toFixed(1)}M`);
+  if (r.rel_vol_5min != null) meta.push(`RVol5m ${Math.round(r.rel_vol_5min)}%`);
+  if (r.catalyst) meta.push(`catalyst ${r.catalyst.score}`);
+  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}`;
+  const lines = [
+    `🎯 <b>${escapeHtml(r.ticker)}</b>  ${price}  ${chg}`.trimEnd(),
+    `<b>${trajectory}</b> · first seen ${firstSeenMd} · multi-day setup confirming`,
     meta.join(' · '),
     r.news_title ? `“${escapeHtml(r.news_title)}”` : '',
     shelfAlertLine(r.shelf),
