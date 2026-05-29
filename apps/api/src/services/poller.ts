@@ -28,6 +28,7 @@ import {
 } from './swing-score.js';
 import { shelf, type ShelfInfo } from './shelf.js';
 import { dailyBars, getRecentBarsForTickers } from './daily-bars.js';
+import { getContinuationCandidates, type ContinuationCandidate } from './continuation.js';
 import { classifyByRules, type Classification, type ClassifierInput } from './catalyst-rules.js';
 import { classifyByClaude } from './catalyst-claude.js';
 
@@ -94,6 +95,11 @@ const SWING = {
   post_close_minute_et: 16 * 60 + 30,
 };
 
+// Continuation list — every Nth cycle re-runs the SQL aggregation. 30 cycles
+// at the 20 s base interval ≈ 10 min, well inside the "days seen" signal's
+// natural change rate. See services/continuation.ts for the query cost.
+const CONTINUATION_REFRESH_CYCLES = 30;
+
 export interface CyclePayload {
   cycle_id: string;
   polled_at: string;
@@ -107,6 +113,7 @@ export interface CyclePayload {
   fresh_news: NewsHeadline[];
   ignition: IgnitionRow[];
   swing: SwingRow[];
+  continuation: ContinuationCandidate[];
 }
 
 export interface EnrichedRow extends ScreenerRow {
@@ -232,6 +239,14 @@ class PollerService {
   private lastForcedSwingPostCloseDate = '';
   // Tickers already Telegram-alerted from the Swing screener today.
   private alertedSwing = new Set<string>();
+  // Continuation list cache. The SQL aggregation over 5 days of ignition_results
+  // costs ~1.5 s on the prod-sized dataset — too much for every 20 s cycle.
+  // Refresh every CONTINUATION_REFRESH_CYCLES cycles (~10 min) and re-broadcast
+  // the cached value in between. The signal updates on the scale of days, so
+  // the cache freshness is more than enough.
+  private continuationCounter = 0;
+  private lastContinuation: ContinuationCandidate[] = [];
+  private lastContinuationComputedAt = 0;
   // Runtime mute for Telegram alerts — toggled by the bot's /alerts command.
   // Resets to false on restart by design (no persistence — the dashboard +
   // sidebar still surface everything, this only quiets the push channel).
@@ -257,6 +272,13 @@ class PollerService {
           ? new Date(this.lastSwingComputedAt).toISOString()
           : null,
         last_post_close_refresh: this.lastForcedSwingPostCloseDate || null,
+      },
+      continuation: {
+        cycle_counter: this.continuationCounter,
+        cached_rows: this.lastContinuation.length,
+        last_computed_at: this.lastContinuationComputedAt
+          ? new Date(this.lastContinuationComputedAt).toISOString()
+          : null,
       },
       telegram_enabled: telegramEnabled(),
       config: this.config,
@@ -401,6 +423,23 @@ class PollerService {
       this.swingCounter === 1 ||
       this.swingCounter % SWING.cadence_cycles === 0 ||
       isPostCloseTrigger;
+
+    // Continuation cadence — independent of Swing. The SQL aggregation
+    // (5-day window over ignition_results) costs ~1.5 s, so we cache and
+    // refresh on a slow drumbeat. Errors keep the previous list rather than
+    // emptying the tab on a transient DB blip.
+    this.continuationCounter += 1;
+    const shouldRefreshContinuation =
+      this.continuationCounter === 1 ||
+      this.continuationCounter % CONTINUATION_REFRESH_CYCLES === 0;
+    if (shouldRefreshContinuation) {
+      try {
+        this.lastContinuation = await getContinuationCandidates(todayEt);
+        this.lastContinuationComputedAt = Date.now();
+      } catch (err) {
+        console.error('[poller] continuation refresh failed:', err);
+      }
+    }
 
     // 1) screener — two or three screens in parallel. Momentum + Ignition
     // every cycle; Swing only on the cadence-trigger cycles above.
@@ -839,6 +878,7 @@ class PollerService {
       rows: enriched,
       ignition,
       swing: scoredSwing,
+      continuation: this.lastContinuation,
       banners: { new_with_catalyst: newWithCatalyst, fresh_news: freshList },
       fresh_news: enriched
         .filter((r) => r.is_fresh_news && r.news_title)
@@ -856,7 +896,7 @@ class PollerService {
     this.firstPoll = false;
     broadcast('cycle', payload);
     console.log(
-      `[poller] ${nowHms()} — ${enriched.length} rows, ${ignition.length} ignition, ${scoredSwing.length} swing${swingFreshlyScored ? ' (refreshed)' : ''}, ${newWithCatalyst.length} new+catalyst, ${freshList.length} fresh`,
+      `[poller] ${nowHms()} — ${enriched.length} rows, ${ignition.length} ignition, ${scoredSwing.length} swing${swingFreshlyScored ? ' (refreshed)' : ''}, ${this.lastContinuation.length} continuation${shouldRefreshContinuation ? ' (refreshed)' : ''}, ${newWithCatalyst.length} new+catalyst, ${freshList.length} fresh`,
     );
 
     // Telegram alerts — fresh high-impact rows + Ignition runner-score hits.

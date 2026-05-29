@@ -12,6 +12,7 @@ import { fmtPct, fmtFloat, fmtPrice, fmtVolume, fmtMcap, fmtRelVol, fmtBigPct, n
 import { FiltersDialog } from './FiltersDialog';
 import { CatalystNewsModal } from './CatalystNewsModal';
 import { SwingTable } from './SwingTable';
+import { ContinuationTable } from './ContinuationTable';
 
 const { Text } = Typography;
 
@@ -41,7 +42,7 @@ const SESSION_COLOR: Record<TradingSession, string> = {
   closed: '#8c8c8c',
 };
 
-type ScreenerTab = 'momentum' | 'swing';
+type ScreenerTab = 'momentum' | 'swing' | 'continuation';
 
 export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
   const { selected, setSelected } = useSelection();
@@ -323,6 +324,16 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
               <SwingTable
                 rows={payload?.swing ?? []}
                 onOpenCatalyst={(ticker, catalyst) => setCatalystModal({ ticker, catalyst })}
+              />
+            ),
+          },
+          {
+            key: 'continuation',
+            label: `Continuation${payload?.continuation && payload.continuation.length ? ` · ${payload.continuation.length}` : ''}`,
+            children: (
+              <ContinuationTable
+                rows={payload?.continuation ?? []}
+                payload={payload}
               />
             ),
           },

@@ -159,6 +159,22 @@ export interface SwingRow extends EnrichedRow {
   daily_context: SwingDailyContext;
 }
 
+// Continuation candidate — a ticker that appeared in the Ignition list on
+// 2+ distinct ET trading days within the last 5 days. Pure derivative of
+// ignition_results; the source of truth for the "the same name keeps showing
+// up = multi-day setup forming" play, surfaced as the third Screener tab.
+export interface ContinuationRow {
+  ticker: string;
+  days_seen: number;            // distinct ET days in the lookback window
+  first_seen: string;           // YYYY-MM-DD
+  last_seen: string;            // YYYY-MM-DD
+  first_day_peak: number;       // peak runner_score on the first day seen
+  today_peak: number | null;    // peak score in today's ET session; null if absent today
+  peak_window: number;          // peak runner_score across the full window
+  min_price: number;
+  max_price: number;
+}
+
 export interface NewsHeadline {
   ticker: string;
   source: NewsSource;
@@ -179,6 +195,7 @@ export interface CyclePayload {
   rows: EnrichedRow[];
   ignition: IgnitionRow[];
   swing: SwingRow[];
+  continuation: ContinuationRow[];
   banners: { new_with_catalyst: string[]; fresh_news: string[] };
   fresh_news: NewsHeadline[];
 }
