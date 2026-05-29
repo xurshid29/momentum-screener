@@ -72,6 +72,11 @@ const IGNITION = {
   // and re-fires the score gets a fresh second-leg alert.
   alert_entry_chg_max: 40,
   new_window_ms: 120_000,  // a ticker stays flagged "new" for 2 min after first entering the set
+  // A transient empty Ignition fetch (the Finviz screener export occasionally
+  // fails or returns an empty 200) shouldn't blank the sidebar or reset every
+  // "new" flag. Reuse the last good list for up to this long before accepting
+  // an empty result as a genuine clear (market close / quiet overnight).
+  reuse_max_ms: 180_000,   // 3 min ≈ 9 cycles
 };
 
 // Swing screener — multi-day setups. Runs inside the same 20s poll loop but
@@ -241,6 +246,12 @@ class PollerService {
   // present tickers are kept, so a ticker that leaves and returns re-counts
   // as new, and no daily/session clear is needed.
   private ignitionFirstSeen = new Map<string, number>();
+  // Last successfully-scored Ignition list + when it was computed. Reused for
+  // up to IGNITION.reuse_max_ms when a cycle's Finviz ignition fetch comes back
+  // empty (a transient hiccup) so the sidebar doesn't blank and the "new" flags
+  // don't all reset on recovery.
+  private lastIgnition: IgnitionRow[] = [];
+  private lastIgnitionAt = 0;
   // Swing screener cadence — fetch + score every SWING.cadence_cycles cycles
   // (~20 min) plus a forced 16:30 ET post-close refresh. Between scans we
   // re-broadcast lastSwingRows unchanged.
@@ -455,10 +466,17 @@ class PollerService {
       }
     }
 
-    // 1) screener — two or three screens in parallel. Momentum + Ignition
-    // every cycle; Swing only on the cadence-trigger cycles above.
+    // 1) screener — Momentum + Ignition every cycle, Swing only on the
+    // cadence-trigger cycles. The two intraday screens fetch as a pair; the
+    // Swing fetch (a third concurrent Finviz export) is deliberately fired
+    // *after* they resolve rather than alongside them. Firing all three at
+    // once made Finviz rate-limit the burst, and the Ignition call was the
+    // one that lost — it fell into its .catch() and returned empty on every
+    // swing-refresh cycle (~once per 20 min), blanking the sidebar and
+    // resetting its "new" flags. Sequencing the swing fetch keeps the
+    // every-cycle pair at two concurrent calls.
     const ignitionFilter = session === 'premarket' ? IGNITION.premarket_filter : IGNITION.filter;
-    const [rows, ignitionRaw, swingRaw] = await Promise.all([
+    const [rows, ignitionRaw] = await Promise.all([
       fetchScreener({
         filter: this.config.filter,
         floatMaxM: this.config.float_max_m,
@@ -471,15 +489,15 @@ class PollerService {
         topN: IGNITION.top_n,
         session,
       }).catch(() => [] as ScreenerRow[]),
-      shouldRefreshSwing
-        ? fetchScreener({
-            filter: SWING.filter,
-            floatMaxM: SWING.float_max_m,
-            topN: SWING.top_n,
-            session,
-          }).catch(() => [] as ScreenerRow[])
-        : Promise.resolve([] as ScreenerRow[]),
     ]);
+    const swingRaw = shouldRefreshSwing
+      ? await fetchScreener({
+          filter: SWING.filter,
+          floatMaxM: SWING.float_max_m,
+          topN: SWING.top_n,
+          session,
+        }).catch(() => [] as ScreenerRow[])
+      : ([] as ScreenerRow[]);
     // sh_price_u10 has no lower bound — drop sub-dime junk.
     const ignitionRows = ignitionRaw.filter(
       (r) => r.price != null && r.price >= IGNITION.min_price,
@@ -772,50 +790,71 @@ class PollerService {
     // present — this keeps each survivor's firstSeen stable while letting a
     // ticker that leaves and returns re-count as new.
     const nowMs = Date.now();
-    for (const r of ignitionRows) {
-      if (!this.ignitionFirstSeen.has(r.ticker)) this.ignitionFirstSeen.set(r.ticker, nowMs);
-    }
-    const ignitionPresent = new Set(ignitionRows.map((r) => r.ticker));
-    for (const t of this.ignitionFirstSeen.keys()) {
-      if (!ignitionPresent.has(t)) this.ignitionFirstSeen.delete(t);
-    }
+    // A single empty Ignition fetch used to blank the sidebar *and* wipe
+    // ignitionFirstSeen via the prune below — so on recovery every surviving
+    // ticker re-counted as "new" and the whole list flashed back as a fresh
+    // NEW group. When this cycle produced no ignition rows but we have a
+    // recent good list, treat it as a transient hiccup: reuse the last list
+    // and leave firstSeen untouched. Bounded by reuse_max_ms so a genuine
+    // clear (market close / quiet overnight) still empties the sidebar.
+    const ignitionHiccup =
+      ignitionRows.length === 0 &&
+      this.lastIgnition.length > 0 &&
+      nowMs - this.lastIgnitionAt < IGNITION.reuse_max_ms;
 
-    const scoredIgnition: IgnitionRow[] = ignitionRows
-      .map((r) => {
-        const e = enrichedByTicker.get(r.ticker)!;
-        const rs = scoreRunner({
-          float_m: e.float_m,
-          rel_vol_5min: e.rel_vol_5min,
-          rel_volume: e.rel_volume,
-          catalyst_score: e.catalyst?.score ?? null,
-          catalyst_direction: e.catalyst?.direction ?? null,
-          change_pct: e.change_pct,
-          is_halt: e.news_source === 'halt',
-          shelf_level: e.shelf?.level ?? null,
-        });
-        const firstSeen = this.ignitionFirstSeen.get(r.ticker) ?? nowMs;
-        return {
-          ...e,
-          runner_score: rs.score,
-          score_breakdown: rs.breakdown,
-          is_new: nowMs - firstSeen <= IGNITION.new_window_ms,
-        };
-      })
-      .sort((a, b) => b.runner_score - a.runner_score);
+    let ignition: IgnitionRow[];
+    let ignitionFreshlyScored = false;
+    if (ignitionHiccup) {
+      ignition = this.lastIgnition;
+    } else {
+      for (const r of ignitionRows) {
+        if (!this.ignitionFirstSeen.has(r.ticker)) this.ignitionFirstSeen.set(r.ticker, nowMs);
+      }
+      const ignitionPresent = new Set(ignitionRows.map((r) => r.ticker));
+      for (const t of this.ignitionFirstSeen.keys()) {
+        if (!ignitionPresent.has(t)) this.ignitionFirstSeen.delete(t);
+      }
 
-    // Drop rows the runner-score has already disqualified (clamped to 0).
-    // The volume-led Finviz filter has no change% gate by design, so it lets
-    // through crashes and low-quality dilution-flagged names — the score
-    // tags them as non-ignitions; the broadcast shouldn't carry them. This
-    // does NOT hide cold-start fresh entries (they score ≥ float-component
-    // ≈ 15-30) or volume-led turnaround setups (they score 48+).
-    const candidates = scoredIgnition.filter((r) => r.runner_score > 0);
-    // New rows bypass the score cutoff entirely — a fresh low-score name (its
-    // 5-min RVol not yet measurable) must never be buried. Top rows are the
-    // established names, ranked and capped. The payload carries both.
-    const newIgnition = candidates.filter((r) => r.is_new);
-    const topIgnition = candidates.filter((r) => !r.is_new).slice(0, IGNITION.broadcast_n);
-    const ignition: IgnitionRow[] = [...newIgnition, ...topIgnition];
+      const scoredIgnition: IgnitionRow[] = ignitionRows
+        .map((r) => {
+          const e = enrichedByTicker.get(r.ticker)!;
+          const rs = scoreRunner({
+            float_m: e.float_m,
+            rel_vol_5min: e.rel_vol_5min,
+            rel_volume: e.rel_volume,
+            catalyst_score: e.catalyst?.score ?? null,
+            catalyst_direction: e.catalyst?.direction ?? null,
+            change_pct: e.change_pct,
+            is_halt: e.news_source === 'halt',
+            shelf_level: e.shelf?.level ?? null,
+          });
+          const firstSeen = this.ignitionFirstSeen.get(r.ticker) ?? nowMs;
+          return {
+            ...e,
+            runner_score: rs.score,
+            score_breakdown: rs.breakdown,
+            is_new: nowMs - firstSeen <= IGNITION.new_window_ms,
+          };
+        })
+        .sort((a, b) => b.runner_score - a.runner_score);
+
+      // Drop rows the runner-score has already disqualified (clamped to 0).
+      // The volume-led Finviz filter has no change% gate by design, so it lets
+      // through crashes and low-quality dilution-flagged names — the score
+      // tags them as non-ignitions; the broadcast shouldn't carry them. This
+      // does NOT hide cold-start fresh entries (they score ≥ float-component
+      // ≈ 15-30) or volume-led turnaround setups (they score 48+).
+      const candidates = scoredIgnition.filter((r) => r.runner_score > 0);
+      // New rows bypass the score cutoff entirely — a fresh low-score name (its
+      // 5-min RVol not yet measurable) must never be buried. Top rows are the
+      // established names, ranked and capped. The payload carries both.
+      const newIgnition = candidates.filter((r) => r.is_new);
+      const topIgnition = candidates.filter((r) => !r.is_new).slice(0, IGNITION.broadcast_n);
+      ignition = [...newIgnition, ...topIgnition];
+      this.lastIgnition = ignition;
+      this.lastIgnitionAt = nowMs;
+      ignitionFreshlyScored = true;
+    }
 
     // 3b) Swing scoring — only on the cadence-trigger cycles. Reads daily
     // bars from the daily_bars table (populated by the DailyBarsService);
@@ -873,7 +912,7 @@ class PollerService {
     // 5) persist — Swing rows only on the cycles that re-scored, so the
     // swing_results table holds one snapshot per ~20 min, not per 20 s.
     const cycleId = await this.persistCycle(
-      session, enriched, ignition, swingFreshlyScored ? scoredSwing : [],
+      session, enriched, ignitionFreshlyScored ? ignition : [], swingFreshlyScored ? scoredSwing : [],
       bzDelta?.articles, finvizNews, yahooNews,
       edgarDelta?.filings, haltDelta?.halts,
     );
@@ -910,7 +949,7 @@ class PollerService {
     this.firstPoll = false;
     broadcast('cycle', payload);
     console.log(
-      `[poller] ${nowHms()} — ${enriched.length} rows, ${ignition.length} ignition, ${scoredSwing.length} swing${swingFreshlyScored ? ' (refreshed)' : ''}, ${this.lastContinuation.length} continuation${shouldRefreshContinuation ? ' (refreshed)' : ''}, ${newWithCatalyst.length} new+catalyst, ${freshList.length} fresh`,
+      `[poller] ${nowHms()} — ${enriched.length} rows, ${ignition.length} ignition${ignitionHiccup ? ' (reused)' : ''}, ${scoredSwing.length} swing${swingFreshlyScored ? ' (refreshed)' : ''}, ${this.lastContinuation.length} continuation${shouldRefreshContinuation ? ' (refreshed)' : ''}, ${newWithCatalyst.length} new+catalyst, ${freshList.length} fresh`,
     );
 
     // Telegram alerts — fresh high-impact rows + Ignition runner-score hits.
