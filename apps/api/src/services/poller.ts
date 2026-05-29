@@ -861,10 +861,13 @@ class PollerService {
 
     // Telegram alerts — fresh high-impact rows + Ignition runner-score hits.
     // Skipped on the first poll so a restart's news backfill and cold-start
-    // ignition set don't blast a burst of alerts.
+    // ignition set don't blast a burst of alerts. Swing alerts only fire on
+    // cycles where the swing scan freshly ran (otherwise we'd re-walk the
+    // cached list every cycle, doing no work but for no reason).
     if (!wasFirstPoll) {
       this.pushAlerts(enriched);
       this.pushIgnitionAlerts(ignition);
+      if (swingFreshlyScored) this.pushSwingAlerts(scoredSwing);
     }
 
     // Fire-and-forget LLM refinement of any rule-classified articles.
@@ -1212,6 +1215,29 @@ class PollerService {
       void sendTelegram(formatIgnitionAlert(r));
     }
   }
+
+  // Telegram alert for a Swing row — once per ticker per ET day. Trigger:
+  // swing_score ≥ SWING.alert_score AND either the 10-day breakout flag is
+  // set OR a bullish strong/major catalyst landed this cycle. The catalyst
+  // clause matches the alert criteria in docs/swing-screener-spec.md §7 —
+  // a fresh durable catalyst is alert-worthy even on a clean trend without
+  // a textbook breakout. Bearish catalysts never alert.
+  private pushSwingAlerts(rows: SwingRow[]): void {
+    if (!telegramEnabled() || this.alertsMuted) return;
+    for (const r of rows) {
+      if (this.alertedSwing.has(r.ticker)) continue;
+      if (r.swing_score < SWING.alert_score) continue;
+      const c = r.catalyst;
+      const freshBullishCatalyst =
+        r.is_fresh_news &&
+        c != null &&
+        c.direction === 'bullish' &&
+        (c.urgency === 'strong' || c.urgency === 'major');
+      if (!r.setup_flags.broke_out && !freshBullishCatalyst) continue;
+      this.alertedSwing.add(r.ticker);
+      void sendTelegram(formatSwingAlert(r));
+    }
+  }
 }
 
 export const poller = new PollerService();
@@ -1270,6 +1296,47 @@ function formatIgnitionAlert(r: IgnitionRow): string {
     `<b>Ignition ${r.runner_score}</b> · float ${b.float} / vol ${b.volume} / cat ${b.catalyst} / early ${b.earliness} / halt ${b.halt} / shelf ${b.shelf}`,
     meta.join(' · '),
     r.news_title ? `“${escapeHtml(r.news_title)}”` : '',
+    shelfAlertLine(r.shelf),
+    `<a href="${escapeHtml(r.finviz_url)}">Finviz</a> · <a href="${tv}">TradingView</a>`,
+  ];
+  return lines.filter(Boolean).join('\n');
+}
+
+// Render a Swing row as a Telegram HTML-mode message. The flag strip
+// surfaces the trigger reason at a glance — 📈 base/breakout pattern,
+// 🔥 fresh catalyst — and the daily-context line carries the
+// swing-trader's eye-line metrics (vs 52WH, vs 20-SMA, Vol×Avg).
+function formatSwingAlert(r: SwingRow): string {
+  const b = r.score_breakdown;
+  const ctx = r.daily_context;
+  const flags = r.setup_flags;
+  const price = r.price == null ? '' : `$${r.price.toFixed(2)}`;
+  const chg = r.change_pct == null ? '' : `${r.change_pct >= 0 ? '+' : ''}${r.change_pct.toFixed(1)}%`;
+
+  // Eye-line metrics — empty when the daily-bar context wasn't deep enough.
+  const eyes: string[] = [];
+  if (ctx.dist_52w_high_pct != null) {
+    eyes.push(`52WH ${ctx.dist_52w_high_pct >= 0 ? '+' : ''}${ctx.dist_52w_high_pct.toFixed(1)}%`);
+  }
+  if (ctx.sma_20 != null && r.price != null && ctx.sma_20 > 0) {
+    const pct = ((r.price - ctx.sma_20) / ctx.sma_20) * 100;
+    eyes.push(`20SMA ${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`);
+  }
+  if (r.volume != null && ctx.avg_volume_20 != null && ctx.avg_volume_20 > 0) {
+    eyes.push(`Vol×Avg ${(r.volume / ctx.avg_volume_20).toFixed(1)}×`);
+  }
+
+  // Trigger label — what got this past the gate.
+  const trigger = flags.broke_out
+    ? '📈 10-day breakout'
+    : '🔥 fresh catalyst';
+
+  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}`;
+  const lines = [
+    `📊 <b>${escapeHtml(r.ticker)}</b>  ${price}  ${chg}`.trimEnd(),
+    `<b>Swing ${r.swing_score}</b> · ${trigger} · trend ${b.trend} / setup ${b.setup} / vol ${b.volume} / cat ${b.catalyst} / shelf ${b.shelf}`,
+    eyes.join(' · '),
+    r.catalyst && r.news_title ? `“${escapeHtml(r.news_title)}”` : '',
     shelfAlertLine(r.shelf),
     `<a href="${escapeHtml(r.finviz_url)}">Finviz</a> · <a href="${tv}">TradingView</a>`,
   ];

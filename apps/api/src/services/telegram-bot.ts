@@ -19,7 +19,7 @@ import {
   telegramEnabled,
   type TelegramUpdate,
 } from './telegram.js';
-import type { EnrichedRow, IgnitionRow } from './poller.js';
+import type { EnrichedRow, IgnitionRow, SwingRow } from './poller.js';
 
 class TelegramBotService {
   private running = false;
@@ -50,6 +50,7 @@ class TelegramBotService {
     void setBotCommands([
       { command: 'ignition', description: 'Current Ignition list' },
       { command: 'momentum', description: 'Current Momentum list' },
+      { command: 'swing', description: 'Current Swing list' },
       { command: 'status', description: 'Poller status' },
       { command: 'ticker', description: 'Quick stats for a ticker' },
       { command: 'hidden', description: 'List hidden tickers' },
@@ -127,6 +128,9 @@ async function dispatch(cmd: string, args: string[]): Promise<string | null> {
     case 'momentum':
     case 'mom':
       return formatMomentumList(parseN(args[0], 15));
+    case 'swing':
+    case 'sw':
+      return formatSwingList(parseN(args[0], 15));
     case 'status':
       return formatStatus();
     case 'ticker':
@@ -162,13 +166,14 @@ function formatHelp(): string {
     '',
     '<b>/ignition</b> [N] · current Ignition list (default 15)',
     '<b>/momentum</b> [N] · current Momentum list',
+    '<b>/swing</b> [N] · current Swing list',
     '<b>/status</b> · poller status',
     '<b>/ticker</b> SYMBOL · quick stats for one ticker',
     '<b>/hidden</b> · list hidden tickers',
     '<b>/unhide</b> SYMBOL · restore a hidden ticker',
     '<b>/alerts</b> on|off · pause or resume alerts',
     '',
-    '<i>Short forms:</i> /ig /mom /t',
+    '<i>Short forms:</i> /ig /mom /sw /t',
   ].join('\n');
 }
 
@@ -250,6 +255,38 @@ function formatMomentumLine(r: EnrichedRow): string {
   return `<b>${escapeHtml(r.ticker)}</b> ${chg}  ${price}  ${float}·${rvol}${cat}${sh}${status}`;
 }
 
+function formatSwingList(n: number): string {
+  const p = poller.getLastPayload();
+  if (!p) return 'No cycle yet — poller is starting up.';
+  if (!p.swing || p.swing.length === 0) {
+    return 'No Swing candidates yet. The first scan runs at startup, then every ~20 min; daily-bar backfill seeds the score.';
+  }
+  const rows = p.swing.slice(0, n);
+  const header = `📊 <b>Swing</b> (${p.swing.length}) · ${etTimeShort(p.polled_at)} ET · ${p.session}`;
+  return [header, '', ...rows.map(formatSwingLine)].join('\n');
+}
+
+// Compact one-liner for the /swing list. Setup flags ride as a tiny glyph
+// strip (📦 base · ↑10 / ↑5 breakout · ⬆ close-strength); vs-52WH gives the
+// "near the highs?" eyeball.
+function formatSwingLine(r: SwingRow): string {
+  const price = r.price == null ? '' : `$${r.price.toFixed(2)}`;
+  const chg = r.change_pct == null ? '' : `${r.change_pct >= 0 ? '+' : ''}${r.change_pct.toFixed(1)}%`;
+  const dist = r.daily_context.dist_52w_high_pct;
+  const distTxt = dist == null ? '' : ` 52WH${dist >= 0 ? '+' : ''}${dist.toFixed(0)}%`;
+  const flags = [
+    r.setup_flags.in_base ? '📦' : '',
+    r.setup_flags.broke_out ? '↑10' : r.setup_flags.broke_out_5d ? '↑5' : '',
+    r.setup_flags.close_in_top_q ? '⬆' : '',
+  ].filter(Boolean).join('');
+  const flagsStr = flags ? ` ${flags}` : '';
+  const cat = r.catalyst && r.catalyst.urgency !== 'ignore'
+    ? ` ${catalystGlyph(r.catalyst.direction)}${r.catalyst.score}`
+    : '';
+  const sh = r.shelf ? ` ${shelfGlyph(r.shelf.level)}` : '';
+  return `<b>${escapeHtml(r.ticker)}</b> ${r.swing_score}  ${price}  ${chg}${distTxt}${flagsStr}${cat}${sh}`;
+}
+
 function formatStatus(): string {
   const p = poller.getLastPayload();
   const ps = poller.status();
@@ -260,7 +297,7 @@ function formatStatus(): string {
     '🤖 <b>Status</b>',
     '',
     `Poller: ${ps.running ? '✅ running' : '❌ stopped'} · ${ps.session ?? '—'} · cycle ${etTimeShort(p?.polled_at)} ET`,
-    `Rows: ${p?.rows.length ?? 0} momentum · ${p?.ignition.length ?? 0} ignition`,
+    `Rows: ${p?.rows.length ?? 0} momentum · ${p?.ignition.length ?? 0} ignition · ${p?.swing.length ?? 0} swing`,
     `Tracked: ${ps.tracked_tickers} · Universe: ${us.ticker_count}`,
     `Shelf cache: ${ss.cached} (${ss.queued} queued)`,
     `Alerts: ${muted ? '🔇 muted' : '🔔 enabled'}`,
@@ -274,7 +311,8 @@ function formatTicker(arg: string | undefined): string {
   if (!p) return 'No cycle yet — poller is starting up.';
   const row =
     p.rows.find((r) => r.ticker === ticker) ??
-    p.ignition.find((r) => r.ticker === ticker);
+    p.ignition.find((r) => r.ticker === ticker) ??
+    p.swing?.find((r) => r.ticker === ticker);
   if (!row) return `<b>${escapeHtml(ticker)}</b> not in the current screener.`;
 
   const price = row.price == null ? '—' : `$${row.price.toFixed(2)}`;

@@ -6,9 +6,10 @@ Ignition screens. See [web-dashboard.md](web-dashboard.md) for what's built and
 [catching-runners.md](catching-runners.md) for the intraday strategy this
 *doesn't* overlap with — Swing is a deliberately different beast.
 
-**Status:** defaults locked (2026-05-28). UI scaffold (step 2 of §9) shipped;
-the rest of §9 is pending. The open decisions in §11 are all accepted as
-written — see that section for the confirmed values.
+**Status:** shipped 2026-05-29 — all six steps of §9 complete. Locked
+defaults from §11 are the live behavior. Tuning items live in
+[`web-dashboard.md`](web-dashboard.md) under "Swing screener — deferred /
+tuning".
 
 ## 1. Why a separate screen
 
@@ -223,26 +224,18 @@ swing setups (matching the existing `/momentum`, `/ignition` pattern).
 
 ## 9. Implementation plan — phased
 
-The full system is too big for one commit; ship in order:
+All six steps shipped 2026-05-28 → 2026-05-29 as separate commits:
 
-1. **Spec doc** ← this file. Confirm rules before building. ✅ (when this lands)
-2. **UI scaffold** — `[Momentum] [Swing]` tabs in `ScreenerPanel.tsx`; Swing
-   tab renders a "Coming soon" stub + a preview of the planned columns.
-   Tiny self-contained commit; visible to the user immediately.
-3. **Daily-bar backfill** — Phase 3b. Migration for `daily_bars`, a
-   `DailyBarsService` that pulls Finviz `quote_export` for the Swing
-   universe, persists, and refreshes nightly. Wire to the poller's midnight
-   reset block.
-4. **Swing scan + score + persistence** — `SWING_DEFAULTS`, second
+1. ✅ **Spec doc** ← this file.
+2. ✅ **UI scaffold** — `[Momentum] [Swing]` tabs in `ScreenerPanel.tsx`.
+3. ✅ **Daily-bar backfill** — `daily_bars` table, `DailyBarsService`
+   pulling Finviz `quote_export`, midnight-ET invalidate hook in the poller.
+4. ✅ **Swing scan + score + persistence** — `SWING` constants, third
    `fetchScreener()` call gated on the cycle counter, `swing-score.ts`,
    `swing_results` migration, broadcast wiring.
-5. **Swing table UI** — replace the stub with the real table fed by
-   `payload.swing` from SSE.
-6. **Telegram /swing + alerts** — `pushSwingAlerts()` and the bot command.
-
-Each step is a separate commit. Steps 2–5 can be paused between commits
-without breaking anything (the new columns and tables are nullable / unread
-by default).
+5. ✅ **Swing table UI** — `SwingTable.tsx`, fed by `payload.swing` from SSE.
+6. ✅ **Telegram /swing + alerts** — `pushSwingAlerts()` and the `/swing`
+   bot command (alias `/sw`).
 
 ## 10. v1 scope cuts (deliberate)
 

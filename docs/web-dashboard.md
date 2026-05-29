@@ -1,8 +1,8 @@
 # Momentum Screener — Web Dashboard
 
-Status as of 2026-05-22. The bash scanner (`screener-poll_breakout.sh`) and the web dashboard are both functional; the bash version remains the reference implementation. The web port lives in `apps/api` + `apps/web` and runs in parallel without sharing state with it.
+Status as of 2026-05-29. The bash scanner (`screener-poll_breakout.sh`) and the web dashboard are both functional; the bash version remains the reference implementation. The web port lives in `apps/api` + `apps/web` and runs in parallel without sharing state with it.
 
-See **Recent additions** for what shipped lately and **Remaining work** for what's next. The low-float runner-detection strategy + roadmap lives in [`catching-runners.md`](catching-runners.md); the Ignition screener design in [`ignition-screener-spec.md`](ignition-screener-spec.md).
+See **Recent additions** for what shipped lately and **Remaining work** for what's next. The low-float runner-detection strategy + roadmap lives in [`catching-runners.md`](catching-runners.md); the Ignition screener design in [`ignition-screener-spec.md`](ignition-screener-spec.md); the multi-day Swing screener design in [`swing-screener-spec.md`](swing-screener-spec.md).
 
 ## High-level architecture
 
@@ -10,20 +10,26 @@ See **Recent additions** for what shipped lately and **Remaining work** for what
 ┌─────────────────────────────────────────────────────────────────┐
 │ apps/api  (Express + Kysely + Postgres)                         │
 │  ├─ PollerService (singleton background loop, every 20s)        │
-│  │   • Two Finviz screens — Momentum + Ignition (volume-led)    │
+│  │   • Momentum + Ignition Finviz screens every cycle           │
+│  │   • Swing screen on a ~20-min cadence + 16:30 ET post-close  │
 │  │   • Finviz news_export · Yahoo RSS · Benzinga delta          │
 │  │   • SEC EDGAR filings · Nasdaq trade halts                   │
 │  │   • Catalyst classifier (rules + optional LLM)               │
-│  │   • Per-ticker 5-min RVol rolling window                     │
-│  │   → persists cycles / results / ignition_results / news      │
+│  │   • Per-ticker 5-min RVol + anchored VWAP rolling state      │
+│  │   → persists cycles / results / ignition_results /           │
+│  │     swing_results / news                                     │
 │  │   → broadcasts deltas via SSE · pushes Telegram alerts       │
+│  ├─ DailyBarsService — Finviz quote_export backfill + nightly   │
+│  │   refresh feeding daily_bars; reservoir for the swing-score  │
+│  │   (SMAs, 52w high, ATR, base/breakout detection)             │
 │  └─ Routes: /api/auth, /api/screener, /api/news, /api/prefs     │
 └─────────────────────────────────────────────────────────────────┘
                                 ↓ SSE (live) + REST (history/prefs)
 ┌─────────────────────────────────────────────────────────────────┐
 │ apps/web  (React + Antd + Vite + react-resizable-panels)        │
-│  Ignition sidebar │ Screener · Quote Details · News Room │ 0–4  │
-│  (left edge)      │ (3 stacked panels)                  │ charts│
+│  Ignition sidebar │ [Momentum] [Swing] tabs · Quote Details ·   │
+│  (left edge)      │ News Room                            │ 0–4  │
+│                   │ (3 stacked panels)                  │ charts│
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -41,10 +47,13 @@ See **Recent additions** for what shipped lately and **Remaining work** for what
 | Nasdaq trade-halts client | ✅ | `services/halts.ts` |
 | Catalyst classifier (rules + optional LLM) | ✅ | `catalyst-rules.ts`, `catalyst-claude.ts`, `classify-article.ts` |
 | Ignition screener + runner-score | ✅ | `poller.ts`, `runner-score.ts` |
+| Swing screener + swing-score | ✅ | `poller.ts`, `swing-score.ts`, `daily-bar-features.ts` |
+| Daily-bar backfill service (Phase 3b) | ✅ | `services/daily-bars.ts`, Finviz `quote_export` |
 | SEC shelf/dilution lookup (Phase 3) | ✅ | `services/shelf.ts` |
-| Telegram push alerts | ✅ | `services/telegram.ts` |
+| Telegram push alerts (Momentum / Ignition / Swing) | ✅ | `services/telegram.ts`, `pushSwingAlerts` in `poller.ts` |
+| Telegram bot — `/swing`, `/ignition`, `/momentum`, `/ticker` … | ✅ | `services/telegram-bot.ts` |
 | SSE broadcaster | ✅ | `services/sse.ts` |
-| Persistence (cycles, results, ignition, news) | ✅ | `db/migrations/*.sql` |
+| Persistence (cycles, results, ignition, swing, news, daily_bars) | ✅ | `db/migrations/*.sql` |
 | After-hours session screening | ✅ | `poller.ts` (`session` label) |
 | Live filter editing / config persistence | ✅ | `PATCH /api/screener/config`, `screener_settings` |
 | Per-user filter presets | ⚠️ API exists, no save-preset UI | `user_filter_presets`, `/api/prefs/filters` |
@@ -55,10 +64,10 @@ See **Recent additions** for what shipped lately and **Remaining work** for what
 |---|---|---|
 | Auth pages; registration gated by `REGISTRATION_OPEN` | ✅ | Register tab hidden when sign-up is closed |
 | Multi-panel resizable dashboard | ✅ | `react-resizable-panels`, sizes via localStorage |
-| Screener live table (SSE) | ✅ | NEW/ACC/UP/NEWS badges, 🔥/🚨 markers |
-| Ignition sidebar — New + Top split | ✅ | Pinned "New" section above the score-ranked feed (left edge) |
+| Screener live table (SSE) — `[Momentum] [Swing]` tabs | ✅ | Momentum: NEW/ACC/UP/NEWS badges, 🔥/🚨 markers. Swing: score + setup flags (B/↑10/↑5/C) + vs 52WH + vs 20-SMA + Vol×Avg |
+| Ignition sidebar — New + Top split | ✅ | Pinned "New" section above the score-ranked feed (left edge); ▲/▼ above/below anchored-VWAP arrow next to chg% |
 | Catalyst news modal | ✅ | Click a row's 🔥 badge → catalyst verdict + ticker news |
-| Quote Details — Stats + Sentiment + History | ✅ | Color-coded per CLAUDE.md bands; per-ticker history tab |
+| Quote Details — Stats + Sentiment + History + Ignition | ✅ | Color-coded per CLAUDE.md bands; per-ticker Momentum history *and* Ignition history sub-tabs |
 | News Room (current screener tickers) | ✅ | |
 | TradingView chart grid — adjustable 0–4 | ✅ | At `0` the pane unmounts (iframes torn down) |
 | Hardcoded indicators per interval | ✅ | VWAP + MACD + EMA(20) on 1m; Volume elsewhere |
@@ -67,6 +76,11 @@ See **Recent additions** for what shipped lately and **Remaining work** for what
 
 ## Recent additions (since the 2026-05-04 snapshot)
 
+- **Swing screener — shipped (2026-05-29).** A separate multi-day setup screen running inside the same poll loop on a ~20-min cadence + a forced 16:30 ET post-close refresh. Different universe than Momentum/Ignition: `$2–$50`, float `5M–100M`, mcap `≥ $50M`. Score 0–100 (Trend 25 + Strength 15 + Setup 25 + Volume 15 + Catalyst 20, shelf penalty −25); setup composite = base detection + 10/5-day breakout + close-strength. Surfaced as a `[Momentum] [Swing]` tab pair in the Screener panel — Ignition sidebar stays put (different axis: real-time discovery vs daily-setup detection). Persisted to `swing_results` (one snapshot per scan, full daily-bar context frozen for backtests). Telegram `/swing` command + alerts at `score ≥ 65` with `broke_out` or a fresh bullish strong/major catalyst. Full spec: [`swing-screener-spec.md`](swing-screener-spec.md).
+- **Daily-bar backfill (Phase 3b — unpaused, shipped with Swing).** New `daily_bars` table; `DailyBarsService` pulls Finviz `quote_export?p=d` at 1 req/sec, upserts via `ON CONFLICT DO UPDATE`. Backfill mode writes full ~250-bar history on first sight, refresh mode overwrites the trailing 10 bars (catches after-close corrections). Midnight ET invalidates every cached ticker so today's just-closed bar gets re-fetched. Bootstrap surface: `POST /api/screener/swing/backfill`; verify with `GET /api/screener/swing/bars?ticker=X`. Was the hard prerequisite for the Swing score — SMAs, 52w high, ATR, base/breakout detection all need ~250 days of daily OHLCV per ticker.
+- **Quote Details — Ignition history sub-tab.** Per-ticker per-cycle runner-score evolution from `ignition_results` (`GET /api/screener/ignition-history?ticker=X`). Closes the UX gap where the existing History tab silently showed nothing for ignition-only sub-$1 names that never met the Momentum filter.
+- **Ignition sidebar — news indicators + anchored-VWAP arrow.** Shared `CatalystBadge` (🚨 fresh / ✨ pending / 🔥-tier classified) sits next to each ticker after the shelf badge, clicking opens the same modal as the Momentum table. ▲/▼ above/below-VWAP arrow next to the change%; the VWAP is anchored to first detection today and persists across PM → regular → AH to match a chart's day-session VWAP.
+- **Ignition Telegram alerts — first-detection change% cap.** `IGNITION.alert_entry_chg_max = 40` — if a ticker's first qualifying cycle is already > 40% extended, the alert is suppressed (but not added to the dedup set, so a pullback under the cap re-fires a fresh second-leg alert). Grounded in the 05-21/05-22 data: every catastrophic loser (WHLR +146→−119, FRGT +93→−104, ORIS +54→−59) entered above this cap; every winner (SBFM +3→+47, AKTX +50→+93, BIYA +30→+51) entered below.
 - **Tab-title surfaces new Ignition entries** — when the tab is hidden, a new `is_new` ignition flips the title to `PNL Dash (⚡ N ignition)`. Static, doesn't downgrade an in-progress 🔥 flash, resets on tab focus. Priority chain: flash (Momentum NEW+catalyst) > ignition > static-no-news.
 - **Ignition: drop score-0 rows from the broadcast** — the volume-led Finviz filter has no change% gate (volume leads price by design), so crashes and dilution-flagged names pass through; the runner-score then clamps them at 0. Those rows used to fill the sidebar bottom anyway. Now filtered at the broadcast layer: `runner_score > 0`. Cold-start fresh entries and volume-led turnarounds (which score 48+) still surface.
 - **Sidebar UX cleanup** — shelf-badge popover and ignition-score breakdown now open on **click**, not hover (and stop the click from also selecting the row); sidebar ticker symbols are `TickerLink`s (click copies + toasts); per-row × hide button uses the same global `useHiddenTickers` mechanism as the Momentum table; Finviz/TradingView icon buttons added to the Quote Details header for the selected ticker.
@@ -159,10 +173,19 @@ order by et_date, session, peak_chg desc;
 
 ### Runner-detection roadmap — see [`catching-runners.md`](catching-runners.md)
 
-- **Phase 3 — refinements.** Partially shipped.
+- **Phase 3 — refinements.** Fully shipped.
   - ✅ **EDGAR shelf/dilution flag** — a 12-month per-ticker SEC submissions lookback grades each name `shelf` / `effective` / `active`; surfaced on rows + alerts and penalised in the runner-score (`services/shelf.ts`).
-  - ⏸️ **Paused** — backfill ~12 months of Finviz daily bars per float-qualified ticker → a `historical_runs` count (repeat-runner prior). Needed because the live DB only holds weeks of history.
+  - ✅ **Phase 3b — Finviz daily-bar backfill** (was paused; shipped 2026-05-29 alongside the Swing screener). `daily_bars` table + `DailyBarsService` keeps ~250 bars/ticker fresh against `quote_export?p=d`. Repeat-runner prior is the next analytical lift — `historical_runs` per ticker is one SQL query off the backfilled data.
 - **PR-wire news source** — GlobeNewswire / ACCESSWIRE firehose matched against the live screener universe. The deliberately-deferred follow-up to EDGAR + halts.
+
+### Swing screener — deferred / tuning
+
+- Swing filter is a code constant (`SWING.filter`) — wire to the existing Filters dialog for per-user override, mirroring the Momentum path.
+- No backtest UI — `swing_results` records the score + daily-bar context with each scan; tuning is ad-hoc psql. A query view/endpoint over the score-vs-N-day-outcome would close the loop.
+- **Retune from data** — the `swing_score ≥ 65` alert threshold and the §3 component weights are first-pass estimates. After 5–10 trading days of `swing_results`, retune against the actual score-vs-outcome distribution.
+- **Forward outcome tracking** — schedule a daily job at 16:30 ET that joins each prior swing snapshot to today's bar, computes `chg` / `peak` / `drawdown` over N days, and writes back a `swing_outcomes` row. Makes "did the score predict the move?" a single query.
+- **Sector-strength bonus** — the spec §3 reserves space for a sector-regime input (e.g. SPY/QQQ above SMA20 = risk-on, sector ETF above its 50-SMA = sector tailwind). Currently 0.
+- **Dual-signal flag** — the strongest setups historically appear in BOTH lists the same day (ignition score ≥ 40 AND swing score ≥ 40 on the same ET day). Surface as a separate `🎯` marker in the sidebar / alert.
 
 ### Ignition screener — deferred / tuning
 
@@ -215,6 +238,16 @@ source .env && psql "$DATABASE_URL" -c \
 # Ignition candidates by runner-score
 source .env && psql "$DATABASE_URL" -c \
   "select ticker, runner_score from ignition_results order by created_at desc limit 25;"
+
+# Swing screener — current top setups (latest scan)
+source .env && psql "$DATABASE_URL" -c \
+  "select ticker, swing_score, in_base, broke_out, close_in_top_q from swing_results \
+   where created_at > now() - interval '30 min' order by swing_score desc limit 20;"
+
+# Daily-bar reservoir depth — how many bars per ticker we have
+source .env && psql "$DATABASE_URL" -c \
+  "select count(distinct ticker) as tickers, count(*) as bars, \
+   min(date) as oldest, max(date) as newest from daily_bars;"
 
 # News ingest by source
 source .env && psql "$DATABASE_URL" -c \
