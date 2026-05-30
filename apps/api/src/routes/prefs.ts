@@ -172,6 +172,77 @@ router.delete('/hidden-tickers/:ticker', authMiddleware, async (req, res) => {
   res.json({ data: { ok: true } });
 });
 
+// ─── watchlist / favorites (per-user, expiring) ────────────────────────────
+// The "add it while the market's closed, analyze it, act at the open" list.
+// Each entry carries a free-text note + an expiry date; expired entries are
+// auto-removed (ET-day cleanup on GET, same pattern as hidden-tickers above).
+const watchlistSchema = z.object({
+  ticker: z.string().min(1).max(10),
+  note: z.string().max(500).optional(),
+  // YYYY-MM-DD (an ET calendar date). The entry stays through that day.
+  expires_at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+});
+
+router.get('/watchlist', authMiddleware, async (req, res) => {
+  const db = getDb();
+  const today = etDateString(new Date());
+  // Opportunistic cleanup — drop anything whose expiry day has passed.
+  await db
+    .deleteFrom('user_watchlist')
+    .where('user_id', '=', req.user!.userId)
+    .where('expires_at', '<', today)
+    .execute();
+  const rows = await db
+    .selectFrom('user_watchlist')
+    .select(['ticker', 'note', 'expires_at', 'created_at'])
+    .where('user_id', '=', req.user!.userId)
+    .orderBy('expires_at', 'asc')   // soonest-expiring first
+    .orderBy('created_at', 'desc')
+    .execute();
+  res.json({ data: rows });
+});
+
+router.post('/watchlist', authMiddleware, async (req, res) => {
+  const parsed = watchlistSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Validation failed', details: parsed.error.errors });
+  const ticker = parsed.data.ticker.toUpperCase();
+  const today = etDateString(new Date());
+  // Reject an already-past expiry outright — it'd be cleaned up immediately.
+  if (parsed.data.expires_at < today) {
+    return res.status(400).json({ error: 'expires_at is in the past' });
+  }
+  const db = getDb();
+  // Upsert: re-adding a ticker updates its note/expiry rather than erroring.
+  await db
+    .insertInto('user_watchlist')
+    .values({
+      user_id: req.user!.userId,
+      ticker,
+      note: parsed.data.note ?? null,
+      expires_at: parsed.data.expires_at,
+    })
+    .onConflict((oc) =>
+      oc.columns(['user_id', 'ticker']).doUpdateSet({
+        note: parsed.data.note ?? null,
+        expires_at: parsed.data.expires_at,
+        updated_at: sql`current_timestamp` as unknown as Date,
+      }),
+    )
+    .execute();
+  res.status(201).json({ data: { ticker } });
+});
+
+router.delete('/watchlist/:ticker', authMiddleware, async (req, res) => {
+  const ticker = String(req.params.ticker).toUpperCase();
+  const db = getDb();
+  await db
+    .deleteFrom('user_watchlist')
+    .where('user_id', '=', req.user!.userId)
+    .where('ticker', '=', ticker)
+    .execute();
+  res.json({ data: { ok: true } });
+});
+
 // ─── panel layout (free-form jsonb) ────────────────────────────────────────
 router.get('/layout', authMiddleware, async (req, res) => {
   const db = getDb();
