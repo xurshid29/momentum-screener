@@ -32,12 +32,18 @@ function tickersAggExpr(filter: string[] | null) {
   return sql<string[]>`COALESCE((SELECT array_agg(ticker ORDER BY ticker) FROM news_ticker_links WHERE article_id = a.id AND ticker = ANY(${filter}::text[])), '{}'::text[])`.as('tickers');
 }
 
-// GET /api/news?ticker=X&limit=N — per-ticker news for today (ET).
-// Restricted to the current America/New_York date so the Quote Details panel
-// doesn't surface stale prior-day headlines on intraday-momentum tickers.
+// GET /api/news?ticker=X&limit=N&days=D — per-ticker news.
+// `days` is the ET-calendar-day lookback: days=1 (default) is today only —
+// the intraday-momentum behavior, so a fast mover's panel doesn't surface
+// stale prior-day headlines. Multi-day callers (the Continuation / Swing
+// context, where a 2–3-day-old catalyst still drives the move) pass a larger
+// window: days=4 shows today plus the previous 3 ET calendar days, so a
+// Friday headline is still visible the following Monday.
 router.get('/', authMiddleware, async (req, res) => {
   const ticker = typeof req.query.ticker === 'string' ? req.query.ticker.toUpperCase() : null;
   const limit = Math.min(parseInt(String(req.query.limit ?? '50'), 10) || 50, 200);
+  // Clamp days to [1, 30] — a calendar-day count, not an interval; 1 = today.
+  const days = Math.min(Math.max(parseInt(String(req.query.days ?? '1'), 10) || 1, 1), 30);
   const db = getDb();
   const tickerFilter = ticker ? [ticker] : null;
   let q = db
@@ -48,7 +54,9 @@ router.get('/', authMiddleware, async (req, res) => {
       tickersAggExpr(tickerFilter),
       ...CLASSIFICATION_COLUMNS,
     ])
-    .where(sql<boolean>`(a.published_at AT TIME ZONE 'America/New_York')::date = (now() AT TIME ZONE 'America/New_York')::date`)
+    // ≥ midnight ET of the first included day (today_ET − (days−1)). days=1
+    // collapses to "on or after today's ET midnight" = today only.
+    .where(sql<boolean>`(a.published_at AT TIME ZONE 'America/New_York')::date >= ((now() AT TIME ZONE 'America/New_York')::date - ${days - 1})`)
     .orderBy('a.published_at', 'desc')
     .limit(limit);
   if (ticker) {

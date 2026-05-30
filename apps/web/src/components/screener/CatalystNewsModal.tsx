@@ -10,6 +10,11 @@ import type { CatalystDirection, CatalystInfo, NewsArticle } from '../../api/typ
 
 const { Text } = Typography;
 
+// ET-calendar-day lookback for the modal's news list — matches the Quote
+// Details panel (SelectedStockPanel TICKER_NEWS_DAYS) so both surface the
+// same multi-day catalysts and share the query cache.
+const MODAL_NEWS_DAYS = 4;
+
 const DIR_COLOR: Record<CatalystDirection, string | undefined> = {
   bullish: 'green',
   bearish: 'red',
@@ -24,11 +29,14 @@ interface Props {
 }
 
 export function CatalystNewsModal({ ticker, catalyst, onClose }: Props) {
-  // Same query key as the Quote Details panel — opening the modal for the
-  // selected ticker is an instant cache hit.
+  // Multi-day lookback (not today-only): the badge that opens this modal can
+  // sit on a Continuation / Swing row whose catalyst landed a couple of days
+  // ago. 4 = today + the previous 3 ET calendar days. Same query key shape +
+  // window as the Quote Details panel, so opening the modal for the selected
+  // ticker is an instant cache hit.
   const { data: news, isLoading } = useQuery({
-    queryKey: ['news', ticker],
-    queryFn: () => (ticker ? newsApi.forTicker(ticker, 30) : Promise.resolve([] as NewsArticle[])),
+    queryKey: ['news', ticker, MODAL_NEWS_DAYS],
+    queryFn: () => (ticker ? newsApi.forTicker(ticker, 30, MODAL_NEWS_DAYS) : Promise.resolve([] as NewsArticle[])),
     enabled: !!ticker,
     staleTime: 10_000,
   });
