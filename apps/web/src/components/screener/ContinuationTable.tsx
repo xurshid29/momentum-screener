@@ -1,8 +1,9 @@
-// The Continuation tab — tickers that have shown up in Ignition on 2+
-// distinct ET trading days inside the last 5. The "same name keeps showing
-// up" pattern is exactly the multi-day-swing setup playbook from CODX /
-// SBFM / FATN — see docs/web-dashboard.md "Continuation tab" for the
-// strategy framing.
+// The Continuation tab — names in the middle of a multi-day move. Seeded from
+// either screen (Momentum ∪ Ignition) and forward-tracked via daily_bars, so a
+// quiet day-2 grind that re-triggers no screen still counts (see
+// services/continuation.ts). The "same name keeps advancing day after day"
+// pattern is the multi-day-swing playbook from CODX / SBFM / FATN — see
+// docs/web-dashboard.md "Continuation tab" for the strategy framing.
 //
 // The table is purely derivative of `payload.continuation` (no separate
 // fetch). The live-presence column cross-references the current Momentum,
@@ -151,26 +152,45 @@ export function ContinuationTable({ rows: allRows, payload, onOpenCatalyst }: Pr
         },
       },
       {
-        title: 'Days',
-        dataIndex: 'days_seen',
-        key: 'days_seen',
-        width: 64,
+        title: 'Run',
+        dataIndex: 'days_in_run',
+        key: 'days_in_run',
+        width: 78,
         align: 'right',
-        // Earlier-stage setups (fewer days seen) are the actionable entries —
-        // 5–6-day tickers tend to be the already-extended runners. Sort ASC
-        // by default; the user can flip via the sorter for the established
-        // setups view.
-        render: (d: number) => {
+        // days_in_run = distinct active days (screen OR a real daily-bar move)
+        // from the trigger onward. Earlier-stage setups (fewer days) are the
+        // actionable entries — 5–6-day rows tend to be already extended. Sort
+        // ASC by default. Subtext shows how many of those days actually hit a
+        // screen; a gap means the daily bar carried the move the screens missed.
+        render: (_v, row) => {
+          const d = row.days_in_run;
           const color = d >= 4 ? '#52c41a' : d >= 3 ? '#faad14' : '#bfbfbf';
-          return <span style={{ color, fontWeight: 700, fontSize: 13 }}>{d}</span>;
+          const carried = row.screen_days < d;
+          return (
+            <Tooltip
+              title={
+                carried
+                  ? `${d} active days · ${row.screen_days} on a screen, ${d - row.screen_days} carried by daily bars alone`
+                  : `${d} active days, all on a screen`
+              }
+            >
+              <span style={{ lineHeight: 1.1 }}>
+                <span style={{ color, fontWeight: 700, fontSize: 13 }}>{d}d</span>
+                <br />
+                <span style={{ color: '#8c8c8c', fontSize: 10 }}>
+                  {row.screen_days}/{d} scr
+                </span>
+              </span>
+            </Tooltip>
+          );
         },
-        sorter: (a, b) => a.days_seen - b.days_seen,
+        sorter: (a, b) => a.days_in_run - b.days_in_run,
         defaultSortOrder: 'ascend',
       },
       {
         title: 'Window',
         key: 'window',
-        width: 110,
+        width: 100,
         render: (_v, row) => (
           <Text type="secondary" style={{ fontSize: 11 }}>
             {fmtMD(row.first_seen)} → {fmtMD(row.last_seen)}
@@ -178,66 +198,68 @@ export function ContinuationTable({ rows: allRows, payload, onOpenCatalyst }: Pr
         ),
       },
       {
-        title: 'Score Day 1 → Today',
-        key: 'score_trend',
-        width: 150,
-        align: 'center',
-        render: (_v, row) => {
-          // Climbing = conviction growing; flat or falling = move is rolling
-          // over. Today's score is null when the ticker dropped off today's
-          // Ignition list — render that as "—" rather than 0 to distinguish
-          // "not in today's list" from "in list with low score".
-          const arrow =
-            row.today_peak == null
-              ? '·'
-              : row.today_peak > row.first_day_peak
-                ? '↑'
-                : row.today_peak < row.first_day_peak
-                  ? '↓'
-                  : '→';
-          const tip = `Window peak: ${Math.round(row.peak_window)}`;
-          return (
-            <Tooltip title={tip}>
-              <span style={{ fontSize: 12 }}>
-                <span style={{ color: scoreColor(row.first_day_peak), fontWeight: 600 }}>
-                  {Math.round(row.first_day_peak)}
-                </span>
-                <span style={{ color: '#8c8c8c', margin: '0 6px' }}>{arrow}</span>
-                <span style={{ color: scoreColor(row.today_peak), fontWeight: 700 }}>
-                  {row.today_peak == null ? '—' : Math.round(row.today_peak)}
-                </span>
-              </span>
-            </Tooltip>
-          );
-        },
-        sorter: (a, b) => (a.today_peak ?? -1) - (b.today_peak ?? -1),
-      },
-      {
-        title: 'Price range',
-        key: 'price_range',
+        title: 'Move',
+        key: 'move',
         width: 130,
         align: 'right',
+        // Cumulative move from the run's base close to the latest close — the
+        // "how far has it gone" number that replaces the old runner-score
+        // trajectory (now that Momentum-only names have no score). Subtext is
+        // the most recent day's close-to-close change so you can see whether
+        // it's still advancing or rolling over.
         render: (_v, row) => {
-          const lift = row.min_price > 0 ? ((row.max_price - row.min_price) / row.min_price) * 100 : null;
-          const liftColor = lift == null
-            ? '#bfbfbf'
-            : lift >= 100 ? '#52c41a' : lift >= 50 ? '#faad14' : '#bfbfbf';
+          const fb = row.from_base_pct;
+          const ld = row.last_day_change_pct;
+          if (fb == null) {
+            return <Text type="secondary" style={{ fontSize: 11 }}>—</Text>;
+          }
+          const fbColor = fb >= 100 ? '#52c41a' : fb >= 30 ? '#faad14' : '#bfbfbf';
+          const ldColor = ld == null ? '#8c8c8c' : ld >= 0 ? '#52c41a' : '#ff4d4f';
+          return (
+            <span style={{ lineHeight: 1.1 }}>
+              <span style={{ color: fbColor, fontWeight: 700, fontSize: 13 }}>
+                {fb >= 0 ? '+' : ''}{fb.toFixed(0)}%
+              </span>
+              <br />
+              <span style={{ color: ldColor, fontSize: 10 }}>
+                {ld == null ? '· d/d' : `${ld >= 0 ? '+' : ''}${ld.toFixed(1)}% d/d`}
+              </span>
+            </span>
+          );
+        },
+        sorter: (a, b) => (a.from_base_pct ?? -Infinity) - (b.from_base_pct ?? -Infinity),
+      },
+      {
+        title: 'Off peak',
+        key: 'off_peak',
+        width: 96,
+        align: 'right',
+        // Liveness: latest close vs the run's peak close (≤ 0). Near 0 = holding
+        // the highs (live continuation); deeply negative = fading. The backend
+        // already drops anything past −50%, so everything here is "still alive";
+        // this column shows where in that band each name sits. today_peak (live
+        // Ignition score) rides as a small ⚡ marker when the name is hot now.
+        render: (_v, row) => {
+          const op = row.off_peak_pct;
+          const hot = row.today_peak != null;
           return (
             <span style={{ fontSize: 12 }}>
-              <Text type="secondary">${row.min_price.toFixed(2)} → ${row.max_price.toFixed(2)}</Text>
-              {lift != null && (
-                <span style={{ color: liftColor, marginLeft: 6, fontWeight: 600 }}>
-                  +{lift.toFixed(0)}%
+              {hot && (
+                <Tooltip title={`Live Ignition score today: ${Math.round(row.today_peak!)}`}>
+                  <span style={{ color: scoreColor(row.today_peak), marginRight: 4 }}>⚡</span>
+                </Tooltip>
+              )}
+              {op == null ? (
+                <Text type="secondary">—</Text>
+              ) : (
+                <span style={{ color: op >= -10 ? '#52c41a' : op >= -30 ? '#faad14' : '#ff7875', fontWeight: 600 }}>
+                  {op.toFixed(0)}%
                 </span>
               )}
             </span>
           );
         },
-        sorter: (a, b) => {
-          const la = a.min_price > 0 ? (a.max_price - a.min_price) / a.min_price : 0;
-          const lb = b.min_price > 0 ? (b.max_price - b.min_price) / b.min_price : 0;
-          return la - lb;
-        },
+        sorter: (a, b) => (a.off_peak_pct ?? -Infinity) - (b.off_peak_pct ?? -Infinity),
       },
       {
         title: 'Live in',
@@ -283,8 +305,9 @@ export function ContinuationTable({ rows: allRows, payload, onOpenCatalyst }: Pr
           image={Empty.PRESENTED_IMAGE_SIMPLE}
           description={
             <Text type="secondary" style={{ fontSize: 12, maxWidth: 360, display: 'inline-block' }}>
-              No continuation candidates yet. Needs ≥ 2 distinct ET days of Ignition history per ticker
-              within the last 5 days; the cache refreshes every ~10 min.
+              No continuation candidates yet. Needs ≥ 2 active days (a screen hit or a real daily-bar
+              move) per ticker within the last 7 days, still holding near its run high; the cache
+              refreshes every ~10 min.
             </Text>
           }
         />

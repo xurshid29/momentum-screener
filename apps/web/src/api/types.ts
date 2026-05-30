@@ -186,18 +186,24 @@ export interface HistoryByDayRow {
 
 export type HistoryByDayScreen = 'ignition' | 'momentum';
 
-// Continuation candidate — a ticker that appeared in the Ignition list on
-// 2+ distinct ET trading days within the last 5 days. Pure derivative of
-// ignition_results; the source of truth for the "the same name keeps showing
-// up = multi-day setup forming" play, surfaced as the third Screener tab.
+// Continuation candidate — a ticker in the middle of a *multi-day* move.
+// Seeded from either screen (Momentum ∪ Ignition) on any day in the window,
+// then forward-tracked via daily_bars so a quiet day-2 grind that re-triggers
+// no screen still counts. days_in_run = distinct active days (screen OR a real
+// daily-bar move) from the trigger onward; multi-day confirmed (≥ 2) and gated
+// on liveness. See services/continuation.ts.
 export interface ContinuationRow {
   ticker: string;
-  days_seen: number;            // distinct ET days in the lookback window
-  first_seen: string;           // YYYY-MM-DD
-  last_seen: string;            // YYYY-MM-DD
-  first_day_peak: number;       // peak runner_score on the first day seen
-  today_peak: number | null;    // peak score in today's ET session; null if absent today
-  peak_window: number;          // peak runner_score across the full window
+  days_in_run: number;          // distinct active days (screen OR bar) from trigger
+  screen_days: number;          // of those, how many actually hit a screen
+  first_seen: string;           // YYYY-MM-DD — trigger (first screen day)
+  last_seen: string;            // YYYY-MM-DD — last screen day
+  from_base_pct: number | null; // cumulative move from base close to latest close
+  off_peak_pct: number | null;  // latest close vs run peak close (≤ 0); liveness
+  last_close: number | null;
+  last_day_change_pct: number | null;
+  today_peak: number | null;    // peak Ignition score today; null if absent / Momentum-only
+  peak_window_score: number | null; // peak Ignition score in window; null for Momentum-only
   min_price: number;
   max_price: number;
   // Most recent news landing within the last ~3 days, joined with its

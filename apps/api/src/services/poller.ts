@@ -1434,7 +1434,15 @@ function formatDualSignalAlert(r: IgnitionRow, c: ContinuationCandidate): string
   const price = r.price == null ? '' : `$${r.price.toFixed(2)}`;
   const chg = r.change_pct == null ? '' : `${r.change_pct >= 0 ? '+' : ''}${r.change_pct.toFixed(1)}%`;
   const firstSeenMd = c.first_seen.slice(5);  // MM-DD
-  const trajectory = `Day ${c.days_seen} · score ${Math.round(c.first_day_peak)} → ${Math.round(r.runner_score)}`;
+  // Lead with the multi-day context: active days in the run + cumulative move
+  // off the base, then the live runner-score. screen_days < days_in_run means
+  // the daily bar carried some of the run that the screens didn't re-flag.
+  const fromBase =
+    c.from_base_pct != null
+      ? ` · ${c.from_base_pct >= 0 ? '+' : ''}${c.from_base_pct.toFixed(0)}% from base`
+      : '';
+  const screenNote = c.screen_days < c.days_in_run ? ` (${c.screen_days} on screen)` : '';
+  const trajectory = `Day ${c.days_in_run}${screenNote} · ignition ${Math.round(r.runner_score)} now${fromBase}`;
   const meta: string[] = [];
   if (r.float_m != null) meta.push(`float ${r.float_m.toFixed(1)}M`);
   if (r.rel_vol_5min != null) meta.push(`RVol5m ${Math.round(r.rel_vol_5min)}%`);
