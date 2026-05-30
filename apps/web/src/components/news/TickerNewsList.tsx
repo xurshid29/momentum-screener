@@ -16,6 +16,22 @@ const SOURCE_COLOR: Record<string, string> = {
   halt: 'red',
 };
 
+// Timestamp label for a headline. The list spans several days now, so a
+// bare time is ambiguous: show "HH:MM" for today, and "Mon DD · HH:MM" for
+// any earlier day so a 2-day-old swing catalyst reads clearly.
+function fmtNewsTs(iso: string): string {
+  const d = new Date(iso);
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+  const now = new Date();
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  if (sameDay) return time;
+  const date = d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  return `${date} · ${time}`;
+}
+
 export function TickerNewsList({ news, max = 8 }: { news: NewsArticle[]; max?: number }) {
   if (news.length === 0) {
     return (
@@ -49,7 +65,7 @@ export function TickerNewsList({ news, max = 8 }: { news: NewsArticle[]; max?: n
             </div>
             {n.published_at && (
               <Text type="secondary" style={{ fontSize: 11, marginLeft: 22 }}>
-                ({new Date(n.published_at).toLocaleTimeString([], { hour12: false })})
+                ({fmtNewsTs(n.published_at)})
               </Text>
             )}
           </div>

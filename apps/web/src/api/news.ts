@@ -2,8 +2,13 @@ import { apiClient } from './client';
 import type { NewsArticle, ClassifyArticleResponse } from './types';
 
 export const newsApi = {
-  async forTicker(ticker: string, limit = 50): Promise<NewsArticle[]> {
-    const res = await apiClient.get<NewsArticle[]>(`/api/news?ticker=${encodeURIComponent(ticker)}&limit=${limit}`);
+  // `days` is the ET-calendar-day lookback (default 1 = today only). Pass a
+  // larger window for the swing / continuation context where a 2–3-day-old
+  // catalyst still matters.
+  async forTicker(ticker: string, limit = 50, days = 1): Promise<NewsArticle[]> {
+    const res = await apiClient.get<NewsArticle[]>(
+      `/api/news?ticker=${encodeURIComponent(ticker)}&limit=${limit}&days=${days}`,
+    );
     return res.data;
   },
 

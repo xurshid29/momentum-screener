@@ -22,6 +22,11 @@ import { fmtPct, fmtPrice, fmtVolume, fmtFloat, fmtMcap, fmtRelVol, fmtBigPct, n
 
 const { Text } = Typography;
 
+// ET-calendar-day lookback for the per-ticker news list. 4 = today + the
+// previous 3 days, so a Friday catalyst is still visible the next Monday —
+// the swing/continuation timeframe where older news still moves the stock.
+const TICKER_NEWS_DAYS = 4;
+
 const STATUS_COLOR: Record<NonNullable<RowStatus>, string> = {
   NEW: 'blue',
   ACC: 'orange',
@@ -87,10 +92,13 @@ export function SelectedStockPanel({ payload }: SelectedStockPanelProps) {
     [selected, payload],
   );
 
-  // Per-ticker news. Shown in the Details tab as the catalyst list.
+  // Per-ticker news. Shown in the Details tab as the catalyst list. Uses a
+  // multi-day lookback (not today-only) so the swing / continuation context —
+  // where a 2–3-day-old catalyst still drives the move — surfaces here too.
   const { data: news } = useQuery({
-    queryKey: ['news', selected],
-    queryFn: () => (selected ? newsApi.forTicker(selected, 30) : Promise.resolve([] as NewsArticle[])),
+    queryKey: ['news', selected, TICKER_NEWS_DAYS],
+    queryFn: () =>
+      selected ? newsApi.forTicker(selected, 30, TICKER_NEWS_DAYS) : Promise.resolve([] as NewsArticle[]),
     enabled: !!selected,
     staleTime: 10_000,
   });
@@ -407,10 +415,10 @@ function DetailsTab({ ticker, meta, news }: DetailsTabProps) {
         ]}
       />
 
-      {/* Today's news headlines — placed below stats so the price/structural
-          numbers are immediately visible without scrolling. */}
+      {/* Recent news headlines (multi-day) — placed below stats so the
+          price/structural numbers are immediately visible without scrolling. */}
       <div style={{ marginTop: 20 }}>
-        <SectionTitle>News Headline</SectionTitle>
+        <SectionTitle>Recent News</SectionTitle>
         <TickerNewsList news={news} />
       </div>
     </div>
