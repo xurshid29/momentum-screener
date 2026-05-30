@@ -2,7 +2,7 @@
 
 Status as of 2026-05-29 (end of day). The bash scanner (`screener-poll_breakout.sh`) and the web dashboard are both functional; the bash version remains the reference implementation. The web port lives in `apps/api` + `apps/web` and runs in parallel without sharing state with it.
 
-**Snapshot for a continuing session** — the screener has four tabs now (`[Momentum] [Continuation] [Swing] [History]`), the Ignition sidebar stays always-visible on the left, three Telegram alert paths fire (Momentum / Ignition / Swing / Continuation-dual-signal 🎯), and one cached SQL view (Continuation) refreshes every ~10 min from `ignition_results`. The intended next direction is **tuning from data, not new features** — see `Remaining work / roadmap`. Every Swing-spec step (1–6) and the Continuation/History/dual-signal additions are now shipped; the gap going forward is grading the live alerts against actual outcomes.
+**Snapshot for a continuing session** — the screener has four tabs now (`[Momentum] [Continuation] [Swing] [History]`), the Ignition sidebar stays always-visible on the left, three Telegram alert paths fire (Momentum / Ignition / Swing / Continuation-dual-signal 🎯), and one cached view (Continuation) refreshes every ~10 min, seeding from **both** screens (`screener_results ∪ ignition_results`) and forward-tracking each name via `daily_bars`. The intended next direction is **tuning from data, not new features** — see `Remaining work / roadmap`. Every Swing-spec step (1–6) and the Continuation/History/dual-signal additions are now shipped; the gap going forward is grading the live alerts against actual outcomes.
 
 See **Recent additions** for what shipped lately and **Remaining work** for what's next. The low-float runner-detection strategy + roadmap lives in [`catching-runners.md`](catching-runners.md); the Ignition screener design in [`ignition-screener-spec.md`](ignition-screener-spec.md); the multi-day Swing screener design in [`swing-screener-spec.md`](swing-screener-spec.md).
 
@@ -305,16 +305,22 @@ source .env && psql "$DATABASE_URL" -c \
   "select count(distinct ticker) as tickers, count(*) as bars, \
    min(date) as oldest, max(date) as newest from daily_bars;"
 
-# Continuation candidates (≥ 2 distinct ET days in last 5) — derived from
-# ignition_results, so this query mirrors what the Continuation tab shows.
+# Continuation SEEDS — distinct ET screen-days per ticker over the last 7,
+# unioned across BOTH screens (Momentum + Ignition). This is the seed set;
+# the live tab then forward-tracks each via daily_bars (active days, liveness),
+# so the tab is stricter than this raw rollup. See services/continuation.ts.
 source .env && psql "$DATABASE_URL" -c \
   "with recent as ( \
      select i.ticker, (c.polled_at at time zone 'America/New_York')::date as et_date, i.runner_score \
-     from ignition_results i join screener_cycles c on c.id = i.cycle_id \
-     where c.polled_at > now() - interval '5 days' \
-   ) select ticker, count(distinct et_date) days_seen, max(runner_score) peak \
+       from ignition_results i join screener_cycles c on c.id = i.cycle_id \
+       where c.polled_at > now() - interval '7 days' \
+     union all \
+     select s.ticker, (c.polled_at at time zone 'America/New_York')::date as et_date, null::numeric \
+       from screener_results s join screener_cycles c on c.id = s.cycle_id \
+       where c.polled_at > now() - interval '7 days' \
+   ) select ticker, count(distinct et_date) screen_days, max(runner_score) peak_ig_score \
      from recent group by ticker having count(distinct et_date) >= 2 \
-     order by days_seen desc, peak desc limit 20;"
+     order by screen_days desc, peak_ig_score desc nulls last limit 20;"
 
 # News ingest by source
 source .env && psql "$DATABASE_URL" -c \
