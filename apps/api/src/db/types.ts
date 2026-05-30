@@ -212,6 +212,18 @@ export interface UserChartPrefsTable {
   studies: Generated<JSONColumnType<string[]>>;
 }
 
+export interface UserWatchlistTable {
+  user_id: string;
+  ticker: string;
+  note: string | null;
+  // ET calendar date the entry expires on. Stored as Postgres `date`; treat as
+  // ISO-8601 (YYYY-MM-DD) at all boundaries so the expiry comparison is
+  // timezone-safe. Removed the next ET day by the GET endpoint's cleanup.
+  expires_at: ColumnType<string, string, string>;
+  created_at: Generated<Date>;
+  updated_at: Generated<Date>;
+}
+
 export interface Database {
   users: UsersTable;
   screener_settings: ScreenerSettingsTable;
@@ -227,4 +239,5 @@ export interface Database {
   user_panel_layout: UserPanelLayoutTable;
   user_chart_prefs: UserChartPrefsTable;
   user_hidden_tickers: UserHiddenTickersTable;
+  user_watchlist: UserWatchlistTable;
 }

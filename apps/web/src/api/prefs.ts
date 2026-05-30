@@ -39,4 +39,25 @@ export const prefsApi = {
   async unhideTicker(ticker: string): Promise<void> {
     await apiClient.delete<{ ok: true }>(`/api/prefs/hidden-tickers/${encodeURIComponent(ticker)}`);
   },
+
+  // ─── watchlist / favorites (expiring) ─────────────────────────────────────
+  async getWatchlist(): Promise<WatchlistEntry[]> {
+    const res = await apiClient.get<WatchlistEntry[]>('/api/prefs/watchlist');
+    return res.data;
+  },
+
+  async addWatchlist(entry: { ticker: string; note?: string; expires_at: string }): Promise<void> {
+    await apiClient.post<{ ticker: string }>('/api/prefs/watchlist', entry);
+  },
+
+  async removeWatchlist(ticker: string): Promise<void> {
+    await apiClient.delete<{ ok: true }>(`/api/prefs/watchlist/${encodeURIComponent(ticker)}`);
+  },
 };
+
+export interface WatchlistEntry {
+  ticker: string;
+  note: string | null;
+  expires_at: string;   // YYYY-MM-DD (ET)
+  created_at: string;
+}

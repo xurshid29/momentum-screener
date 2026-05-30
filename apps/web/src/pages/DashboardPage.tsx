@@ -8,6 +8,7 @@ import { SelectedStockPanel } from '../components/screener/SelectedStockPanel';
 import { NewsRoomPanel } from '../components/news/NewsRoomPanel';
 import { ChartGrid } from '../components/charts/ChartGrid';
 import { IgnitionSidebar } from '../components/screener/IgnitionSidebar';
+import { WatchlistPanel } from '../components/screener/WatchlistPanel';
 import { SelectionProvider, useSelection } from '../context/SelectionContext';
 import { useLayout } from '../context/LayoutContext';
 import type { CyclePayload } from '../api/types';
@@ -29,7 +30,15 @@ export function DashboardPage() {
       <div style={{ width: '100%', height: '100%', background: '#0a0a0a' }}>
         <PanelGroup direction="horizontal" autoSaveId="ms-outer">
           <Panel id="ms-pane-ignition" order={0} defaultSize={16} minSize={11} maxSize={26}>
-            <Card><IgnitionSidebar payload={payload} /></Card>
+            <PanelGroup direction="vertical" autoSaveId="ms-leftrail">
+              <Panel defaultSize={65} minSize={25}>
+                <Card><IgnitionSidebar payload={payload} /></Card>
+              </Panel>
+              <VHandle />
+              <Panel defaultSize={35} minSize={15}>
+                <Card><WatchlistPanel /></Card>
+              </Panel>
+            </PanelGroup>
           </Panel>
           <HHandle />
           <Panel id="ms-pane-left" order={1} defaultSize={chartsVisible ? 42 : 84} minSize={25}>
