@@ -55,8 +55,11 @@ router.get('/', authMiddleware, async (req, res) => {
       ...CLASSIFICATION_COLUMNS,
     ])
     // ≥ midnight ET of the first included day (today_ET − (days−1)). days=1
-    // collapses to "on or after today's ET midnight" = today only.
-    .where(sql<boolean>`(a.published_at AT TIME ZONE 'America/New_York')::date >= ((now() AT TIME ZONE 'America/New_York')::date - ${days - 1})`)
+    // collapses to "on or after today's ET midnight" = today only. The `::int`
+    // cast is load-bearing: Kysely binds ${days-1} as an untyped parameter, and
+    // `date - unknown` has no operator (Postgres 42883) — without the cast every
+    // per-ticker news call 500s.
+    .where(sql<boolean>`(a.published_at AT TIME ZONE 'America/New_York')::date >= ((now() AT TIME ZONE 'America/New_York')::date - ${days - 1}::int)`)
     .orderBy('a.published_at', 'desc')
     .limit(limit);
   if (ticker) {
