@@ -58,8 +58,13 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
       {
         title: '',
         key: 'links',
-        width: 76,
-        render: (_v, row) => <TickerLinks ticker={row.ticker} finvizUrl={row.finviz_url} />,
+        width: 98,
+        render: (_v, row) => (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <WatchlistStar ticker={row.ticker} />
+            <TickerLinks ticker={row.ticker} finvizUrl={row.finviz_url} />
+          </span>
+        ),
       },
       {
         title: '',
