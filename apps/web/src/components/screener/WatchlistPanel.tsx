@@ -48,7 +48,7 @@ export function WatchlistPanel() {
         }}
       >
         <span>
-          <Text strong style={{ color: '#e0e0e0', letterSpacing: 0.5 }}>★ Watchlist</Text>
+          <Text strong style={{ color: '#e0e0e0', letterSpacing: 0.5, fontSize: 15 }}>★ Watchlist</Text>
           <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>{entries.length}</Text>
         </span>
       </div>
