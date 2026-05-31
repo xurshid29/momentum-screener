@@ -4,6 +4,7 @@ import { authMiddleware } from '../middleware/auth.js';
 import { getDb } from '../db/index.js';
 import { universe } from '../services/universe.js';
 import { getOrClassifyArticle } from '../services/classify-article.js';
+import { fetchAndStoreTickerNews } from '../services/ticker-news.js';
 
 const router = Router();
 
@@ -45,6 +46,19 @@ router.get('/', authMiddleware, async (req, res) => {
   // Clamp days to [1, 30] — a calendar-day count, not an interval; 1 = today.
   const days = Math.min(Math.max(parseInt(String(req.query.days ?? '1'), 10) || 1, 1), 30);
   const db = getDb();
+  // On-demand top-up: the poller only ingests news for tickers currently in
+  // the screener universe, so a ticker that has dropped off (or any watchlist
+  // name) goes stale in our DB while Finviz/Yahoo still carry fresh items.
+  // Pull this ticker's recent multi-day news live (rate-bounded per ticker)
+  // before reading, so clicking any ticker surfaces the last few days. Best-
+  // effort — a failure just falls back to whatever's already stored.
+  if (ticker) {
+    try {
+      await fetchAndStoreTickerNews(ticker);
+    } catch {
+      // ignore — read what we have
+    }
+  }
   const tickerFilter = ticker ? [ticker] : null;
   let q = db
     .selectFrom('news_articles as a')
