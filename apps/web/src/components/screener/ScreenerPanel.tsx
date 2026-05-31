@@ -7,6 +7,7 @@ import { useSelection } from '../../context/SelectionContext';
 import { useHiddenTickers } from '../../hooks/useHiddenTickers';
 import { TickerLink } from '../common/TickerLink';
 import { TickerLinks } from '../common/TickerLinks';
+import { WatchlistStar } from '../common/WatchlistStar';
 import { CatalystBadge } from '../common/CatalystBadge';
 import { ShelfBadge } from '../common/ShelfBadge';
 import { fmtPct, fmtFloat, fmtPrice, fmtVolume, fmtMcap, fmtRelVol, fmtBigPct, num } from '../../utils/format';
