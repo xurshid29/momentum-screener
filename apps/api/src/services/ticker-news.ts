@@ -113,7 +113,7 @@ export async function fetchAndStoreTickerNews(ticker: string, force = false): Pr
       // populated without waiting for the (screener-only) LLM pass. Skip when
       // the article already existed — it's been classified before.
       if (isNew) {
-        const cls = classifyByRules({ title: p.title, source: p.source });
+        const cls = classifyByRules({ ticker: t, title: p.title, source: p.source });
         await db
           .insertInto('news_classifications')
           .values({
