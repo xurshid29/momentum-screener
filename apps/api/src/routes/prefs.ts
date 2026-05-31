@@ -182,8 +182,9 @@ router.delete('/hidden-tickers/:ticker', authMiddleware, async (req, res) => {
 // How many ET days out the default expiry sits when adding via the star.
 const WATCHLIST_DEFAULT_EXPIRY_DAYS = 2;
 // News lookup window — match the per-ticker news panel's multi-day window so a
-// 2-3-day-old swing catalyst still shows on the watchlist row.
-const WATCHLIST_NEWS_DAYS = 4;
+// swing catalyst still shows on the watchlist row. 7 days so a Wednesday
+// catalyst viewed over the following weekend isn't dropped (the AGPU case).
+const WATCHLIST_NEWS_DAYS = 7;
 
 // expires_at optional on add (defaults to +2d); note kept optional for back-
 // compat but the UI no longer sends it.

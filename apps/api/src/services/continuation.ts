@@ -48,9 +48,12 @@ const ACTIVE_RVOL = 1.5;      // volume ≥ 1.5× the ticker's normal volume
 // fraction of the run's peak close. Below that it has faded/round-tripped and
 // is no longer a live continuation.
 const LIVENESS_MIN_FRAC = 0.5;
-// Multi-day "the move is still alive" news window — wider than the live
-// payload's "today" window so a catalyst from 2 days ago still surfaces.
-const NEWS_LOOKBACK_DAYS = 3;
+// Multi-day "the move is still alive" news window. Coupled to LOOKBACK_DAYS so
+// the badge covers the same span the continuation itself spans — a catalyst
+// from the trigger day of a 7-day run still surfaces, and a Wednesday catalyst
+// viewed the following weekend (e.g. AGPU, last news 05-27 viewed 05-31) isn't
+// dropped by a too-narrow 3-day window.
+const NEWS_LOOKBACK_DAYS = LOOKBACK_DAYS;
 const RESULT_LIMIT = 50;
 // How many bars to pull per seed — the window plus headroom to establish a
 // "normal volume" baseline and the pre-trigger base close.

@@ -26,7 +26,7 @@ const { Text } = Typography;
 // ET-calendar-day lookback for the per-ticker news list. 4 = today + the
 // previous 3 days, so a Friday catalyst is still visible the next Monday —
 // the swing/continuation timeframe where older news still moves the stock.
-const TICKER_NEWS_DAYS = 4;
+const TICKER_NEWS_DAYS = 7;
 
 const STATUS_COLOR: Record<NonNullable<RowStatus>, string> = {
   NEW: 'blue',

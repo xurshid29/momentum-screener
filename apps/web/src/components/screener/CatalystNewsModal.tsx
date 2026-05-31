@@ -13,7 +13,7 @@ const { Text } = Typography;
 // ET-calendar-day lookback for the modal's news list — matches the Quote
 // Details panel (SelectedStockPanel TICKER_NEWS_DAYS) so both surface the
 // same multi-day catalysts and share the query cache.
-const MODAL_NEWS_DAYS = 4;
+const MODAL_NEWS_DAYS = 7;
 
 const DIR_COLOR: Record<CatalystDirection, string | undefined> = {
   bullish: 'green',
