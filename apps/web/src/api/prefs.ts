@@ -46,8 +46,17 @@ export const prefsApi = {
     return res.data;
   },
 
-  async addWatchlist(entry: { ticker: string; note?: string; expires_at: string }): Promise<void> {
+  // expires_at omitted → backend defaults to +2 ET days. One-click add.
+  async addWatchlist(entry: { ticker: string; expires_at?: string }): Promise<void> {
     await apiClient.post<{ ticker: string }>('/api/prefs/watchlist', entry);
+  },
+
+  async setWatchlistExpiry(ticker: string, expires_at: string): Promise<void> {
+    await apiClient.patch<{ ticker: string }>(`/api/prefs/watchlist/${encodeURIComponent(ticker)}`, { expires_at });
+  },
+
+  async markWatchlistSeen(ticker: string): Promise<void> {
+    await apiClient.post<{ ok: true }>(`/api/prefs/watchlist/${encodeURIComponent(ticker)}/seen`, {});
   },
 
   async removeWatchlist(ticker: string): Promise<void> {
@@ -58,6 +67,19 @@ export const prefsApi = {
 export interface WatchlistEntry {
   ticker: string;
   note: string | null;
-  expires_at: string;   // YYYY-MM-DD (ET)
+  expires_at: string;   // ISO (date or timestamp) — ET calendar date
   created_at: string;
+  news_seen_at: string | null;
+  // Most recent article within the news window + its classification.
+  news_title: string | null;
+  news_url: string | null;
+  news_source: string | null;
+  news_published_at: string | null;
+  catalyst_score: number | null;
+  catalyst_direction: string | null;
+  catalyst_urgency: string | null;
+  catalyst_type: string | null;
+  catalyst_reason: string | null;
+  // News landed after the user last viewed this entry (or after adding it).
+  has_new_news: boolean;
 }

@@ -174,14 +174,35 @@ router.delete('/hidden-tickers/:ticker', authMiddleware, async (req, res) => {
 
 // ─── watchlist / favorites (per-user, expiring) ────────────────────────────
 // The "add it while the market's closed, analyze it, act at the open" list.
-// Each entry carries a free-text note + an expiry date; expired entries are
-// auto-removed (ET-day cleanup on GET, same pattern as hidden-tickers above).
-const watchlistSchema = z.object({
+// Tickers are added with a one-click star from any row (no form); each entry
+// carries an expiry date (default +2 ET days, editable per row) and surfaces
+// its most recent catalyst + a "new news" flag. Expired entries auto-remove
+// (ET-day cleanup on GET, same pattern as hidden-tickers above).
+
+// How many ET days out the default expiry sits when adding via the star.
+const WATCHLIST_DEFAULT_EXPIRY_DAYS = 2;
+// News lookup window — match the per-ticker news panel's multi-day window so a
+// 2-3-day-old swing catalyst still shows on the watchlist row.
+const WATCHLIST_NEWS_DAYS = 4;
+
+// expires_at optional on add (defaults to +2d); note kept optional for back-
+// compat but the UI no longer sends it.
+const watchlistAddSchema = z.object({
   ticker: z.string().min(1).max(10),
   note: z.string().max(500).optional(),
-  // YYYY-MM-DD (an ET calendar date). The entry stays through that day.
+  expires_at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+});
+// PATCH just the expiry (the per-row date editor).
+const watchlistExpirySchema = z.object({
   expires_at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
 });
+
+// today_ET + n days, as YYYY-MM-DD.
+function etDatePlusDays(n: number): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() + n);
+  return etDateString(d);
+}
 
 router.get('/watchlist', authMiddleware, async (req, res) => {
   const db = getDb();
@@ -192,44 +213,126 @@ router.get('/watchlist', authMiddleware, async (req, res) => {
     .where('user_id', '=', req.user!.userId)
     .where('expires_at', '<', today)
     .execute();
-  const rows = await db
-    .selectFrom('user_watchlist')
-    .select(['ticker', 'note', 'expires_at', 'created_at'])
-    .where('user_id', '=', req.user!.userId)
-    .orderBy('expires_at', 'asc')   // soonest-expiring first
-    .orderBy('created_at', 'desc')
-    .execute();
-  res.json({ data: rows });
+  // Each entry + its most recent article within the news window (+ that
+  // article's classification) and a has_new_news flag = the article landed
+  // after the user last viewed this entry's news (or after adding it). Mirrors
+  // the Continuation builder's recent_news join.
+  const rows = await sql<{
+    ticker: string;
+    note: string | null;
+    expires_at: string;
+    created_at: string;
+    news_seen_at: string | null;
+    news_title: string | null;
+    news_url: string | null;
+    news_source: string | null;
+    news_published_at: string | null;
+    catalyst_score: number | null;
+    catalyst_direction: string | null;
+    catalyst_urgency: string | null;
+    catalyst_type: string | null;
+    catalyst_reason: string | null;
+    has_new_news: boolean;
+  }>`
+    with wl as (
+      select ticker, note, expires_at::text, created_at, news_seen_at
+      from user_watchlist
+      where user_id = ${req.user!.userId}
+    ),
+    recent_news as (
+      select distinct on (ntl.ticker)
+             ntl.ticker,
+             na.title, na.url, na.source::text as source,
+             na.published_at,
+             nc.impact_score::int as catalyst_score,
+             nc.direction::text   as catalyst_direction,
+             nc.urgency::text     as catalyst_urgency,
+             nc.catalyst_type     as catalyst_type,
+             nc.reason            as catalyst_reason
+      from news_ticker_links ntl
+      join news_articles na on na.id = ntl.article_id
+      left join news_classifications nc on nc.article_id = na.id
+      where na.published_at > now() - (${WATCHLIST_NEWS_DAYS} || ' days')::interval
+        and ntl.ticker in (select ticker from wl)
+      order by ntl.ticker, na.published_at desc
+    )
+    select wl.ticker, wl.note, wl.expires_at, wl.created_at, wl.news_seen_at,
+           rn.title           as news_title,
+           rn.url             as news_url,
+           rn.source          as news_source,
+           rn.published_at::text as news_published_at,
+           rn.catalyst_score, rn.catalyst_direction, rn.catalyst_urgency,
+           rn.catalyst_type, rn.catalyst_reason,
+           coalesce(rn.published_at > coalesce(wl.news_seen_at, wl.created_at), false) as has_new_news
+    from wl
+    left join recent_news rn on rn.ticker = wl.ticker
+    order by has_new_news desc, wl.expires_at asc, wl.created_at desc
+  `.execute(db);
+  res.json({ data: rows.rows });
 });
 
 router.post('/watchlist', authMiddleware, async (req, res) => {
-  const parsed = watchlistSchema.safeParse(req.body);
+  const parsed = watchlistAddSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Validation failed', details: parsed.error.errors });
   const ticker = parsed.data.ticker.toUpperCase();
   const today = etDateString(new Date());
+  const expires_at = parsed.data.expires_at ?? etDatePlusDays(WATCHLIST_DEFAULT_EXPIRY_DAYS);
   // Reject an already-past expiry outright — it'd be cleaned up immediately.
-  if (parsed.data.expires_at < today) {
+  if (expires_at < today) {
     return res.status(400).json({ error: 'expires_at is in the past' });
   }
   const db = getDb();
-  // Upsert: re-adding a ticker updates its note/expiry rather than erroring.
+  // Upsert: re-adding a ticker refreshes its expiry rather than erroring. Note
+  // is only overwritten when explicitly provided, so a re-star doesn't wipe it.
   await db
     .insertInto('user_watchlist')
     .values({
       user_id: req.user!.userId,
       ticker,
       note: parsed.data.note ?? null,
-      expires_at: parsed.data.expires_at,
+      expires_at,
     })
     .onConflict((oc) =>
       oc.columns(['user_id', 'ticker']).doUpdateSet({
-        note: parsed.data.note ?? null,
-        expires_at: parsed.data.expires_at,
+        expires_at,
+        ...(parsed.data.note !== undefined ? { note: parsed.data.note } : {}),
         updated_at: sql`current_timestamp` as unknown as Date,
       }),
     )
     .execute();
-  res.status(201).json({ data: { ticker } });
+  res.status(201).json({ data: { ticker, expires_at } });
+});
+
+// Update just the expiry for an entry (the per-row date editor).
+router.patch('/watchlist/:ticker', authMiddleware, async (req, res) => {
+  const parsed = watchlistExpirySchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Validation failed', details: parsed.error.errors });
+  const today = etDateString(new Date());
+  if (parsed.data.expires_at < today) {
+    return res.status(400).json({ error: 'expires_at is in the past' });
+  }
+  const ticker = String(req.params.ticker).toUpperCase();
+  const db = getDb();
+  await db
+    .updateTable('user_watchlist')
+    .set({ expires_at: parsed.data.expires_at, updated_at: sql`current_timestamp` as unknown as Date })
+    .where('user_id', '=', req.user!.userId)
+    .where('ticker', '=', ticker)
+    .execute();
+  res.json({ data: { ticker, expires_at: parsed.data.expires_at } });
+});
+
+// Mark this entry's news as seen — clears the "new news" dot.
+router.post('/watchlist/:ticker/seen', authMiddleware, async (req, res) => {
+  const ticker = String(req.params.ticker).toUpperCase();
+  const db = getDb();
+  await db
+    .updateTable('user_watchlist')
+    .set({ news_seen_at: sql`current_timestamp` as unknown as string })
+    .where('user_id', '=', req.user!.userId)
+    .where('ticker', '=', ticker)
+    .execute();
+  res.json({ data: { ok: true } });
 });
 
 router.delete('/watchlist/:ticker', authMiddleware, async (req, res) => {

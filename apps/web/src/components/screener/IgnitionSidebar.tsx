@@ -7,6 +7,7 @@ import { useHiddenTickers } from '../../hooks/useHiddenTickers';
 import { CatalystBadge } from '../common/CatalystBadge';
 import { ShelfBadge } from '../common/ShelfBadge';
 import { TickerLink } from '../common/TickerLink';
+import { WatchlistStar } from '../common/WatchlistStar';
 import { fmtPrice, fmtPct, num } from '../../utils/format';
 import { CatalystNewsModal } from './CatalystNewsModal';
 
@@ -212,6 +213,8 @@ function IgnitionItem({
       <div style={{ flex: '1 1 auto', minWidth: 0, padding: '6px 8px' }}>
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
           <span>
+            <WatchlistStar ticker={row.ticker} size={12} />
+            <span style={{ marginRight: 4 }} />
             <TickerLink
               ticker={row.ticker}
               onSelect={onSelect}

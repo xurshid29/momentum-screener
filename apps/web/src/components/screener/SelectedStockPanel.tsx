@@ -7,6 +7,7 @@ import { newsApi } from '../../api/news';
 import { screenerApi } from '../../api/screener';
 import { ShelfBadge } from '../common/ShelfBadge';
 import { TickerLink } from '../common/TickerLink';
+import { WatchlistStar } from '../common/WatchlistStar';
 import { TickerNewsList } from '../news/TickerNewsList';
 import type {
   CyclePayload,
@@ -354,6 +355,9 @@ function DetailsTab({ ticker, meta, news }: DetailsTabProps) {
     <div style={{ height: '100%', overflow: 'auto', padding: '10px 12px' }}>
       {/* Header — ticker + price + change */}
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 4 }}>
+        <span style={{ alignSelf: 'center' }}>
+          <WatchlistStar ticker={ticker} size={18} />
+        </span>
         <TickerLink
           ticker={ticker}
           style={{ color: '#fff', fontSize: 22, fontWeight: 700, letterSpacing: 0.5 }}

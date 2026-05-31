@@ -220,6 +220,10 @@ export interface UserWatchlistTable {
   // ISO-8601 (YYYY-MM-DD) at all boundaries so the expiry comparison is
   // timezone-safe. Removed the next ET day by the GET endpoint's cleanup.
   expires_at: ColumnType<string, string, string>;
+  // Last time the user opened this entry's news. Drives the "new news" dot:
+  // news newer than coalesce(news_seen_at, created_at) is unseen. NULL until
+  // first viewed.
+  news_seen_at: ColumnType<Date | null, string | null, string>;
   created_at: Generated<Date>;
   updated_at: Generated<Date>;
 }
