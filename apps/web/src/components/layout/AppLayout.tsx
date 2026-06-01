@@ -37,7 +37,7 @@ export function AppLayout() {
           alignItems: 'center',
         }}
       >
-        <Text strong style={{ color: '#e0e0e0', letterSpacing: 1 }}>MOMENTUM SCREENER</Text>
+        <Text strong style={{ color: '#e0e0e0', letterSpacing: 1 }}>PNL DASH</Text>
         <Space size="middle">
           <Space size={6}>
             <Text type="secondary" style={{ fontSize: 11 }}>Charts</Text>
