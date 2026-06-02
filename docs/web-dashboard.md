@@ -2,7 +2,9 @@
 
 Status as of 2026-05-29 (end of day). The bash scanner (`screener-poll_breakout.sh`) and the web dashboard are both functional; the bash version remains the reference implementation. The web port lives in `apps/api` + `apps/web` and runs in parallel without sharing state with it.
 
-**Snapshot for a continuing session** — the screener has four tabs now (`[Momentum] [Continuation] [Swing] [History]`), the Ignition sidebar stays always-visible on the left, three Telegram alert paths fire (Momentum / Ignition / Swing / Continuation-dual-signal 🎯), and one cached view (Continuation) refreshes every ~10 min, seeding from **both** screens (`screener_results ∪ ignition_results`) and forward-tracking each name via `daily_bars`. The intended next direction is **tuning from data, not new features** — see `Remaining work / roadmap`. Every Swing-spec step (1–6) and the Continuation/History/dual-signal additions are now shipped; the gap going forward is grading the live alerts against actual outcomes.
+**Snapshot for a continuing session** — the screener has four tabs now (`[Momentum] [Continuation] [Swing] [History]`), the Ignition sidebar stays always-visible on the left, three Telegram alert paths fire (Momentum / Ignition / Swing / Continuation-dual-signal 🎯), and one cached view (Continuation) refreshes every ~10 min, seeding from **both** screens (`screener_results ∪ ignition_results`) and forward-tracking each name via `daily_bars`. The intended next direction is **tuning from data, not new features** — see `Remaining work / roadmap`. Every Swing-spec step (1–6) and the Continuation/History/dual-signal additions are now shipped.
+
+**Strategy shift (2026-06-02) — read this before building.** The operator's current thinking, which should steer priorities: (1) **Continuation is weak as a *predictor*** — guessing whether a name continues up next session is closer to gambling than edge; keep the tab (zero-cost DB derivative) but don't treat "showed up N days" as a buy signal. (2) **The Momentum screen + catalyst is the higher-value play**: enter when a name *first appears* with a good bullish catalyst, ride it, and **exit when the larger pullback begins** (topping tails, MACD rolling, heavy red volume) — the exit is discretionary chart-reading the screener can only *assist*, not automate. (3) **Catalyst quality is the operator's stated #1 factor.** The **forward outcome tracking** instrument (shipped — see Recent additions + "Reading the outcome data") now exists precisely to *test* these claims with data rather than intuition; the gap going forward is letting it accrue ~2 weeks of go-forward depth, then retuning scores/alerts and possibly building an "exit-assist" + a small outcomes view. Caveat: do not act on the first backfill's numbers — samples are tiny.
 
 See **Recent additions** for what shipped lately and **Remaining work** for what's next. The low-float runner-detection strategy + roadmap lives in [`catching-runners.md`](catching-runners.md); the Ignition screener design in [`ignition-screener-spec.md`](ignition-screener-spec.md); the multi-day Swing screener design in [`swing-screener-spec.md`](swing-screener-spec.md).
 
@@ -82,6 +84,11 @@ See **Recent additions** for what shipped lately and **Remaining work** for what
 
 ## Recent additions (since the 2026-05-04 snapshot)
 
+- **Forward outcome tracking (2026-06-02) — the measurement instrument.** The first "tuning from data" piece. Until now the screeners made claims (runner-score 58, bullish catalyst) with no record of whether they were right; tuning was intuition + a few case studies. This records what *actually happened* after every detection so "did the score/catalyst/shelf predict the move?" becomes one SQL query instead of a debate.
+  - **What:** new `screener_outcomes` table — one row per `(screen, ticker, et_date)` across **all three screens** (momentum / ignition / swing). Stores the **entry context** at detection (`entry_score`, `first_change_pct`, `peak_change_pct`, catalyst score/direction/urgency/type, `shelf_level`, `sessions`) and the **forward result** off `daily_bars`: `chg_1d/3d/5d`, `peak_5d` (best case), `drawdown_5d` (worst case), `bars_forward` (completeness). Anchor = the **detection-day close** (the honest overnight/multi-day-hold reference); intraday `first/peak_change_pct` kept so "already-extended entries fade" is testable.
+  - **How:** `services/outcomes.ts` `computeOutcomes()` runs once/ET day from the poller's post-close window (16:30 ET; `lastOutcomesDate` guard, reset at midnight), fire-and-forget. **Idempotent upsert that revisits each row until `bars_forward >= 5`** — a name detected today gets `chg_1d` tomorrow, `chg_3d` in 3 days, `chg_5d` in 5. A boot-time catch-up (`index.ts`, +60s after start) backfilled the existing ~2 weeks. **Zero new live API calls:** reads `daily_bars`, and `dailyBars.trackUniverse()`s detected tickers so sub-$1 nano-caps that never entered the Swing universe get backfilled (their outcomes populate once bars land). Catalyst direction/urgency/type come from the `news_classifications` join (momentum rows carry no catalyst column; only `impact_score` lives on ignition/swing rows) bucketed to ET publish date.
+  - **Dashboard impact: NONE yet — pure backend, headless by design.** No tab/panel/badge. The plan is *measure first* — let ~2 weeks of go-forward data accrue, then (a) retune scores/alert thresholds from reality, and optionally (b) build a small outcomes/backtest view + an "exit-assist" (pullback signals: topping tails, MACD roll, red-volume spike) on the selected name. None of that is built.
+  - **Status:** `/health` → `outcomes`. Verify/query via the "Reading the outcome data" block under Operational notes.
 - **News windows widened to 7 days (2026-05-31).** A second, distinct news-visibility bug from the DBGI one. AGPU was on the Continuation list with its news already in the DB (latest 05-27 "$43M payment", 05-26 Q1 call) — but viewed on Sunday 05-31 it showed no news, because the windows were too narrow to reach back across a weekend: the Continuation badge looked back only 3 days (`NEWS_LOOKBACK_DAYS`) and the click surfaces 4 (`days=4`), both excluding 05-27 (4 calendar days back). Fix: couple each surface's news window to its analytical horizon — `continuation.ts` `NEWS_LOOKBACK_DAYS → LOOKBACK_DAYS` (7, so the badge spans the same window the continuation does), and `WATCHLIST_NEWS_DAYS` / `TICKER_NEWS_DAYS` (Quote Details) / `MODAL_NEWS_DAYS` (catalyst modal) all 4→7. Verified on prod: `GET /api/news?ticker=AGPU&days=4` → 0 articles (the bug), `days=7` → 3 (fixed; the 05-27 + 05-26 items surface). Deliberately did **not** add a fallback-to-latest — a "Recent News" panel surfacing month-old news would mislead; >7-day-stale is genuinely no recent news.
 - **On-demand per-ticker news (2026-05-31).** The poller only ingests news for tickers **currently in the screener universe** (it builds the news-fetch ticker list from the live screens). So a name that drops off the screens — DBGI, last screened 05-27 — or any watchlist ticker that isn't actively screening stops accruing news in our DB, even though Finviz/Yahoo/Benzinga still carry fresh items. That's why DBGI showed no news in the dashboard while Finviz/Benzinga had it. Fix: new `services/ticker-news.ts` `fetchAndStoreTickerNews(ticker)` pulls a single ticker's recent **multi-day** news live (Finviz with the date filter off → multi-day window, plus Yahoo), upserts into `news_articles` + `news_ticker_links` (dedup by url, same shape as the poller's persist path), and rule-classifies each new article. Rate-bounded by a 2-min per-ticker cache so rapid clicks don't hammer Finviz. `GET /api/news?ticker=X` now calls it best-effort *before* the DB query, so clicking any ticker's news — Quote Details "Recent News" and the catalyst modal, both already on `days=4` — surfaces the last few days regardless of whether the ticker is screening. Verified on prod: DBGI went from 2 stale rows (a 05-21 halt + a 05-11 blurb) to 41 after one read, pulling its actual recent Finviz/Yahoo PRs (05-28 AI-strategy, 05-21 partnership, 05-12 guidance, …).
 - **Watchlist v2 — star-from-anywhere + news indicator (2026-05-31).** Reworked the watchlist from the initial add-form version. Capture is now a one-click **★** (`common/WatchlistStar.tsx`) on every row surface — Momentum / Swing / Continuation tables, the Ignition sidebar, and the Quote Details header — so a ticker goes on the list from wherever you spot it; filled gold = on the list (click removes), hollow = add. Default expiry dropped to **+2 ET days** (editable per row via an inline Popover DatePicker on the days-left chip; `PATCH /api/prefs/watchlist/:ticker`). Each watchlist row now surfaces its most recent catalyst (shared `CatalystBadge` + headline, 4-day news window like Continuation) **and a 🆕 "new news" dot** when an article landed after you added / last viewed the entry — so a catalyst breaking while a ticker sits in the list lights up on its own (the panel refetches every 5 min). Opening the row's news clears the dot (`user_watchlist.news_seen_at` column + `POST /api/prefs/watchlist/:ticker/seen`; the GET computes `has_new_news = latest published_at > coalesce(news_seen_at, created_at)`). The add-form and free-text notes were removed (the `note` column stays in the DB, unused). Added a `patch()` method to the web api client. Verified on prod: star-add → +2d default, list carries catalyst + `has_new_news`, mark-seen flips it to false, PATCH expiry, delete.
@@ -196,19 +203,33 @@ feedback loop will be wasted work.
 
 ### Tuning from data (priority — earliest valuable work for a continuing session)
 
-- **Forward outcome tracking** — daily 16:30 ET job that joins each prior
-  `swing_results` / `ignition_results` / Continuation-alerted snapshot to
-  the next N daily bars, computes `final_chg` / `peak_chg` / `drawdown` /
-  `final_pnl`, persists to `*_outcomes` tables. Makes "did the score predict
-  the move?" one SQL JOIN. One-time prerequisite: a `daily_bars` backfill
-  for every persisted ticker (the live backfill only covers the Swing
-  universe today).
+- ✅ **Forward outcome tracking** — SHIPPED 2026-06-02 (`services/outcomes.ts`,
+  `screener_outcomes` table). Daily post-close job (16:30 ET, fired from the
+  poller; boot-time catch-up backfills history) that rolls each ET day's
+  Momentum / Ignition / Swing detections to **one row per (screen, ticker,
+  et_date)** and joins `daily_bars` forward for `chg_1d/3d/5d`, `peak_5d`,
+  `drawdown_5d`, anchored to the detection-day close. Idempotent upsert that
+  revisits each row until `bars_forward >= 5`. Entry context denormalized
+  (entry_score, first/peak_change_pct, catalyst from the news join,
+  shelf_level, sessions). Zero new live API calls — reads `daily_bars` and
+  `trackUniverse()`s detected tickers so nano-caps off the Swing universe get
+  backfilled. **"Did the score/catalyst/shelf predict the move?" is now one
+  GROUP BY.** See the worked queries in "Reading the outcome data" below.
+  Status on `/health` → `outcomes`. **Still headless — no UI yet (by design:
+  measure first).**
 - **Retune scores from outcomes** — once outcome data has a couple of weeks
-  of depth, regress final P&L against each component-score bucket. Most
-  likely candidates for adjustment: Swing `Catalyst 20` weight (durable vs
-  promo class might need higher gap), Ignition `change_score` (the
-  empirical PM-fade finding suggests a steeper penalty on already-extended
-  PM entries), dual-signal `min_ignition_score = 40` threshold.
+  of GO-FORWARD depth (not just the boot backfill), regress final P&L against
+  each component-score bucket. Most likely candidates: Swing `Catalyst 20`
+  weight, Ignition `change_score` (PM-fade → steeper penalty on extended PM
+  entries), dual-signal `min_ignition_score = 40`. **Do not retune off the
+  first backfill — samples are tiny and rows overlap across screens.** First
+  reads (2026-06-02, small N, directional only): bearish catalyst reliably
+  bad (≈ −15% 5d); bullish-catalyst names have the HIGHEST peak but give it
+  back by close (the "trade the spike, don't hold" signature — endorses the
+  exit-into-strength play); `active` shelf had the best mean return + worst
+  drawdown (so "skip effective shelves" is NOT supported as a return filter —
+  dilution = volatility, not lower upside); drawdown rises cleanly with entry
+  extension.
 - **Dual-signal alert outcome study** — separate forward-track. The 🎯
   alert is the highest-conviction signal we ship; its hit rate over the
   next 1, 3, 5 trading days is the most important number to know.
@@ -331,6 +352,54 @@ source .env && psql "$DATABASE_URL" -c \
 source .env && psql "$DATABASE_URL" -c \
   "select source, count(*) from news_articles where fetched_at > now() - interval '1 hour' group by source;"
 ```
+
+### Reading the outcome data (`screener_outcomes`)
+
+The forward-outcome instrument (shipped 2026-06-02, `services/outcomes.ts`).
+Always gate on `bars_forward >= 5` so you only compare rows whose 5-day
+horizon has actually filled. **Caveat that matters: the boot backfill is ~2
+weeks, samples per cell are small, and the same runner appears across multiple
+screens (rows are NOT independent) — treat early reads as a direction check,
+not a verdict. Wait for ~2 weeks of GO-FORWARD depth before retuning weights.**
+
+```bash
+source .env
+
+# Coverage — how much is ready per screen
+psql "$DATABASE_URL" -c \
+  "select screen, count(*) n, count(*) filter (where bars_forward>=5) ready, \
+   round(avg(chg_5d),1) avg5, round(avg(peak_5d),1) peak, round(avg(drawdown_5d),1) dd \
+   from screener_outcomes group by 1 order by 1;"
+
+# THE core hypothesis — does catalyst direction predict the 5-day move?
+psql "$DATABASE_URL" -c \
+  "select screen, coalesce(catalyst_direction,'(none)') dir, count(*) n, \
+   round(avg(chg_5d),1) avg5, round(avg(peak_5d),1) peak, round(avg(drawdown_5d),1) dd \
+   from screener_outcomes where bars_forward>=5 group by 1,2 order by 1, avg5 desc nulls last;"
+
+# Shelf level — settles 'is it OK to skip effective shelves?'
+psql "$DATABASE_URL" -c \
+  "select coalesce(shelf_level,'(none)') shelf, count(*) n, round(avg(chg_5d),1) avg5, \
+   round(avg(peak_5d),1) peak, round(avg(drawdown_5d),1) dd \
+   from screener_outcomes where bars_forward>=5 group by 1 order by avg5 desc nulls last;"
+
+# Entry-extension bucket — the WHLR/FRGT 'entered already extended' loser-trait
+psql "$DATABASE_URL" -c \
+  "select case when first_change_pct>=40 then 'd_>=40%' when first_change_pct>=20 then 'c_20-40%' \
+          when first_change_pct>=0 then 'b_0-20%' else 'a_<0%' end bucket, \
+   count(*) n, round(avg(chg_5d),1) avg5, round(avg(drawdown_5d),1) dd \
+   from screener_outcomes where bars_forward>=5 and first_change_pct is not null group by 1 order by 1;"
+```
+
+**First reads (2026-06-02, small N — directional only):** bearish catalyst
+reliably bad (≈ −15% 5d, worst drawdowns); **bullish-catalyst names show the
+HIGHEST peak but give it back by close** — the "trade the spike, don't hold 5
+days" signature, which *endorses* the exit-into-strength play rather than
+refuting "catalyst matters"; `active` shelf had the *best* mean return + worst
+drawdown (so "skip effective shelves" is NOT a return filter — dilution =
+volatility, not lower upside); drawdown rises cleanly with entry extension.
+"(none)" catalyst is contaminated — it means "no article we captured/classified
+that day," not "no news."
 
 ### Migrations
 
