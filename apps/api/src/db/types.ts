@@ -119,6 +119,36 @@ export interface SwingResultsTable {
   created_at: Generated<Date>;
 }
 
+// One row per (screen, ticker, ET trading day): the entry context at detection
+// plus forward close-to-close moves from daily_bars. Populated by the daily
+// OutcomesService job. See db/migrations and docs roadmap "Forward outcome
+// tracking".
+export interface ScreenerOutcomesTable {
+  id: Generated<string>;
+  screen: string;                  // 'momentum' | 'ignition' | 'swing'
+  ticker: string;
+  et_date: ColumnType<string, string, string>;   // Postgres date, ISO at boundaries
+  entry_close: number | null;
+  next_open: number | null;
+  entry_score: number | null;
+  first_change_pct: number | null;
+  peak_change_pct: number | null;
+  catalyst_score: number | null;
+  catalyst_direction: string | null;
+  catalyst_urgency: string | null;
+  catalyst_type: string | null;
+  shelf_level: string | null;
+  sessions: ColumnType<string[], string[], string[]> | null;
+  chg_1d: number | null;
+  chg_3d: number | null;
+  chg_5d: number | null;
+  peak_5d: number | null;
+  drawdown_5d: number | null;
+  bars_forward: Generated<number>;
+  computed_at: Generated<Date>;
+  updated_at: Generated<Date>;
+}
+
 // Per-ticker daily OHLCV bars. Powers the Swing screener's daily-timeframe
 // signals (SMAs, 52w high, ATR, base/breakout detection). Loaded from Finviz
 // quote_export and refreshed nightly. See docs/swing-screener-spec.md §4.1.
@@ -236,6 +266,7 @@ export interface Database {
   ignition_results: IgnitionResultsTable;
   swing_results: SwingResultsTable;
   daily_bars: DailyBarsTable;
+  screener_outcomes: ScreenerOutcomesTable;
   news_articles: NewsArticlesTable;
   news_ticker_links: NewsTickerLinksTable;
   news_classifications: NewsClassificationsTable;

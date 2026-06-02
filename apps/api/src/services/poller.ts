@@ -28,6 +28,7 @@ import {
 } from './swing-score.js';
 import { shelf, type ShelfInfo } from './shelf.js';
 import { dailyBars, getRecentBarsForTickers } from './daily-bars.js';
+import { outcomes } from './outcomes.js';
 import { getContinuationCandidates, type ContinuationCandidate } from './continuation.js';
 import { classifyByRules, type Classification, type ClassifierInput } from './catalyst-rules.js';
 import { classifyByClaude } from './catalyst-claude.js';
@@ -259,6 +260,10 @@ class PollerService {
   private lastSwingRows: SwingRow[] = [];
   private lastSwingComputedAt = 0;
   private lastForcedSwingPostCloseDate = '';
+  // ET date the daily outcome-tracking job last ran. Fired once per ET day from
+  // the post-close window (after the daily-bars refresh, so today's close has
+  // landed). Reset at midnight ET. See services/outcomes.ts.
+  private lastOutcomesDate = '';
   // Tickers already Telegram-alerted from the Swing screener today.
   private alertedSwing = new Set<string>();
   // Tickers already Telegram-alerted from the Continuation dual-signal today.
@@ -405,6 +410,7 @@ class PollerService {
       this.alertedSwing.clear();
       this.alertedDualSignal.clear();
       this.lastForcedSwingPostCloseDate = '';
+      this.lastOutcomesDate = '';
       // Anchored VWAP must reset across days so yesterday's tallies don't
       // contaminate today's. Session-boundary changes inside a day deliberately
       // *don't* clear it (see lastSession block below).
@@ -448,6 +454,20 @@ class PollerService {
       this.swingCounter === 1 ||
       this.swingCounter % SWING.cadence_cycles === 0 ||
       isPostCloseTrigger;
+
+    // Forward outcome tracking — once per ET day, in the same post-close window
+    // as the Swing refresh. Fire-and-forget so it never blocks the cycle; the
+    // job is idempotent and revisits each row until its 5-day horizon fills, so
+    // exact timing vs the daily-bars refresh doesn't matter. Skipped while
+    // 'closed' (weekends/holidays) — nothing new to score.
+    if (
+      etMin >= SWING.post_close_minute_et &&
+      session !== 'closed' &&
+      this.lastOutcomesDate !== todayEt
+    ) {
+      this.lastOutcomesDate = todayEt;
+      void outcomes.computeOutcomes();
+    }
 
     // Continuation cadence — independent of Swing. The SQL aggregation
     // (5-day window over ignition_results) costs ~1.5 s, so we cache and
