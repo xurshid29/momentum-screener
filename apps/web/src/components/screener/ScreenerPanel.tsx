@@ -16,6 +16,7 @@ import { CatalystNewsModal } from './CatalystNewsModal';
 import { SwingTable } from './SwingTable';
 import { ContinuationTable } from './ContinuationTable';
 import { HistoryByDayPanel } from './HistoryByDayPanel';
+import { OutcomesPanel } from './OutcomesPanel';
 
 const { Text } = Typography;
 
@@ -336,6 +337,11 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
                 onOpenCatalyst={(ticker, catalyst) => setCatalystModal({ ticker, catalyst })}
               />
             ),
+          },
+          {
+            key: 'outcomes',
+            label: 'Outcomes',
+            children: <OutcomesPanel />,
           },
         ]}
       />

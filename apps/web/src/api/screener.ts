@@ -5,6 +5,10 @@ import type {
   HistoryByDayScreen,
   HistoryRow,
   IgnitionHistoryRow,
+  OutcomeSummaryResponse,
+  OutcomesGroupBy,
+  OutcomesHorizon,
+  OutcomesScreen,
   ScreenerFilterSnapshot,
 } from './types';
 
@@ -31,6 +35,17 @@ export const screenerApi = {
   async historyByDay(date: string, screen: HistoryByDayScreen): Promise<HistoryByDayRow[]> {
     const res = await apiClient.get<HistoryByDayRow[]>(
       `/api/screener/history-by-day?date=${encodeURIComponent(date)}&screen=${screen}`,
+    );
+    return res.data;
+  },
+
+  async outcomesSummary(
+    groupBy: OutcomesGroupBy,
+    horizon: OutcomesHorizon,
+    screen: OutcomesScreen,
+  ): Promise<OutcomeSummaryResponse> {
+    const res = await apiClient.get<OutcomeSummaryResponse>(
+      `/api/screener/outcomes-summary?group_by=${groupBy}&horizon=${horizon}&screen=${screen}`,
     );
     return res.data;
   },

@@ -259,6 +259,104 @@ router.get('/history-by-day', authMiddleware, async (req, res) => {
   res.json({ data: result.rows });
 });
 
+// GET /api/screener/outcomes-summary?group_by=...&horizon=1|3|5&screen=...
+// Aggregates screener_outcomes into per-bucket stats — the interactive
+// backtest view. Gates on bars_forward >= horizon so only rows whose horizon
+// has actually filled are compared. Returns a coverage header (so thin
+// samples are visible) + per-bucket {n, avg_chg, avg_peak, avg_drawdown,
+// win_rate}. See docs "Reading the outcome data".
+const outcomesSummarySchema = z.object({
+  group_by: z
+    .enum(['catalyst_direction', 'catalyst_urgency', 'shelf_level', 'score_bucket', 'extension_bucket', 'screen'])
+    .default('catalyst_direction'),
+  horizon: z.enum(['1', '3', '5']).default('5'),
+  screen: z.enum(['momentum', 'ignition', 'swing', 'all']).default('all'),
+});
+
+router.get('/outcomes-summary', authMiddleware, async (req, res) => {
+  const parsed = outcomesSummarySchema.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: 'Validation failed', details: parsed.error.errors });
+  const { group_by, horizon, screen } = parsed.data;
+  const db = getDb();
+
+  // The horizon's return column. Validated by the enum above, so this is a
+  // safe identifier (never user-interpolated raw).
+  const chgCol = sql.ref(`chg_${horizon}d`);
+  const minBars = Number(horizon);
+
+  // Per-group_by bucket label expression. score/extension are bucketed; the
+  // rest are the raw column coalesced to a placeholder. sql.lit keeps the
+  // labels server-controlled.
+  const bucketExpr =
+    group_by === 'score_bucket'
+      ? sql`case
+              when entry_score is null then '(no score)'
+              when entry_score >= 75 then '75-100'
+              when entry_score >= 55 then '55-75'
+              when entry_score >= 40 then '40-55'
+              else '0-40'
+            end`
+      : group_by === 'extension_bucket'
+        ? sql`case
+                when first_change_pct is null then '(unknown)'
+                when first_change_pct >= 40 then '>=40%'
+                when first_change_pct >= 20 then '20-40%'
+                when first_change_pct >= 0 then '0-20%'
+                else '<0%'
+              end`
+        : group_by === 'catalyst_direction'
+          ? sql`coalesce(catalyst_direction, '(none)')`
+          : group_by === 'catalyst_urgency'
+            ? sql`coalesce(catalyst_urgency, '(none)')`
+            : group_by === 'shelf_level'
+              ? sql`coalesce(shelf_level, '(none)')`
+              : sql`screen`;
+
+  const screenWhere = screen === 'all' ? sql`true` : sql`screen = ${screen}`;
+
+  const result = await sql<{
+    bucket: string;
+    n: number;
+    avg_chg: number | null;
+    avg_peak: number | null;
+    avg_drawdown: number | null;
+    win_rate: number | null;
+  }>`
+    select ${bucketExpr}                                                   as bucket,
+           count(*)::int                                                   as n,
+           round(avg(${chgCol})::numeric, 1)                               as avg_chg,
+           round(avg(peak_5d)::numeric, 1)                                 as avg_peak,
+           round(avg(drawdown_5d)::numeric, 1)                             as avg_drawdown,
+           round((count(*) filter (where ${chgCol} > 0)::numeric
+                  / nullif(count(*), 0) * 100), 0)                         as win_rate
+    from screener_outcomes
+    where ${screenWhere}
+      and bars_forward >= ${minBars}
+      and ${chgCol} is not null
+    group by 1
+    order by avg_chg desc nulls last
+  `.execute(db);
+
+  // Coverage header — total rows in scope + how many are horizon-ready, so the
+  // UI can warn on thin samples.
+  const coverage = await sql<{ total: number; ready: number }>`
+    select count(*)::int                                          as total,
+           count(*) filter (where bars_forward >= ${minBars})::int as ready
+    from screener_outcomes
+    where ${screenWhere}
+  `.execute(db);
+
+  res.json({
+    data: {
+      group_by,
+      horizon: minBars,
+      screen,
+      coverage: coverage.rows[0] ?? { total: 0, ready: 0 },
+      buckets: result.rows,
+    },
+  });
+});
+
 // GET /api/screener/cycles/:id/results
 router.get('/cycles/:id/results', authMiddleware, async (req, res) => {
   const db = getDb();

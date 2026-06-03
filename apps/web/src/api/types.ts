@@ -186,6 +186,34 @@ export interface HistoryByDayRow {
 
 export type HistoryByDayScreen = 'ignition' | 'momentum';
 
+// ─── outcomes / backtest view ────────────────────────────────────────────────
+export type OutcomesGroupBy =
+  | 'catalyst_direction'
+  | 'catalyst_urgency'
+  | 'shelf_level'
+  | 'score_bucket'
+  | 'extension_bucket'
+  | 'screen';
+export type OutcomesHorizon = 1 | 3 | 5;
+export type OutcomesScreen = 'all' | 'momentum' | 'ignition' | 'swing';
+
+export interface OutcomeSummaryBucket {
+  bucket: string;
+  n: number;
+  avg_chg: number | null;       // avg chg over the selected horizon (%)
+  avg_peak: number | null;      // avg peak_5d (best case, %)
+  avg_drawdown: number | null;  // avg drawdown_5d (worst case, %)
+  win_rate: number | null;      // % of rows with chg > 0
+}
+
+export interface OutcomeSummaryResponse {
+  group_by: OutcomesGroupBy;
+  horizon: OutcomesHorizon;
+  screen: OutcomesScreen;
+  coverage: { total: number; ready: number };
+  buckets: OutcomeSummaryBucket[];
+}
+
 // Continuation candidate — a ticker in the middle of a *multi-day* move.
 // Seeded from either screen (Momentum ∪ Ignition) on any day in the window,
 // then forward-tracked via daily_bars so a quiet day-2 grind that re-triggers
