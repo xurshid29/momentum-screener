@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
-import { Table, Tabs, Tag, Typography, Tooltip, Badge, Button, Space, Popover, List } from 'antd';
+import { Table, Tabs, Tag, Typography, Tooltip, Badge, Button, Space, Popover, List, Checkbox } from 'antd';
 import { FilterOutlined, CloseOutlined, EyeInvisibleOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import type { CatalystInfo, CyclePayload, EnrichedRow, RowStatus, TradingSession } from '../../api/types';
 import { useSelection } from '../../context/SelectionContext';
+import { useLayout } from '../../context/LayoutContext';
 import { useHiddenTickers } from '../../hooks/useHiddenTickers';
 import { TickerLink } from '../common/TickerLink';
 import { TickerLinks } from '../common/TickerLinks';
@@ -54,6 +55,7 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
   const [catalystModal, setCatalystModal] = useState<{ ticker: string; catalyst: CatalystInfo | null } | null>(null);
   const [activeTab, setActiveTab] = useState<ScreenerTab>('momentum');
   const { hidden, hide, unhide } = useHiddenTickers();
+  const { momentumNewsOnly, setMomentumNewsOnly } = useLayout();
 
   const columns: ColumnsType<EnrichedRow> = useMemo(
     () => [
@@ -193,7 +195,12 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
   );
 
   const allRows = payload?.rows ?? [];
-  const rows = allRows.filter((r) => !hidden.has(r.ticker));
+  // Hidden filter always applies; the "news only" toggle additionally drops
+  // rows with no catalyst/news today (client-side display filter — the Finviz
+  // fetch is unchanged).
+  const rows = allRows.filter(
+    (r) => !hidden.has(r.ticker) && (!momentumNewsOnly || r.has_today_news),
+  );
   const hiddenInScreener = allRows.filter((r) => hidden.has(r.ticker)).map((r) => r.ticker);
   // Tickers the user hid that aren't currently in the screener — still show
   // them in the "Hidden" list so the user can unhide blind if they want.
@@ -235,6 +242,17 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
             {hiddenList.length} hidden
           </Button>
         </Popover>
+      )}
+      {activeTab === 'momentum' && (
+        <Tooltip title="Show only rows with a catalyst / news today">
+          <Checkbox
+            checked={momentumNewsOnly}
+            onChange={(e) => setMomentumNewsOnly(e.target.checked)}
+            style={{ fontSize: 12 }}
+          >
+            🔥 News only
+          </Checkbox>
+        </Tooltip>
       )}
       {activeTab === 'momentum' && (
         <Tooltip title="Edit filters">

@@ -5,6 +5,9 @@ import type { ChartPref } from './types';
 // Currently only stores chart_count; extend as we add more layout knobs.
 export interface PanelLayout {
   chart_count?: number;
+  // Momentum tab "news/catalyst only" display filter — show only rows that
+  // have today's news. Per-user, persisted alongside chart_count.
+  momentum_news_only?: boolean;
 }
 
 export const prefsApi = {
