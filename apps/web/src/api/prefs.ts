@@ -8,6 +8,8 @@ export interface PanelLayout {
   // Momentum tab "news/catalyst only" display filter — show only rows that
   // have today's news. Per-user, persisted alongside chart_count.
   momentum_news_only?: boolean;
+  // Same display filter for the Ignition sidebar.
+  ignition_news_only?: boolean;
 }
 
 export const prefsApi = {

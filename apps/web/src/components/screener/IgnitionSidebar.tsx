@@ -3,6 +3,7 @@ import { Typography, Tooltip, Empty, Button, Popover, List } from 'antd';
 import { CloseOutlined, EyeInvisibleOutlined } from '@ant-design/icons';
 import type { CatalystInfo, CyclePayload, IgnitionRow } from '../../api/types';
 import { useSelection } from '../../context/SelectionContext';
+import { useLayout } from '../../context/LayoutContext';
 import { useHiddenTickers } from '../../hooks/useHiddenTickers';
 import { CatalystBadge } from '../common/CatalystBadge';
 import { ShelfBadge } from '../common/ShelfBadge';
@@ -86,8 +87,13 @@ function HiddenList({ tickers, onUnhide }: { tickers: string[]; onUnhide: (t: st
 export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
   const { selected, setSelected } = useSelection();
   const { hidden, hide, unhide } = useHiddenTickers();
+  const { ignitionNewsOnly, setIgnitionNewsOnly } = useLayout();
   const [catalystModal, setCatalystModal] = useState<{ ticker: string; catalyst: CatalystInfo | null } | null>(null);
-  const all = (payload?.ignition ?? []).filter((r) => !hidden.has(r.ticker));
+  // Hidden filter always applies; "news only" additionally drops rows with no
+  // catalyst/news today (client-side display filter — the broadcast is intact).
+  const all = (payload?.ignition ?? []).filter(
+    (r) => !hidden.has(r.ticker) && (!ignitionNewsOnly || r.has_today_news),
+  );
   const newRows = all.filter((r) => r.is_new);
   const topRows = all.filter((r) => !r.is_new);
   const hiddenList = [...hidden].sort();
@@ -123,6 +129,22 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
           <Text strong style={{ color: '#e0e0e0', letterSpacing: 0.5, fontSize: 15 }}>⚡ Ignition</Text>
           <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>{all.length}</Text>
         </span>
+        <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+        <Tooltip title={ignitionNewsOnly ? 'Showing only rows with news today — click to show all' : 'Show only rows with a catalyst / news today'}>
+          <Button
+            type="text"
+            size="small"
+            onClick={() => setIgnitionNewsOnly(!ignitionNewsOnly)}
+            style={{
+              fontSize: 11,
+              padding: '0 6px',
+              color: ignitionNewsOnly ? '#fa8c16' : '#8c8c8c',
+              background: ignitionNewsOnly ? '#2a1f12' : undefined,
+            }}
+          >
+            🔥 news
+          </Button>
+        </Tooltip>
         {hiddenList.length > 0 && (
           <Popover
             trigger="click"
@@ -139,13 +161,18 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
             </Button>
           </Popover>
         )}
+        </span>
       </div>
 
       {all.length === 0 ? (
         <div style={{ flex: '1 1 auto', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description={<Text type="secondary" style={{ fontSize: 12 }}>No ignitions</Text>}
+            description={
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {ignitionNewsOnly ? 'No ignitions with news today' : 'No ignitions'}
+              </Text>
+            }
           />
         </div>
       ) : (

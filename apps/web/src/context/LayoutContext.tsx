@@ -18,6 +18,8 @@ interface LayoutContextValue {
   setChartCount: (n: ChartCount) => void;
   momentumNewsOnly: boolean;
   setMomentumNewsOnly: (v: boolean) => void;
+  ignitionNewsOnly: boolean;
+  setIgnitionNewsOnly: (v: boolean) => void;
 }
 
 const LayoutContext = createContext<LayoutContextValue | null>(null);
@@ -25,6 +27,7 @@ const LayoutContext = createContext<LayoutContextValue | null>(null);
 export function LayoutProvider({ children }: { children: ReactNode }) {
   const [chartCount, setChartCountState] = useState<ChartCount>(DEFAULT_CHART_COUNT);
   const [momentumNewsOnly, setMomentumNewsOnlyState] = useState(false);
+  const [ignitionNewsOnly, setIgnitionNewsOnlyState] = useState(false);
   const { data: serverLayout } = useQuery({
     queryKey: ['prefs', 'layout'],
     queryFn: () => prefsApi.getLayout(),
@@ -40,6 +43,9 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
     if (typeof serverLayout?.momentum_news_only === 'boolean') {
       setMomentumNewsOnlyState(serverLayout.momentum_news_only);
     }
+    if (typeof serverLayout?.ignition_news_only === 'boolean') {
+      setIgnitionNewsOnlyState(serverLayout.ignition_news_only);
+    }
     hydrated.current = true;
   }, [serverLayout]);
 
@@ -48,6 +54,7 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
     const next: PanelLayout = {
       chart_count: chartCount,
       momentum_news_only: momentumNewsOnly,
+      ignition_news_only: ignitionNewsOnly,
       ...patch,
     };
     prefsApi.putLayout(next).catch(() => {});
@@ -63,8 +70,22 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
     persist({ momentum_news_only: v });
   };
 
+  const setIgnitionNewsOnly = (v: boolean) => {
+    setIgnitionNewsOnlyState(v);
+    persist({ ignition_news_only: v });
+  };
+
   return (
-    <LayoutContext.Provider value={{ chartCount, setChartCount, momentumNewsOnly, setMomentumNewsOnly }}>
+    <LayoutContext.Provider
+      value={{
+        chartCount,
+        setChartCount,
+        momentumNewsOnly,
+        setMomentumNewsOnly,
+        ignitionNewsOnly,
+        setIgnitionNewsOnly,
+      }}
+    >
       {children}
     </LayoutContext.Provider>
   );
