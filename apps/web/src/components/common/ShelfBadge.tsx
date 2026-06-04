@@ -24,6 +24,13 @@ const TIER: Record<ShelfLevel, { color: string; label: string; desc: string }> =
 };
 
 export function ShelfBadge({ shelf, size = 14 }: { shelf: ShelfInfo; size?: number }) {
+  // De-noised: only `active` (a 424B within 90d — shares being sold into the
+  // move NOW) renders. `effective`/`shelf` are near-universal among low-float
+  // names (≈half of every Ignition list) and the outcome data shows they
+  // barely discriminate, so badging them just trains the eye to ignore the
+  // marker. The runner-score still penalises all tiers on the backend; this is
+  // purely a display de-noise so the badge that remains actually means "avoid".
+  if (shelf.level !== 'active') return null;
   const t = TIER[shelf.level];
   const title =
     `${t.label} — ${shelf.latest_form}, ${shelf.days_since}d ago. ${t.desc} ` +
