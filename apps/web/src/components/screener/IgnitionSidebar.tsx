@@ -7,6 +7,7 @@ import { useLayout } from '../../context/LayoutContext';
 import { useHiddenTickers } from '../../hooks/useHiddenTickers';
 import { CatalystBadge } from '../common/CatalystBadge';
 import { ShelfBadge } from '../common/ShelfBadge';
+import { WarningBadge, useIsWarned } from '../common/WarningBadge';
 import { TickerLink } from '../common/TickerLink';
 import { WatchlistStar } from '../common/WatchlistStar';
 import { fmtPrice, fmtPct, num } from '../../utils/format';
@@ -88,6 +89,7 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
   const { selected, setSelected } = useSelection();
   const { hidden, hide, unhide } = useHiddenTickers();
   const { ignitionNewsOnly, setIgnitionNewsOnly } = useLayout();
+  const isWarned = useIsWarned();
   const [catalystModal, setCatalystModal] = useState<{ ticker: string; catalyst: CatalystInfo | null } | null>(null);
   // Hidden filter always applies; "news only" additionally drops rows with no
   // catalyst/news today (client-side display filter — the broadcast is intact).
@@ -106,6 +108,7 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
       onSelect={setSelected}
       onHide={hide}
       onOpenCatalyst={() => setCatalystModal({ ticker: r.ticker, catalyst: r.catalyst ?? null })}
+      warned={isWarned(r.ticker)}
     />
   );
 
@@ -212,12 +215,14 @@ function IgnitionItem({
   onSelect,
   onHide,
   onOpenCatalyst,
+  warned,
 }: {
   row: IgnitionRow;
   selected: boolean;
   onSelect: (t: string) => void;
   onHide: (t: string) => void;
   onOpenCatalyst: () => void;
+  warned: boolean;
 }) {
   const b = row.score_breakdown;
   const chg = num(row.change_pct);
@@ -235,6 +240,9 @@ function IgnitionItem({
         borderBottom: '1px solid #2a2a2a',
         cursor: 'pointer',
         background: selected ? '#15395b' : undefined,
+        // Burned/avoid rows recede (the ⛔ badge stays full-opacity is fine —
+        // dimming the whole row is the at-a-glance "skip this" cue).
+        opacity: warned && !selected ? 0.5 : 1,
       }}
     >
       <div style={{ flex: '1 1 auto', minWidth: 0, padding: '6px 8px' }}>
@@ -265,6 +273,7 @@ function IgnitionItem({
                 size={12}
               />
             )}
+            <WarningBadge ticker={row.ticker} size={12} />
           </span>
           {/* Click (not hover) opens the score breakdown; stopPropagation
               keeps the click from also selecting the row. */}

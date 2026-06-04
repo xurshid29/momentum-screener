@@ -23,6 +23,13 @@ body {
   font-weight: 600;
 }
 
+/* "Avoid / burned" rows — dimmed so pump-and-dump offenders recede from
+   attention. Warned + fresh-news at once: the dim wins (it's a stronger
+   signal to skip than the fresh-news highlight is to look). */
+.screener-row-warned > td {
+  opacity: 0.5;
+}
+
 /* Per-row Finviz / TradingView link buttons. Sized for an easy click target. */
 .screener-link-btn {
   display: inline-flex;

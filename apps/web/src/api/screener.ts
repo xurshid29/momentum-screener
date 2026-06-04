@@ -1,5 +1,6 @@
 import { apiClient } from './client';
 import type {
+  BurnedTicker,
   CyclePayload,
   HistoryByDayRow,
   HistoryByDayScreen,
@@ -47,6 +48,11 @@ export const screenerApi = {
     const res = await apiClient.get<OutcomeSummaryResponse>(
       `/api/screener/outcomes-summary?group_by=${groupBy}&horizon=${horizon}&screen=${screen}`,
     );
+    return res.data;
+  },
+
+  async burnedTickers(): Promise<BurnedTicker[]> {
+    const res = await apiClient.get<BurnedTicker[]>('/api/screener/burned-tickers');
     return res.data;
   },
 

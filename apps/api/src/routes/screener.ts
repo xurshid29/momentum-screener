@@ -357,6 +357,49 @@ router.get('/outcomes-summary', authMiddleware, async (req, res) => {
   });
 });
 
+// GET /api/screener/burned-tickers
+// Automatic pump-and-dump offender list, computed from screener_outcomes. A
+// detection "event" is a row that spiked hard then closed deeply red within the
+// window (peak_5d >= PEAK_MIN AND chg_5d <= CHG_MAX) — the VIVK signature: hot
+// news, rip, dump. A ticker with >= 1 such event is "burned" and gets a ⚠
+// warning everywhere it appears. Global (not per-user) — it's a property of the
+// ticker's behavior, not a personal preference. Cached briefly since it only
+// shifts when the daily outcome job runs.
+const BURNED_PEAK_MIN = 40; // intraday/5d peak at least +40%
+const BURNED_CHG_MAX = -15; // ...but the 5d close ended <= -15%
+const BURNED_CACHE_MS = 5 * 60 * 1000;
+let burnedCache: { at: number; rows: unknown[] } | null = null;
+
+router.get('/burned-tickers', authMiddleware, async (_req, res) => {
+  if (burnedCache && Date.now() - burnedCache.at < BURNED_CACHE_MS) {
+    return res.json({ data: burnedCache.rows });
+  }
+  const db = getDb();
+  const result = await sql<{
+    ticker: string;
+    events: number;
+    last_event: string;
+    max_peak: number | null;
+    worst_chg: number | null;
+    avg_drawdown: number | null;
+  }>`
+    select ticker,
+           count(*)::int                 as events,
+           max(et_date)::text            as last_event,
+           round(max(peak_5d)::numeric, 1)      as max_peak,
+           round(min(chg_5d)::numeric, 1)       as worst_chg,
+           round(avg(drawdown_5d)::numeric, 1)  as avg_drawdown
+    from screener_outcomes
+    where bars_forward >= 3
+      and peak_5d >= ${BURNED_PEAK_MIN}
+      and chg_5d <= ${BURNED_CHG_MAX}
+    group by ticker
+    order by events desc, worst_chg asc
+  `.execute(db);
+  burnedCache = { at: Date.now(), rows: result.rows };
+  res.json({ data: result.rows });
+});
+
 // GET /api/screener/cycles/:id/results
 router.get('/cycles/:id/results', authMiddleware, async (req, res) => {
   const db = getDb();

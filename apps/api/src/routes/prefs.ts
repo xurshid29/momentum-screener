@@ -347,6 +347,54 @@ router.delete('/watchlist/:ticker', authMiddleware, async (req, res) => {
   res.json({ data: { ok: true } });
 });
 
+// ─── flagged / "avoid" tickers (per-user, permanent) ───────────────────────
+// Manual burned-list: a permanent ⚠ warning on tickers that pump-and-dumped on
+// the operator. No expiry (structural fact). Pairs with the automatic
+// burned-tickers detection off screener_outcomes (see routes/screener.ts).
+const flaggedAddSchema = z.object({
+  ticker: z.string().min(1).max(10),
+  note: z.string().max(500).optional(),
+});
+
+router.get('/flagged', authMiddleware, async (req, res) => {
+  const db = getDb();
+  const rows = await db
+    .selectFrom('user_flagged_tickers')
+    .select(['ticker', 'note', 'created_at'])
+    .where('user_id', '=', req.user!.userId)
+    .orderBy('created_at', 'desc')
+    .execute();
+  res.json({ data: rows });
+});
+
+router.post('/flagged', authMiddleware, async (req, res) => {
+  const parsed = flaggedAddSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Validation failed', details: parsed.error.errors });
+  const ticker = parsed.data.ticker.toUpperCase();
+  const db = getDb();
+  await db
+    .insertInto('user_flagged_tickers')
+    .values({ user_id: req.user!.userId, ticker, note: parsed.data.note ?? null })
+    .onConflict((oc) =>
+      oc.columns(['user_id', 'ticker']).doUpdateSet({
+        ...(parsed.data.note !== undefined ? { note: parsed.data.note } : {}),
+      }),
+    )
+    .execute();
+  res.status(201).json({ data: { ticker } });
+});
+
+router.delete('/flagged/:ticker', authMiddleware, async (req, res) => {
+  const ticker = String(req.params.ticker).toUpperCase();
+  const db = getDb();
+  await db
+    .deleteFrom('user_flagged_tickers')
+    .where('user_id', '=', req.user!.userId)
+    .where('ticker', '=', ticker)
+    .execute();
+  res.json({ data: { ok: true } });
+});
+
 // ─── panel layout (free-form jsonb) ────────────────────────────────────────
 router.get('/layout', authMiddleware, async (req, res) => {
   const db = getDb();

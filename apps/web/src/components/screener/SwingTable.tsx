@@ -16,6 +16,7 @@ import { TickerLinks } from '../common/TickerLinks';
 import { WatchlistStar } from '../common/WatchlistStar';
 import { CatalystBadge } from '../common/CatalystBadge';
 import { ShelfBadge } from '../common/ShelfBadge';
+import { WarningBadge, useIsWarned } from '../common/WarningBadge';
 import { fmtPct, fmtPrice, num } from '../../utils/format';
 
 const { Text } = Typography;
@@ -38,6 +39,7 @@ function scoreColor(s: number): string {
 export function SwingTable({ rows: allRows, onOpenCatalyst }: Props) {
   const { selected, setSelected } = useSelection();
   const { hidden, hide } = useHiddenTickers();
+  const isWarned = useIsWarned();
 
   const rows = useMemo(
     () => allRows.filter((r) => !hidden.has(r.ticker)),
@@ -83,6 +85,7 @@ export function SwingTable({ rows: allRows, onOpenCatalyst }: Props) {
                 <ShelfBadge shelf={row.shelf} />
               </span>
             )}
+            <WarningBadge ticker={row.ticker} />
           </span>
         ),
       },
@@ -253,6 +256,7 @@ export function SwingTable({ rows: allRows, onOpenCatalyst }: Props) {
           style: {
             cursor: 'pointer',
             background: r.ticker === selected ? '#15395b' : undefined,
+            opacity: isWarned(r.ticker) && r.ticker !== selected ? 0.5 : 1,
           },
         })}
       />

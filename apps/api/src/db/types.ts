@@ -149,6 +149,16 @@ export interface ScreenerOutcomesTable {
   updated_at: Generated<Date>;
 }
 
+// Per-user manual "avoid / burned" flag — a permanent warning marker on
+// tickers that pump-and-dumped on the operator. No expiry (structural fact,
+// not a transient trade idea). See db/migrations.
+export interface UserFlaggedTickersTable {
+  user_id: string;
+  ticker: string;
+  note: string | null;
+  created_at: Generated<Date>;
+}
+
 // Per-ticker daily OHLCV bars. Powers the Swing screener's daily-timeframe
 // signals (SMAs, 52w high, ATR, base/breakout detection). Loaded from Finviz
 // quote_export and refreshed nightly. See docs/swing-screener-spec.md §4.1.
@@ -275,4 +285,5 @@ export interface Database {
   user_chart_prefs: UserChartPrefsTable;
   user_hidden_tickers: UserHiddenTickersTable;
   user_watchlist: UserWatchlistTable;
+  user_flagged_tickers: UserFlaggedTickersTable;
 }

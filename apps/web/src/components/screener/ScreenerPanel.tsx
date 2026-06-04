@@ -11,6 +11,7 @@ import { TickerLinks } from '../common/TickerLinks';
 import { WatchlistStar } from '../common/WatchlistStar';
 import { CatalystBadge } from '../common/CatalystBadge';
 import { ShelfBadge } from '../common/ShelfBadge';
+import { WarningBadge, useIsWarned } from '../common/WarningBadge';
 import { fmtPct, fmtFloat, fmtPrice, fmtVolume, fmtMcap, fmtRelVol, fmtBigPct, num } from '../../utils/format';
 import { FiltersDialog } from './FiltersDialog';
 import { CatalystNewsModal } from './CatalystNewsModal';
@@ -56,6 +57,7 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
   const [activeTab, setActiveTab] = useState<ScreenerTab>('momentum');
   const { hidden, hide, unhide } = useHiddenTickers();
   const { momentumNewsOnly, setMomentumNewsOnly } = useLayout();
+  const isWarned = useIsWarned();
 
   const columns: ColumnsType<EnrichedRow> = useMemo(
     () => [
@@ -105,6 +107,7 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
                 <ShelfBadge shelf={row.shelf} />
               </span>
             )}
+            <WarningBadge ticker={t} />
           </span>
         ),
       },
@@ -313,7 +316,11 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
                   dataSource={rows}
                   pagination={false}
                   sticky
-                  rowClassName={(r) => (r.is_fresh_news ? 'screener-row-fresh' : '')}
+                  rowClassName={(r) =>
+                    [isWarned(r.ticker) ? 'screener-row-warned' : '', r.is_fresh_news ? 'screener-row-fresh' : '']
+                      .filter(Boolean)
+                      .join(' ')
+                  }
                   onRow={(r) => ({
                     onClick: () => setSelected(r.ticker),
                     style: {

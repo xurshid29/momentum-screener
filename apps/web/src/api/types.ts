@@ -206,6 +206,17 @@ export interface OutcomeSummaryBucket {
   win_rate: number | null;      // % of rows with chg > 0
 }
 
+// Auto-detected pump-and-dump offender (from screener_outcomes). A ticker that
+// spiked then closed deeply red in-window at least once. Global, not per-user.
+export interface BurnedTicker {
+  ticker: string;
+  events: number;          // # of pump-and-dump events on record
+  last_event: string;      // YYYY-MM-DD of the most recent event
+  max_peak: number | null;
+  worst_chg: number | null;
+  avg_drawdown: number | null;
+}
+
 export interface OutcomeSummaryResponse {
   group_by: OutcomesGroupBy;
   horizon: OutcomesHorizon;

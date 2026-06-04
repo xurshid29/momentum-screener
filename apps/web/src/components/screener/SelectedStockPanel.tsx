@@ -1,6 +1,6 @@
 import { Fragment, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Typography, Empty, Tag, Tabs, Table, Tooltip } from 'antd';
+import { Typography, Empty, Tag, Tabs, Table, Tooltip, Button } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useSelection } from '../../context/SelectionContext';
 import { newsApi } from '../../api/news';
@@ -8,6 +8,8 @@ import { screenerApi } from '../../api/screener';
 import { ShelfBadge } from '../common/ShelfBadge';
 import { TickerLink } from '../common/TickerLink';
 import { WatchlistStar } from '../common/WatchlistStar';
+import { WarningBadge } from '../common/WarningBadge';
+import { useTickerWarnings } from '../../hooks/useTickerWarnings';
 import { TickerNewsList } from '../news/TickerNewsList';
 import type {
   CyclePayload,
@@ -340,6 +342,26 @@ export function SelectedStockPanel({ payload }: SelectedStockPanelProps) {
   );
 }
 
+// Manual "avoid / burned" flag toggle for the selected ticker. Filled red when
+// flagged (click to clear), hollow otherwise (click to flag). The permanent
+// per-user warning that pairs with the auto pump-and-dump detection.
+function FlagToggle({ ticker }: { ticker: string }) {
+  const { isFlagged, toggleFlag } = useTickerWarnings();
+  const on = isFlagged(ticker);
+  return (
+    <Tooltip title={on ? 'Flagged as burned — click to unflag' : 'Flag as burned / avoid'}>
+      <Button
+        type="text"
+        size="small"
+        onClick={() => toggleFlag(ticker)}
+        style={{ alignSelf: 'center', fontSize: 12, color: on ? '#ff4d4f' : '#8c8c8c', padding: '0 6px' }}
+      >
+        {on ? '⛔ flagged' : '⛔ flag'}
+      </Button>
+    </Tooltip>
+  );
+}
+
 interface DetailsTabProps {
   ticker: string;
   meta: EnrichedRow | null;
@@ -366,6 +388,9 @@ function DetailsTab({ ticker, meta, news }: DetailsTabProps) {
         <Text style={{ color: changeColor, fontSize: 14, fontWeight: 600 }}>
           {change != null && change >= 0 ? '+' : ''}{fmtPct(meta?.change_pct)}
         </Text>
+        <span style={{ alignSelf: 'center', fontSize: 16 }}>
+          <WarningBadge ticker={ticker} size={16} />
+        </span>
         <span style={{ display: 'inline-flex', gap: 4, alignSelf: 'center' }}>
           <a
             href={`https://elite.finviz.com/quote?t=${encodeURIComponent(ticker)}&ty=c&p=h&b=1`}
@@ -384,6 +409,7 @@ function DetailsTab({ ticker, meta, news }: DetailsTabProps) {
             <img src="/tradingview-icon.png" alt="TradingView" />
           </a>
         </span>
+        <FlagToggle ticker={ticker} />
       </div>
 
       {sub && (

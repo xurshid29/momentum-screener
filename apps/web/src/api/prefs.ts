@@ -67,7 +67,27 @@ export const prefsApi = {
   async removeWatchlist(ticker: string): Promise<void> {
     await apiClient.delete<{ ok: true }>(`/api/prefs/watchlist/${encodeURIComponent(ticker)}`);
   },
+
+  // ─── flagged / "avoid" tickers (permanent manual warning) ─────────────────
+  async getFlagged(): Promise<FlaggedEntry[]> {
+    const res = await apiClient.get<FlaggedEntry[]>('/api/prefs/flagged');
+    return res.data;
+  },
+
+  async addFlagged(ticker: string, note?: string): Promise<void> {
+    await apiClient.post<{ ticker: string }>('/api/prefs/flagged', { ticker, note });
+  },
+
+  async removeFlagged(ticker: string): Promise<void> {
+    await apiClient.delete<{ ok: true }>(`/api/prefs/flagged/${encodeURIComponent(ticker)}`);
+  },
 };
+
+export interface FlaggedEntry {
+  ticker: string;
+  note: string | null;
+  created_at: string;
+}
 
 export interface WatchlistEntry {
   ticker: string;

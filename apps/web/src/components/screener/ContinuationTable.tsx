@@ -22,6 +22,7 @@ import { TickerLinks } from '../common/TickerLinks';
 import { WatchlistStar } from '../common/WatchlistStar';
 import { CatalystBadge } from '../common/CatalystBadge';
 import { ShelfBadge } from '../common/ShelfBadge';
+import { WarningBadge, useIsWarned } from '../common/WarningBadge';
 
 const { Text } = Typography;
 
@@ -50,6 +51,7 @@ function fmtMD(iso: string): string {
 export function ContinuationTable({ rows: allRows, payload, onOpenCatalyst }: Props) {
   const { selected, setSelected } = useSelection();
   const { hidden, hide } = useHiddenTickers();
+  const isWarned = useIsWarned();
 
   const rows = useMemo(
     () => allRows.filter((r) => !hidden.has(r.ticker)),
@@ -153,6 +155,7 @@ export function ContinuationTable({ rows: allRows, payload, onOpenCatalyst }: Pr
                   <ShelfBadge shelf={shelf} />
                 </span>
               )}
+              <WarningBadge ticker={row.ticker} />
             </span>
           );
         },
@@ -335,6 +338,7 @@ export function ContinuationTable({ rows: allRows, payload, onOpenCatalyst }: Pr
           style: {
             cursor: 'pointer',
             background: r.ticker === selected ? '#15395b' : undefined,
+            opacity: isWarned(r.ticker) && r.ticker !== selected ? 0.5 : 1,
           },
         })}
       />
