@@ -372,13 +372,17 @@ router.post('/flagged', authMiddleware, async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: 'Validation failed', details: parsed.error.errors });
   const ticker = parsed.data.ticker.toUpperCase();
   const db = getDb();
+  // On conflict: only UPDATE when a note was actually provided. With no note,
+  // doUpdateSet({}) would emit `DO UPDATE SET` with an empty body → invalid SQL
+  // (Postgres 42601) → unhandled rejection → process crash. The ⛔ button sends
+  // {ticker} only, so that path is the common case — use doNothing() for it.
   await db
     .insertInto('user_flagged_tickers')
     .values({ user_id: req.user!.userId, ticker, note: parsed.data.note ?? null })
     .onConflict((oc) =>
-      oc.columns(['user_id', 'ticker']).doUpdateSet({
-        ...(parsed.data.note !== undefined ? { note: parsed.data.note } : {}),
-      }),
+      parsed.data.note !== undefined
+        ? oc.columns(['user_id', 'ticker']).doUpdateSet({ note: parsed.data.note })
+        : oc.columns(['user_id', 'ticker']).doNothing(),
     )
     .execute();
   res.status(201).json({ data: { ticker } });

@@ -19,6 +19,19 @@ import { dailyBars } from './services/daily-bars.js';
 import { outcomes } from './services/outcomes.js';
 import { telegramBot } from './services/telegram-bot.js';
 
+// Safety net: an unhandled promise rejection in any async route (e.g. a bad
+// query) would otherwise crash the whole process — taking down the poller and
+// its in-memory cross-cycle state with it (see the 2026-06-04 flagged-tickers
+// empty-SET crash). Log and keep running; a single bad request should degrade
+// that request, not the service. uncaughtException is kept fatal-ish (log only)
+// since the process may be in an unknown state, but we don't hard-exit.
+process.on('unhandledRejection', (reason) => {
+  console.error('[fatal-guard] unhandledRejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[fatal-guard] uncaughtException:', err);
+});
+
 const app = express();
 const port = process.env.PORT || 3001;
 
