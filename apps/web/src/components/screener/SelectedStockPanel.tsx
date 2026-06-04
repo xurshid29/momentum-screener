@@ -1,6 +1,7 @@
 import { Fragment, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Typography, Empty, Tag, Tabs, Table, Tooltip, Button } from 'antd';
+import { FlagOutlined, StopFilled } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { useSelection } from '../../context/SelectionContext';
 import { newsApi } from '../../api/news';
@@ -348,15 +349,18 @@ export function SelectedStockPanel({ payload }: SelectedStockPanelProps) {
 function FlagToggle({ ticker }: { ticker: string }) {
   const { isFlagged, toggleFlag } = useTickerWarnings();
   const on = isFlagged(ticker);
+  // OFF = neutral gray outline flag ("click to flag") — must NOT look like a
+  // warning, since it shows on every selected ticker. ON = red stop icon.
   return (
     <Tooltip title={on ? 'Flagged as burned — click to unflag' : 'Flag as burned / avoid'}>
       <Button
         type="text"
         size="small"
+        icon={on ? <StopFilled /> : <FlagOutlined />}
         onClick={() => toggleFlag(ticker)}
         style={{ alignSelf: 'center', fontSize: 12, color: on ? '#ff4d4f' : '#8c8c8c', padding: '0 6px' }}
       >
-        {on ? '⛔ flagged' : '⛔ flag'}
+        {on ? 'flagged' : 'flag'}
       </Button>
     </Tooltip>
   );
