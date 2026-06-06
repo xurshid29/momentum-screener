@@ -179,6 +179,7 @@ export interface SwingRow extends EnrichedRow {
 
 export interface CatalystInfo {
   score: number;
+  hype: number;
   urgency: CatalystUrgency;
   direction: CatalystDirection;
   type: string;
@@ -770,6 +771,7 @@ class PollerService {
         }
         catalyst = {
           score: cached.classification.impact_score,
+          hype: cached.classification.hype_score,
           urgency: cached.classification.urgency,
           direction: cached.classification.direction,
           type: cached.classification.catalyst_type,
@@ -1038,6 +1040,7 @@ class PollerService {
         .updateTable('news_classifications')
         .set({
           impact_score: result.impact_score,
+          hype_score: result.hype_score,
           direction: result.direction,
           urgency: result.urgency,
           catalyst_type: result.catalyst_type,
@@ -1265,6 +1268,7 @@ class PollerService {
             .values({
               article_id: articleId,
               impact_score: cached.classification.impact_score,
+              hype_score: cached.classification.hype_score,
               direction: cached.classification.direction,
               urgency: cached.classification.urgency,
               catalyst_type: cached.classification.catalyst_type,

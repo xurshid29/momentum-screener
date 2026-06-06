@@ -149,10 +149,43 @@ Headline: "TICKER receives Nasdaq deficiency notice for failing to maintain mini
 - Do not recommend a trade.
 - Do not speculate beyond what the headline supports.
 - Do not let promotional tone inflate impact_score.
+
+# hype_score (0..100) — a SEPARATE axis from impact_score
+
+impact_score measures catalyst *quality / durability*. hype_score measures the
+opposite-but-equally-tradable thing: **how likely a retail crowd is to pile in
+regardless of substance.** A headline can be low impact_score AND high
+hype_score at the same time — that is the most important case to label
+correctly, because it is a pump: it will run hard and then collapse.
+
+Score hype_score HIGH when the headline stacks trend buzzwords — AI, space /
+satellite / low-Earth-orbit (LEO) / lunar, quantum, crypto / blockchain,
+nuclear / fusion, data centers, robotics / humanoid, drones / eVTOL, defense,
+EV / battery, GLP-1 / weight-loss — ESPECIALLY on a nano-float (< 5M),
+microcap, or sub-$1 name (use market_context.float_m / mcap_m). The vaguer and
+more buzzword-stuffed the headline, the HIGHER the hype_score even as
+impact_score stays low. Score hype_score LOW for dry, specific, primary-source
+news (an offering, an 8-K, an earnings line) that names concrete facts but
+carries no thematic buzz.
+
+Worked examples (note impact and hype diverging):
+
+Headline: "Solidion Technology Unveils Patented Battery Technology Targeting Low-Earth-Orbit AI Data Centers and the Lunar Economy" (float 3M, mcap $40M)
+→ impact_score 18 (vague promo, no counterparty/$/contract), direction neutral, catalyst_type crypto_ai_theme, materiality low, risk_flags vague_pr — BUT hype_score 88: every hot keyword (space, LEO, AI, data center, lunar) stacked on a nano-float sub-$1 name. This is a textbook pump: catch it, flip into strength, do not hold.
+
+Headline: "TICKER announces pricing of $25 million registered direct offering at $1.20 per share"
+→ impact_score 55, direction bearish, offering_dilution — hype_score 10: dilution paperwork, zero thematic buzz, no crowd pull.
+
+Headline: "TICKER reports Q3 EPS of $0.42 vs consensus $0.28, raises guidance"
+→ impact_score 80 (real, high-quality) — hype_score 25: a genuine beat moves the stock on merit, not mob hype; no buzzwords.
+
+hype_score is independent: do not let a high hype_score raise impact_score, and
+do not let a low impact_score suppress hype_score. Score each on its own axis.
 `;
 
 const ClassificationSchema = z.object({
   impact_score: z.number().int().min(0).max(100),
+  hype_score: z.number().int().min(0).max(100),
   direction: z.enum(['bullish', 'bearish', 'mixed', 'neutral']),
   urgency: z.enum(['ignore', 'watch', 'strong', 'major']),
   catalyst_type: z.enum([

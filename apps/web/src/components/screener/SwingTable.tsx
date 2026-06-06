@@ -75,6 +75,7 @@ export function SwingTable({ rows: allRows, onOpenCatalyst }: Props) {
             {row.has_today_news && (
               <CatalystBadge
                 score={row.catalyst?.score ?? null}
+                hype={row.catalyst?.hype}
                 reason={row.catalyst?.reason}
                 type={row.catalyst?.type}
                 onOpen={() => onOpenCatalyst(row.ticker, row.catalyst ?? null)}

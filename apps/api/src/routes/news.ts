@@ -12,6 +12,7 @@ const router = Router();
 // each news row. `null` when nothing has classified the article yet.
 const CLASSIFICATION_COLUMNS = [
   'c.impact_score',
+  'c.hype_score',
   'c.urgency',
   'c.direction',
   'c.catalyst_type',
@@ -178,6 +179,7 @@ interface NewsRowDbShape {
   fetched_at: Date | string;
   tickers: string[] | null;
   impact_score: number | null;
+  hype_score: number | null;
   urgency: string | null;
   direction: string | null;
   catalyst_type: string | null;
@@ -201,6 +203,7 @@ function shapeNewsRow(r: NewsRowDbShape) {
     classification: hasClassification
       ? {
           impact_score: r.impact_score,
+          hype_score: r.hype_score,
           urgency: r.urgency,
           direction: r.direction,
           catalyst_type: r.catalyst_type,

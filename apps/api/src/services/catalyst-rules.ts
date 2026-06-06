@@ -29,7 +29,12 @@ export interface ClassifierInput {
 }
 
 export interface Classification {
-  impact_score: number;          // 0..100
+  impact_score: number;          // 0..100 — durable-catalyst quality
+  // 0..100 — crowd / pump potential, ORTHOGONAL to impact_score. "How likely
+  // is retail to pile in regardless of substance." Driven by buzzword density
+  // × nano-float / sub-$1 / microcap context. STI (+700% on a buzzword PR with
+  // a low impact_score) is the motivating case. See db migration.
+  hype_score: number;
   direction: CatalystDirection;
   urgency: CatalystUrgency;
   catalyst_type: string;
@@ -169,6 +174,7 @@ export function classifyByRules(input: ClassifierInput): Classification {
 
   return {
     impact_score: score,
+    hype_score: computeHypeScore(text, input.marketContext),
     direction,
     urgency: urgencyFromScore(score),
     catalyst_type: catalystType,
@@ -182,6 +188,47 @@ export function classifyByRules(input: ClassifierInput): Classification {
 
 function clamp(n: number): number {
   return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+// Hype keywords — the buzzwords that reliably draw a retail mob to a low-float
+// name regardless of whether there's any substance behind them. Each hit adds
+// to the hype baseline. Deliberately broad; this measures *attention pull*, not
+// catalyst quality (that's impact_score's job).
+const HYPE_RE: RegExp[] = [
+  /\bA\.?I\.?\b|artificial intelligence|machine learning|\bLLM\b|\bGPU\b/i,
+  /\bspace|satellite|low[- ]earth orbit|\bLEO\b|lunar|orbital|rocket|aerospace/i,
+  /\bquantum/i,
+  /\bcrypto|bitcoin|\bBTC\b|blockchain|web3|token|ethereum/i,
+  /\bnuclear|fusion|small modular reactor|\bSMR\b/i,
+  /\bdata center|hyperscale|cloud computing/i,
+  /\brobot|humanoid|autonomous|self[- ]driving/i,
+  /\bdrone|\beVTOL\b|flying car/i,
+  /\bdefense|military|\bDoD\b|pentagon/i,
+  /\bEV\b|electric vehicle|battery|lithium|solid[- ]state/i,
+  /\bbiotech|gene|\bmRNA\b|cancer|breakthrough/i,
+  /\bGLP-1|weight loss|obesity/i,
+];
+
+// Crowd/pump potential, orthogonal to catalyst quality. Buzzword density is the
+// base; nano-float / sub-$1 / microcap context multiplies it (the same PR moves
+// a 2M-float sub-$1 name far more than a large-cap). This is a heuristic
+// baseline — the LLM refines it; here we just need a non-null, directional
+// signal for the rule path.
+function computeHypeScore(text: string, ctx: ClassifierInput['marketContext']): number {
+  let hits = 0;
+  for (const re of HYPE_RE) if (re.test(text)) hits++;
+  if (hits === 0) return ctx?.float_m != null && ctx.float_m < 5 ? 15 : 5;
+  // 1 keyword → 35, 2 → 50, 3 → 62, capped before context.
+  let score = 25 + Math.min(hits, 4) * 12;
+  const floatM = ctx?.float_m ?? null;
+  const mcapM = ctx?.mcap_m ?? null;
+  // Low-float / nano-cap context amplifies — that's where buzzword PR actually
+  // detonates. (price isn't on marketContext; float + mcap are the proxies.)
+  if (floatM != null && floatM < 5) score += 18;
+  else if (floatM != null && floatM < 15) score += 10;
+  if (mcapM != null && mcapM < 50) score += 10;
+  else if (mcapM != null && mcapM < 300) score += 5;
+  return clamp(score);
 }
 
 // Risk flags derived purely from the live screener row — shared by every
@@ -242,6 +289,8 @@ function classifySecFiling(input: ClassifierInput): Classification {
 
   return {
     impact_score: clamp(score),
+    // SEC filings are primary-source events, not promotional PR — minimal hype.
+    hype_score: 5,
     direction,
     urgency: urgencyFromScore(score),
     catalyst_type: type,
@@ -287,6 +336,9 @@ function classifyHalt(input: ClassifierInput): Classification {
   const materiality: CatalystMateriality = score >= 60 ? 'high' : score >= 40 ? 'medium' : 'low';
   return {
     impact_score: clamp(score),
+    // A halt itself isn't hype — the headline behind a T-code might be, but
+    // we score that separately when the actual news article arrives.
+    hype_score: 5,
     direction,
     urgency: urgencyFromScore(score),
     catalyst_type: type,

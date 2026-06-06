@@ -34,6 +34,9 @@ export type Classifier = 'rules' | 'openai_nano' | 'openai_mini' | 'openai';
 
 export interface CatalystInfo {
   score: number;
+  // Crowd/pump potential (0..100), orthogonal to `score` (catalyst quality).
+  // Optional — old payloads / deterministic paths may omit it.
+  hype?: number | null;
   urgency: CatalystUrgency;
   direction: CatalystDirection;
   type: string;
@@ -339,6 +342,7 @@ export interface IgnitionHistoryRow {
 // ─── news ──────────────────────────────────────────────────────────────────
 export interface NewsClassification {
   impact_score: number;
+  hype_score?: number | null;
   urgency: CatalystUrgency;
   direction: CatalystDirection;
   catalyst_type: string;

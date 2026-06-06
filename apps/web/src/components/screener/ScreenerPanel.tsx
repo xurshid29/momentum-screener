@@ -97,6 +97,7 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
             {row.has_today_news && (
               <CatalystBadge
                 score={row.catalyst?.score ?? null}
+                hype={row.catalyst?.hype}
                 reason={row.catalyst?.reason}
                 type={row.catalyst?.type}
                 onOpen={() => setCatalystModal({ ticker: row.ticker, catalyst: row.catalyst ?? null })}

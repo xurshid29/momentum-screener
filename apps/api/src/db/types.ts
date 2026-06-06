@@ -203,6 +203,9 @@ export type Classifier = 'rules' | 'openai_nano' | 'openai_mini' | 'openai' | 'a
 export interface NewsClassificationsTable {
   article_id: string;
   impact_score: number;
+  // Crowd/pump potential (0..100), orthogonal to impact_score's catalyst
+  // quality. Nullable — old rows + deterministic SEC/halt paths leave it null.
+  hype_score: number | null;
   direction: CatalystDirection;
   urgency: CatalystUrgency;
   catalyst_type: string;

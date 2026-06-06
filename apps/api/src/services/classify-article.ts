@@ -12,6 +12,7 @@ import type { Classifier } from '../db/types.js';
 
 export interface ArticleClassificationResult {
   impact_score: number;
+  hype_score: number;
   urgency: Classification['urgency'];
   direction: Classification['direction'];
   catalyst_type: string;
@@ -26,6 +27,7 @@ export interface ArticleClassificationResult {
 function toResult(c: Classification, classifier: Classifier, cached: boolean): ArticleClassificationResult {
   return {
     impact_score: c.impact_score,
+    hype_score: c.hype_score,
     urgency: c.urgency,
     direction: c.direction,
     catalyst_type: c.catalyst_type,
@@ -54,6 +56,7 @@ export async function getOrClassifyArticle(
     return toResult(
       {
         impact_score: existing.impact_score,
+        hype_score: existing.hype_score ?? 0,
         direction: existing.direction,
         urgency: existing.urgency,
         catalyst_type: existing.catalyst_type,
@@ -120,6 +123,7 @@ export async function getOrClassifyArticle(
       .updateTable('news_classifications')
       .set({
         impact_score: result.impact_score,
+        hype_score: result.hype_score,
         direction: result.direction,
         urgency: result.urgency,
         catalyst_type: result.catalyst_type,
@@ -138,6 +142,7 @@ export async function getOrClassifyArticle(
       .values({
         article_id: articleId,
         impact_score: result.impact_score,
+        hype_score: result.hype_score,
         direction: result.direction,
         urgency: result.urgency,
         catalyst_type: result.catalyst_type,

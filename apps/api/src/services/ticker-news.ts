@@ -119,6 +119,7 @@ export async function fetchAndStoreTickerNews(ticker: string, force = false): Pr
           .values({
             article_id: articleId,
             impact_score: cls.impact_score,
+            hype_score: cls.hype_score,
             direction: cls.direction,
             urgency: cls.urgency,
             catalyst_type: cls.catalyst_type,

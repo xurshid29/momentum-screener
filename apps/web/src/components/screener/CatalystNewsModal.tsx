@@ -1,7 +1,7 @@
 // Modal popped from a screener row's fire / catalyst badge — shows that
 // ticker's catalyst verdict and its news articles without leaving the screener.
 
-import { Modal, Spin, Tag, Typography } from 'antd';
+import { Modal, Spin, Tag, Typography, Tooltip } from 'antd';
 import { useQuery } from '@tanstack/react-query';
 import { newsApi } from '../../api/news';
 import { FireBadge } from '../common/FireBadge';
@@ -60,7 +60,16 @@ export function CatalystNewsModal({ ticker, catalyst, onClose }: Props) {
       {catalyst && (
         <div style={{ marginBottom: 12, padding: '8px 10px', background: '#1f1f1f', borderRadius: 4 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <Text strong style={{ fontSize: 13 }}>Score {catalyst.score}</Text>
+            <Tooltip title="Catalyst quality — likelihood of a real, durable move">
+              <Text strong style={{ fontSize: 13 }}>Score {catalyst.score}</Text>
+            </Tooltip>
+            {catalyst.hype != null && (
+              <Tooltip title="Hype / pump potential — crowd pull regardless of substance. High hype + low score = pump: catch the spike, don't hold.">
+                <Text strong style={{ fontSize: 13, color: catalyst.hype >= 60 ? '#fa8c16' : '#8c8c8c' }}>
+                  🚀 {catalyst.hype}
+                </Text>
+              </Tooltip>
+            )}
             {catalyst.type && <Tag style={{ margin: 0 }}>{catalyst.type}</Tag>}
             <Tag color={DIR_COLOR[catalyst.direction]} style={{ margin: 0 }}>{catalyst.direction}</Tag>
             <Text type="secondary" style={{ fontSize: 12 }}>{catalyst.urgency}</Text>
