@@ -15,8 +15,13 @@
 import type { MouseEvent } from 'react';
 import { FireBadge } from './FireBadge';
 
-// Hype ≥ this with catalyst quality < this = "pump candidate" → show the 🚀.
-// The STI case: buzzword PR that scores low on quality but draws a crowd.
+// 🚀 hype marker thresholds:
+//   HYPE_SHOW  — show the rocket at all (notable buzzword/crowd pull)
+//   HYPE_HIGH  — colour it orange (strong hype)
+//   QUALITY_LOW — below this catalyst quality, a high-hype name is a "pump
+//                 candidate" (the STI case: buzzword PR that draws a crowd
+//                 without substance) → stronger tooltip warning.
+const HYPE_SHOW = 50;
 const HYPE_HIGH = 60;
 const QUALITY_LOW = 50;
 
@@ -36,15 +41,27 @@ export function CatalystBadge({ score, hype, reason, type, onOpen, size = 18 }: 
     e.stopPropagation();
     onOpen();
   };
-  // 🚀 pump marker — high hype + low catalyst quality. Rendered INDEPENDENTLY
-  // of the score gate below, because the whole point is the low-quality-but-
-  // hyped case (STI) that the fire badge would otherwise hide.
+  // 🚀 hype marker — shown whenever hype is notable (≥ HYPE_SHOW), rendered
+  // INDEPENDENTLY of the fire-badge score gate below so the low-quality-but-
+  // hyped case (STI) isn't hidden. A high-hype + low-quality name is a "pump
+  // candidate" (catch the spike, don't hold); otherwise it's just elevated
+  // crowd interest. The rocket dims slightly below HYPE_HIGH.
+  const lowQuality = score == null || score < QUALITY_LOW;
   const pump =
-    hype != null && hype >= HYPE_HIGH && (score == null || score < QUALITY_LOW) ? (
+    hype != null && hype >= HYPE_SHOW ? (
       <span
-        title={`Pump candidate — hype ${hype}, low catalyst quality. Catch the spike, don't hold. Click for news.`}
+        title={
+          hype >= HYPE_HIGH && lowQuality
+            ? `Pump candidate — hype ${hype}, low catalyst quality. Catch the spike, don't hold. Click for news.`
+            : `Hype ${hype} — elevated crowd/pump potential. Click for news.`
+        }
         onClick={open}
-        style={{ marginLeft: 4, cursor: 'pointer', fontSize: size <= 12 ? 11 : 13 }}
+        style={{
+          marginLeft: 4,
+          cursor: 'pointer',
+          fontSize: size <= 12 ? 11 : 13,
+          opacity: hype >= HYPE_HIGH ? 1 : 0.7,
+        }}
       >
         🚀
       </span>
