@@ -418,6 +418,13 @@ class PollerService {
     if (this.running) return;
     this.running = true;
     await this.loadConfig();
+    // Initialise lastEtDate to today BEFORE the first cycle. Otherwise it starts
+    // '' and the first runCycle() sees todayEt !== '' → fires the midnight-
+    // rollover block, which clears firstSeenAt — wiping the seed we're about to
+    // load and re-stamping every ticker to the restart time (the 14:12-on-
+    // everything bug). A genuine midnight rollover during runtime still fires
+    // normally because lastEtDate will then differ from the new day.
+    this.lastEtDate = etDateString(new Date());
     await this.seedFirstSeen();
     console.log(`[poller] starting (every ${this.config.interval_sec}s)`);
     void this.tick();
