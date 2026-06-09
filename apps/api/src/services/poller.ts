@@ -2,6 +2,7 @@
 // One instance per API process. Holds cross-cycle state in memory.
 // Single-instance only by design — see CLAUDE.md.
 
+import { sql } from 'kysely';
 import { getDb } from '../db/index.js';
 import type {
   RowStatus,
@@ -381,10 +382,43 @@ class PollerService {
     this.alertsMuted = muted;
   }
 
+  // Rebuild firstSeenAt from the DB so a restart/deploy doesn't reset every
+  // ticker's "appeared today" to the restart time (the in-memory map is
+  // process-local). The authoritative first-appearance is the earliest
+  // persisted cycle for the ticker today, across BOTH screens. Without this,
+  // every deploy makes the Appeared column read "just now" for names that
+  // actually ripped hours earlier.
+  private async seedFirstSeen() {
+    try {
+      const rows = await sql<{ ticker: string; first_ms: number }>`
+        select ticker, min(extract(epoch from polled_at) * 1000)::bigint as first_ms
+        from (
+          select s.ticker, c.polled_at
+          from screener_results s join screener_cycles c on c.id = s.cycle_id
+          where (c.polled_at at time zone 'America/New_York')::date
+                = (now() at time zone 'America/New_York')::date
+          union all
+          select i.ticker, c.polled_at
+          from ignition_results i join screener_cycles c on c.id = i.cycle_id
+          where (c.polled_at at time zone 'America/New_York')::date
+                = (now() at time zone 'America/New_York')::date
+        ) u
+        group by ticker
+      `.execute(getDb());
+      for (const r of rows.rows) {
+        this.firstSeenAt.set(r.ticker, Number(r.first_ms));
+      }
+      console.log(`[poller] seeded first-seen for ${rows.rows.length} tickers from today's history`);
+    } catch (err) {
+      console.error('[poller] could not seed first-seen (continuing):', err);
+    }
+  }
+
   async start() {
     if (this.running) return;
     this.running = true;
     await this.loadConfig();
+    await this.seedFirstSeen();
     console.log(`[poller] starting (every ${this.config.interval_sec}s)`);
     void this.tick();
     this.timer = setInterval(() => void this.tick(), this.config.interval_sec * 1000);
