@@ -50,6 +50,35 @@ const SESSION_COLOR: Record<TradingSession, string> = {
 
 type ScreenerTab = 'momentum' | 'swing' | 'continuation' | 'history';
 
+// First-appeared time in the operator's TZ (UTC+5), HH:MM, plus how long ago.
+// The "ago" is the staleness cue: a top-of-list +600% name first seen 9h ago is
+// a stale leftover, not a fresh mover.
+const APPEARED_TZ = 'Asia/Tashkent'; // UTC+5, no DST
+
+function AppearedCell({ iso }: { iso: string | null }) {
+  if (!iso) return <Text type="secondary">—</Text>;
+  const t = new Date(iso);
+  if (Number.isNaN(t.getTime())) return <Text type="secondary">—</Text>;
+  const hhmm = t.toLocaleTimeString('en-GB', {
+    timeZone: APPEARED_TZ,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+  const mins = Math.max(0, Math.round((Date.now() - t.getTime()) / 60000));
+  const ago = mins < 60 ? `${mins}m` : `${Math.floor(mins / 60)}h${mins % 60 ? ` ${mins % 60}m` : ''}`;
+  // Older than ~2h on a momentum runner = likely past its move; dim it.
+  const stale = mins >= 120;
+  return (
+    <Tooltip title={`First appeared ${hhmm} (UTC+5) · ${ago} ago`}>
+      <span style={{ lineHeight: 1.15, display: 'inline-block' }}>
+        <div style={{ fontSize: 12 }}>{hhmm}</div>
+        <div style={{ fontSize: 10, color: stale ? '#fa8c16' : '#8c8c8c' }}>{ago} ago</div>
+      </span>
+    </Tooltip>
+  );
+}
+
 export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
   const { selected, setSelected } = useSelection();
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -111,6 +140,20 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
             <WarningBadge ticker={t} />
           </span>
         ),
+      },
+      {
+        // When the ticker first appeared in a screen today (UTC+5, the
+        // operator's TZ). A +600% name that ripped at 01:00 reads the same as a
+        // fresh mover at the top of the list without this — the time + how long
+        // ago disambiguates "still hot" from "stale leftover".
+        title: 'Appeared',
+        dataIndex: 'first_seen_at',
+        key: 'first_seen_at',
+        width: 92,
+        align: 'right',
+        sorter: (a, b) =>
+          new Date(a.first_seen_at).getTime() - new Date(b.first_seen_at).getTime(),
+        render: (iso: string) => <AppearedCell iso={iso} />,
       },
       {
         // After-hours cycles carry the after-hours move in change_pct.

@@ -93,6 +93,8 @@ export interface EnrichedRow {
   status: RowStatus;
   prev_change_pct: number | null;
   accel_delta: number | null;
+  // ISO timestamp the ticker first appeared in any screen today (ET-day scoped).
+  first_seen_at: string;
   // Anchored VWAP since first detection today. Persists across PM → regular →
   // AH so a pre-market spike's volume keeps weighting the indicator (matches a
   // chart's day-session VWAP). Null on cycle 1 (no delta yet) and whenever

@@ -137,6 +137,9 @@ export interface EnrichedRow extends ScreenerRow {
   status: RowStatus;
   prev_change_pct: number | null;
   accel_delta: number | null;
+  // ISO timestamp of when this ticker first appeared in any screen today
+  // (cleared at midnight ET). Drives the Momentum table's "appeared" column.
+  first_seen_at: string;
   vol_5min: number | null;          // 5-min-equivalent traded volume (extrapolated during a ticker's first ~5 min)
   rel_vol_5min: number | null;      // (vol_5min / (avg_volume / 78)) * 100
   // Anchored VWAP since the ticker first appeared *today*. Computed in-memory
@@ -207,6 +210,12 @@ class PollerService {
 
   // Cross-cycle state (the equivalents of PREV_FILE / BZ_HEADLINE_CACHE / BZ_TS_FILE).
   private prevChange = new Map<string, number>();      // ticker -> last seen change%
+  // First time (epoch ms) each ticker appeared in *any* screen today. Surfaced
+  // as EnrichedRow.first_seen_at so the Momentum table can show when a name
+  // first showed up — a +600% name that ripped at 01:00 ET shouldn't read the
+  // same as a fresh mover. Cleared at midnight ET (NOT at session boundaries —
+  // "first seen today" spans PM → regular → AH).
+  private firstSeenAt = new Map<string, number>();
   // Per-ticker rolling volume samples (timestamp seconds, cumulative day volume).
   // Used to compute the last-5-minutes volume diff. Trimmed to ~10 minutes deep.
   private volHistory = new Map<string, Array<{ ts: number; volume: number }>>();
@@ -412,6 +421,8 @@ class PollerService {
       this.alertedDualSignal.clear();
       this.lastForcedSwingPostCloseDate = '';
       this.lastOutcomesDate = '';
+      // "First seen today" is an ET-day concept — reset with the day.
+      this.firstSeenAt.clear();
       // Anchored VWAP must reset across days so yesterday's tallies don't
       // contaminate today's. Session-boundary changes inside a day deliberately
       // *don't* clear it (see lastSession block below).
@@ -672,6 +683,14 @@ class PollerService {
         else if (d > 0) status = 'UP';
       }
 
+      // First-appearance-today timestamp. Stamped once, on the cycle a ticker
+      // first shows up; stable thereafter (cleared only at midnight ET).
+      let firstSeenMs = this.firstSeenAt.get(r.ticker);
+      if (firstSeenMs === undefined) {
+        firstSeenMs = nowSec * 1000;
+        this.firstSeenAt.set(r.ticker, firstSeenMs);
+      }
+
       // 5-min volume rate. Diff cumulative-day-volume against an anchor sample
       // >= 5 min old for the exact rate. Before such a sample exists, fall back
       // to the oldest sample we have (once the window is wide enough) and
@@ -786,6 +805,7 @@ class PollerService {
         status,
         prev_change_pct: prev ?? null,
         accel_delta: accelDelta,
+        first_seen_at: new Date(firstSeenMs).toISOString(),
         vol_5min: vol5min,
         rel_vol_5min: relVol5min,
         vwap,
