@@ -158,20 +158,6 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
         ),
       },
       {
-        // When the ticker first appeared in a screen today (UTC+5, the
-        // operator's TZ). A +600% name that ripped at 01:00 reads the same as a
-        // fresh mover at the top of the list without this — the time + how long
-        // ago disambiguates "still hot" from "stale leftover".
-        title: 'Appeared',
-        dataIndex: 'first_seen_at',
-        key: 'first_seen_at',
-        width: 92,
-        align: 'right',
-        sorter: (a, b) =>
-          new Date(a.first_seen_at).getTime() - new Date(b.first_seen_at).getTime(),
-        render: (iso: string) => <AppearedCell iso={iso} />,
-      },
-      {
         // "Activity now" — fresh/accelerating/VWAP-reclaiming names rank above
         // stale big-Chg% leaders. Default sort, so the top of the list is
         // "worth looking at right now" instead of "already won today". Click
@@ -250,6 +236,19 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
       },
       { title: 'MCap', dataIndex: 'mcap_m', key: 'mcap_m', width: 70, align: 'right', render: fmtMcap },
       { title: 'Country', dataIndex: 'country', key: 'country', width: 90, ellipsis: true },
+      {
+        // When the ticker first appeared in a screen today (UTC+5). Reference
+        // info — moved to the far right now that Heat (the sort key) leads.
+        // Disambiguates a fresh mover from a stale leader sitting on a big Chg%.
+        title: 'Appeared',
+        dataIndex: 'first_seen_at',
+        key: 'first_seen_at',
+        width: 92,
+        align: 'right',
+        sorter: (a, b) =>
+          new Date(a.first_seen_at).getTime() - new Date(b.first_seen_at).getTime(),
+        render: (iso: string) => <AppearedCell iso={iso} />,
+      },
       {
         title: '',
         key: 'hide',
