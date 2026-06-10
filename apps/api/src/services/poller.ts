@@ -517,7 +517,14 @@ class PollerService {
     const shouldRefreshSwing =
       this.swingCounter === 1 ||
       this.swingCounter % SWING.cadence_cycles === 0 ||
-      isPostCloseTrigger;
+      isPostCloseTrigger ||
+      // Recover fast when the list is empty during a trading session — e.g.
+      // after a restart (lastSwingRows is process-local, wiped on deploy) or
+      // when cycle 1's fetch came back empty. Without this, Swing sits blank
+      // for up to a full cadence window (~20 min). One non-empty scan flips
+      // this off and we revert to the normal cadence. Skipped while 'closed'
+      // so it doesn't spin overnight/weekends.
+      (this.lastSwingRows.length === 0 && session !== 'closed');
 
     // Forward outcome tracking — once per ET day, in the same post-close window
     // as the Swing refresh. Fire-and-forget so it never blocks the cycle; the
