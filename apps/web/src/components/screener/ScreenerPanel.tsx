@@ -406,17 +406,6 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
             ),
           },
           {
-            key: 'continuation',
-            label: `Continuation${payload?.continuation && payload.continuation.length ? ` · ${payload.continuation.length}` : ''}`,
-            children: (
-              <ContinuationTable
-                rows={payload?.continuation ?? []}
-                payload={payload}
-                onOpenCatalyst={(ticker, catalyst) => setCatalystModal({ ticker, catalyst })}
-              />
-            ),
-          },
-          {
             key: 'swing',
             label: `Swing${payload?.swing && payload.swing.length ? ` · ${payload.swing.length}` : ''}`,
             children: (
@@ -440,6 +429,22 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
             key: 'outcomes',
             label: 'Outcomes',
             children: <OutcomesPanel />,
+          },
+          {
+            // Demoted to last + reframed (2026-06-11). Our outcome data showed
+            // the continuation pattern is a NEGATIVE long signal: multi-day-
+            // prior names averaged −2.4% / 28% win over 5d vs +3.2% / 39% for
+            // fresh first-day names. So this is no longer a buy list — it's a
+            // "these already ran, watch for the fade/short" context tab.
+            key: 'continuation',
+            label: `Faders${payload?.continuation && payload.continuation.length ? ` · ${payload.continuation.length}` : ''}`,
+            children: (
+              <ContinuationTable
+                rows={payload?.continuation ?? []}
+                payload={payload}
+                onOpenCatalyst={(ticker, catalyst) => setCatalystModal({ ticker, catalyst })}
+              />
+            ),
           },
         ]}
       />

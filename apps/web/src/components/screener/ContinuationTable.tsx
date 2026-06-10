@@ -326,6 +326,12 @@ export function ContinuationTable({ rows: allRows, payload, onOpenCatalyst }: Pr
 
   return (
     <div style={{ height: '100%', overflow: 'auto' }}>
+      <div style={{ padding: '4px 10px', background: '#2a1f12', borderBottom: '1px solid #3a2a15' }}>
+        <Text style={{ fontSize: 11, color: '#d89614' }}>
+          ⚠ Already ran — not a long entry. Our outcome data shows multi-day names average −2.4% / 28% win
+          over the next 5 days (vs +3.2% / 39% for fresh names). Watch these for the fade / short, not a chase.
+        </Text>
+      </div>
       <Table<ContinuationRow>
         rowKey="ticker"
         size="small"
