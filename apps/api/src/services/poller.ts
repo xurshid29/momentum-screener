@@ -1032,6 +1032,9 @@ class PollerService {
       }
       scored.sort((a, b) => b.swing_score - a.swing_score);
       const truncated = scored.slice(0, SWING.broadcast_n);
+      // Diagnostic: surface the funnel so an empty swing list is debuggable
+      // live (swingRaw → post-filter → scored). Cheap; one line per refresh.
+      console.log(`[poller] swing scan — raw=${swingRaw.length} filtered=${swingRows.length} scored=${scored.length}`);
       // Replace only if the new scan actually produced rows — a transient
       // Finviz hiccup shouldn't blank out the swing list.
       if (truncated.length > 0) {
