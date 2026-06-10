@@ -141,6 +141,13 @@ export interface EnrichedRow extends ScreenerRow {
   // ISO timestamp of when this ticker first appeared in any screen today
   // (cleared at midnight ET). Drives the Momentum table's "appeared" column.
   first_seen_at: string;
+  // Composite "activity now" score (0..100) — freshness + acceleration + VWAP
+  // reclaim + above-VWAP + 5m-RVol + fresh news. Drives the optional Heat sort
+  // so fresh/rising names surface above stale big-Chg% leaders.
+  heat: number;
+  // True the cycle price crosses from below VWAP to at/above it — the timed
+  // "bad → good" reclaim. Drives a ↑VWAP badge.
+  vwap_reclaim: boolean;
   vol_5min: number | null;          // 5-min-equivalent traded volume (extrapolated during a ticker's first ~5 min)
   rel_vol_5min: number | null;      // (vol_5min / (avg_volume / 78)) * 100
   // Anchored VWAP since the ticker first appeared *today*. Computed in-memory
@@ -227,6 +234,9 @@ class PollerService {
   // weighting the VWAP into regular hours (matches a chart's day-session VWAP).
   // Reset at midnight ET only.
   private vwapState = new Map<string, { cumPxVol: number; cumVol: number; lastVolume: number }>();
+  // Previous cycle's above-VWAP state per ticker, for detecting a reclaim
+  // (below → above) the cycle it happens. Same lifecycle as vwapState.
+  private prevAboveVwap = new Map<string, boolean>();
   private bzHeadlineCache = new Map<string, NewsHeadline>(); // ticker -> latest headline (any source merged)
   private bzWatermark = Math.floor(Date.now() / 1000) - DELTA_LOOKBACK_SEC;
   // SEC EDGAR + Nasdaq halts are delta feeds too — a watermark per source
@@ -468,6 +478,7 @@ class PollerService {
       // contaminate today's. Session-boundary changes inside a day deliberately
       // *don't* clear it (see lastSession block below).
       this.vwapState.clear();
+      this.prevAboveVwap.clear();
       // Reset the SEC/halt delta watermarks so the new day's first cycle
       // doesn't replay the whole backlog as "fresh".
       this.secWatermark = Math.floor(now.getTime() / 1000);
@@ -772,6 +783,7 @@ class PollerService {
       // clear above, so each session carries its own anchor.
       let vwap: number | null = null;
       let aboveVwap: boolean | null = null;
+      let vwapReclaim = false;
       if (r.price != null && r.price > 0 && r.volume != null) {
         const st = this.vwapState.get(r.ticker);
         if (!st) {
@@ -786,6 +798,11 @@ class PollerService {
           if (st.cumVol > 0) {
             vwap = +(st.cumPxVol / st.cumVol).toFixed(4);
             aboveVwap = r.price >= vwap;
+            // Reclaim = was below VWAP last cycle, now at/above it. The timed
+            // "bad → good" turn the operator enters on but keeps missing.
+            const prevAbove = this.prevAboveVwap.get(r.ticker);
+            if (aboveVwap && prevAbove === false) vwapReclaim = true;
+            this.prevAboveVwap.set(r.ticker, aboveVwap);
           }
         }
       }
@@ -841,12 +858,44 @@ class PollerService {
         };
       }
 
+      // ── Heat: "what's worth looking at RIGHT NOW", not "who's already won".
+      // A composite of timed/activity signals so fresh + rising names rank
+      // above stale leaders that just sit at the top on a big Chg%. Heuristic;
+      // weights to be tuned against outcomes later. Capped 0..100.
+      //   • freshness   — appeared in the last ~15 min (decays)
+      //   • acceleration— change% rising cycle-to-cycle (ACC/UP)
+      //   • VWAP reclaim— the timed below→above cross (big, brief boost)
+      //   • above VWAP  — tradeable-side bonus
+      //   • 5m RVol     — live volume surge
+      //   • fresh news  — catalyst landed this cycle
+      let heat = 0;
+      const ageMin = (nowSec * 1000 - firstSeenMs) / 60000;
+      if (ageMin <= 2) heat += 30;
+      else if (ageMin <= 5) heat += 22;
+      else if (ageMin <= 15) heat += 12;
+      else if (ageMin <= 30) heat += 5;
+      if (accelDelta != null && accelDelta > 0) {
+        heat += Math.min(25, 6 + accelDelta * 1.5); // bigger jump → more heat
+      }
+      if (vwapReclaim) heat += 25;
+      else if (aboveVwap === true) heat += 8;
+      if (relVol5min != null) {
+        if (relVol5min >= 2000) heat += 20;
+        else if (relVol5min >= 800) heat += 14;
+        else if (relVol5min >= 300) heat += 8;
+        else if (relVol5min >= 150) heat += 4;
+      }
+      if (isFresh) heat += 10; // fresh news this cycle
+      heat = Math.max(0, Math.min(100, Math.round(heat)));
+
       return {
         ...r,
         status,
         prev_change_pct: prev ?? null,
         accel_delta: accelDelta,
         first_seen_at: new Date(firstSeenMs).toISOString(),
+        heat,
+        vwap_reclaim: vwapReclaim,
         vol_5min: vol5min,
         rel_vol_5min: relVol5min,
         vwap,

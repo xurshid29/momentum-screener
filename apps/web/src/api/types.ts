@@ -95,6 +95,10 @@ export interface EnrichedRow {
   accel_delta: number | null;
   // ISO timestamp the ticker first appeared in any screen today (ET-day scoped).
   first_seen_at: string;
+  // Composite "activity now" score (0..100) — drives the optional Heat sort.
+  heat: number;
+  // True the cycle price reclaims VWAP (below → at/above) — drives a ↑VWAP badge.
+  vwap_reclaim: boolean;
   // Anchored VWAP since first detection today. Persists across PM → regular →
   // AH so a pre-market spike's volume keeps weighting the indicator (matches a
   // chart's day-session VWAP). Null on cycle 1 (no delta yet) and whenever

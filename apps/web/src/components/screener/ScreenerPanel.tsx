@@ -55,6 +55,17 @@ type ScreenerTab = 'momentum' | 'swing' | 'continuation' | 'history';
 // a stale leftover, not a fresh mover.
 const APPEARED_TZ = 'Asia/Tashkent'; // UTC+5, no DST
 
+// Heat value — colour-tiered like a temperature so the eye catches the hot
+// (fresh/rising) rows at the top of the default sort.
+function HeatCell({ heat }: { heat: number }) {
+  const color = heat >= 60 ? '#ff4d4f' : heat >= 40 ? '#fa8c16' : heat >= 20 ? '#fadb14' : '#8c8c8c';
+  return (
+    <Tooltip title="Activity now: freshness + acceleration + VWAP reclaim + 5m-RVol + fresh news">
+      <span style={{ color, fontWeight: 700 }}>{heat}</span>
+    </Tooltip>
+  );
+}
+
 function AppearedCell({ iso }: { iso: string | null }) {
   if (!iso) return <Text type="secondary">—</Text>;
   const t = new Date(iso);
@@ -123,6 +134,11 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
               style={{ color: '#fff', fontWeight: 600 }}
             />
             {row.is_fresh_news && <span title="Fresh news this cycle"> 🚨</span>}
+            {row.vwap_reclaim && (
+              <Tooltip title="Reclaimed VWAP this cycle — crossed from below to above">
+                <span style={{ color: '#52c41a', fontWeight: 700, marginLeft: 4 }}>↑VWAP</span>
+              </Tooltip>
+            )}
             {row.has_today_news && (
               <CatalystBadge
                 score={row.catalyst?.score ?? null}
@@ -154,6 +170,20 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
         sorter: (a, b) =>
           new Date(a.first_seen_at).getTime() - new Date(b.first_seen_at).getTime(),
         render: (iso: string) => <AppearedCell iso={iso} />,
+      },
+      {
+        // "Activity now" — fresh/accelerating/VWAP-reclaiming names rank above
+        // stale big-Chg% leaders. Default sort, so the top of the list is
+        // "worth looking at right now" instead of "already won today". Click
+        // Chg% to fall back to the cumulative-level view.
+        title: 'Heat',
+        dataIndex: 'heat',
+        key: 'heat',
+        width: 64,
+        align: 'right',
+        defaultSortOrder: 'descend',
+        sorter: (a, b) => a.heat - b.heat,
+        render: (h: number) => <HeatCell heat={h} />,
       },
       {
         // After-hours cycles carry the after-hours move in change_pct.
