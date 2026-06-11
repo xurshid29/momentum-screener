@@ -49,12 +49,38 @@ export class FinvizRateLimitError extends Error {
   }
 }
 
+// ─── global rate-limit gate ─────────────────────────────────────────────────
+// Finviz 429s after ~5 rapid requests. Multiple callers fire concurrently — the
+// poller's per-cycle burst (momentum v131+v110 ∥ ignition v131+v110 = 4 at
+// once, + news, + swing), plus the daily-bars drain loop (1/s) and the AH
+// quote overlay — easily exceed that, and swing (the last screen each cycle)
+// lost the race every time → empty tab. Funnel ALL Finviz HTTP through one
+// chained gate with a minimum spacing so we never burst, regardless of how
+// many callers fire at once. ~MIN_SPACING_MS between request *starts* →
+// ≤ ~3.3 req/s sustained, comfortably under the limit; a cycle's ~7 calls
+// spread over ~2s, trivial against the 20s interval.
+const MIN_SPACING_MS = 300;
+let gateTail: Promise<void> = Promise.resolve();
+let lastStartMs = 0;
+
+function rateLimitGate(): Promise<void> {
+  const mine = gateTail.then(async () => {
+    const wait = MIN_SPACING_MS - (Date.now() - lastStartMs);
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    lastStartMs = Date.now();
+  });
+  // Keep the chain alive even if a turn rejects (it won't — the body can't throw).
+  gateTail = mine.catch(() => {});
+  return mine;
+}
+
 async function fetchCsv(url: string): Promise<string[][]> {
+  await rateLimitGate();
   const res = await fetch(url, { headers: { 'User-Agent': UA } });
   if (res.status === 429) {
-    // Don't let a rate-limit masquerade as "no rows". Log once and throw a
-    // typed error the screener fetch surfaces rather than silently catching.
-    console.warn('[finviz] HTTP 429 — rate limited');
+    // Spacing should prevent this; if it still happens it's a real signal, not
+    // silent "no rows". Typed so the screener fetch surfaces it.
+    console.warn('[finviz] HTTP 429 — rate limited (despite spacing)');
     throw new FinvizRateLimitError();
   }
   if (!res.ok) throw new Error(`Finviz HTTP ${res.status}`);
