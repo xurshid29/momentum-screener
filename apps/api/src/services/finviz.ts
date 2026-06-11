@@ -50,16 +50,16 @@ export class FinvizRateLimitError extends Error {
 }
 
 // ─── global rate-limit gate ─────────────────────────────────────────────────
-// Finviz 429s after ~5 rapid requests. Multiple callers fire concurrently — the
-// poller's per-cycle burst (momentum v131+v110 ∥ ignition v131+v110 = 4 at
-// once, + news, + swing), plus the daily-bars drain loop (1/s) and the AH
-// quote overlay — easily exceed that, and swing (the last screen each cycle)
-// lost the race every time → empty tab. Funnel ALL Finviz HTTP through one
-// chained gate with a minimum spacing so we never burst, regardless of how
-// many callers fire at once. ~MIN_SPACING_MS between request *starts* →
-// ≤ ~3.3 req/s sustained, comfortably under the limit; a cycle's ~7 calls
-// spread over ~2s, trivial against the 20s interval.
-const MIN_SPACING_MS = 300;
+// Measured 2026-06-11: Finviz Elite 429s on the SECOND request fired 300ms
+// after the first — the real ceiling is ~1 request/second, far stricter than
+// the "~5 rapid calls" earlier guess. Multiple callers fire concurrently (the
+// poller's per-cycle momentum v131+v110 ∥ ignition v131+v110 + news + swing,
+// plus the daily-bars drain), so without serialisation we blow past 1/s and
+// 429 — and swing, the last screen each cycle, lost the race every time →
+// empty tab. Funnel ALL Finviz HTTP through one chained gate spaced just over
+// 1s apart. A cycle's ~7 calls then take ~8s (fits the 20s interval); daily-
+// bars (1/4s) and the AH overlay share the same budget. Keeps us under ~1/s.
+const MIN_SPACING_MS = 1100;
 let gateTail: Promise<void> = Promise.resolve();
 let lastStartMs = 0;
 
