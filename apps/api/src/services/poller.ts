@@ -592,14 +592,18 @@ class PollerService {
         session,
       }).catch(() => [] as ScreenerRow[]),
     ]);
+    let swingFetchErr = '';
     const swingRaw = shouldRefreshSwing
       ? await fetchScreener({
           filter: SWING.filter,
           floatMaxM: SWING.float_max_m,
           topN: SWING.top_n,
           session,
-        }).catch(() => [] as ScreenerRow[])
+        }).catch((e) => { swingFetchErr = e instanceof Error ? e.message : String(e); return [] as ScreenerRow[]; })
       : ([] as ScreenerRow[]);
+    if (shouldRefreshSwing) {
+      console.log(`[poller] swing fetch — session=${session} counter=${this.swingCounter} emptyRetry=${emptyRetry} raw=${swingRaw.length}${swingFetchErr ? ` ERR=${swingFetchErr}` : ''}`);
+    }
     // sh_price_u10 has no lower bound — drop sub-dime junk.
     const ignitionRows = ignitionRaw.filter(
       (r) => r.price != null && r.price >= IGNITION.min_price,
