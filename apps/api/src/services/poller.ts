@@ -95,6 +95,10 @@ const SWING = {
   top_n: 100,
   broadcast_n: 25,
   cadence_cycles: 60,                  // ~20 min at the 20s interval
+  // When the swing list is empty during a session (restart wiped it, or a
+  // fetch failed), retry at most this often — NOT every cycle, so a Finviz
+  // 429 in the after-hours burst isn't sustained by us hammering every 20s.
+  empty_retry_ms: 2 * 60 * 1000,       // 2 min
   alert_score: 65,
   // Force a refresh once per ET day at/after 16:30 ET — that's when today's
   // close has landed in Finviz quote_export, so the daily-bars service can
@@ -280,6 +284,11 @@ class PollerService {
   private swingCounter = 0;
   private lastSwingRows: SwingRow[] = [];
   private lastSwingComputedAt = 0;
+  // When we last *attempted* a swing scan (epoch ms). Bounds the empty-list
+  // recovery retry so a persistently-empty swing (e.g. Finviz 429 in the AH
+  // burst) doesn't re-fire the multi-call fetch every 20s and sustain the
+  // rate-limit. See SWING.empty_retry_ms.
+  private lastSwingAttemptMs = 0;
   private lastForcedSwingPostCloseDate = '';
   // ET date the daily outcome-tracking job last ran. Fired once per ET day from
   // the post-close window (after the daily-bars refresh, so today's close has
@@ -514,17 +523,19 @@ class PollerService {
       etMin >= SWING.post_close_minute_et &&
       session !== 'closed' &&
       this.lastForcedSwingPostCloseDate !== todayEt;
+    // Empty-list recovery: if swing is blank during a session (restart wiped
+    // the process-local lastSwingRows, or a fetch failed), retry — but BOUNDED
+    // to once per empty_retry_ms, not every cycle. Retrying the up-to-9-call
+    // AH burst every 20s would sustain a Finviz 429 and never recover.
+    const emptyRetry =
+      this.lastSwingRows.length === 0 &&
+      session !== 'closed' &&
+      now.getTime() - this.lastSwingAttemptMs >= SWING.empty_retry_ms;
     const shouldRefreshSwing =
       this.swingCounter === 1 ||
       this.swingCounter % SWING.cadence_cycles === 0 ||
       isPostCloseTrigger ||
-      // Recover fast when the list is empty during a trading session — e.g.
-      // after a restart (lastSwingRows is process-local, wiped on deploy) or
-      // when cycle 1's fetch came back empty. Without this, Swing sits blank
-      // for up to a full cadence window (~20 min). One non-empty scan flips
-      // this off and we revert to the normal cadence. Skipped while 'closed'
-      // so it doesn't spin overnight/weekends.
-      (this.lastSwingRows.length === 0 && session !== 'closed');
+      emptyRetry;
 
     // Forward outcome tracking — once per ET day, in the same post-close window
     // as the Swing refresh. Fire-and-forget so it never blocks the cycle; the
@@ -1003,6 +1014,10 @@ class PollerService {
     let scoredSwing: SwingRow[] = this.lastSwingRows;
     let swingFreshlyScored = false;
     if (shouldRefreshSwing) {
+      // Stamp the attempt up front so the empty-retry backoff measures from
+      // when we tried, not when we succeeded — a failed/empty fetch still
+      // pushes the next retry out by empty_retry_ms.
+      this.lastSwingAttemptMs = now.getTime();
       const swingTickers = swingRows.map((r) => r.ticker);
       // Queue every swing-universe ticker for daily-bar backfill — tickers
       // already fresh in the service are no-ops, new ones get queued.
@@ -1032,9 +1047,12 @@ class PollerService {
       }
       scored.sort((a, b) => b.swing_score - a.swing_score);
       const truncated = scored.slice(0, SWING.broadcast_n);
-      // Diagnostic: surface the funnel so an empty swing list is debuggable
-      // live (swingRaw → post-filter → scored). Cheap; one line per refresh.
-      console.log(`[poller] swing scan — raw=${swingRaw.length} filtered=${swingRows.length} scored=${scored.length}`);
+      // Only log the funnel when the scan came up empty — that's the
+      // debuggable case (raw=0 → fetch/429; filtered=0 → post-filter; scored=0
+      // → scoring). A healthy scan stays quiet.
+      if (scored.length === 0) {
+        console.warn(`[poller] swing scan empty — raw=${swingRaw.length} filtered=${swingRows.length} scored=0`);
+      }
       // Replace only if the new scan actually produced rows — a transient
       // Finviz hiccup shouldn't blank out the swing list.
       if (truncated.length > 0) {

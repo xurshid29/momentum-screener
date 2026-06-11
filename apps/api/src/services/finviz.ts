@@ -39,8 +39,24 @@ function token(): string {
   return t;
 }
 
+// Thrown when Finviz returns HTTP 429. Distinct type so callers can tell a
+// rate-limit ("back off, try later — data still exists") apart from a genuine
+// empty result, instead of both collapsing to [].
+export class FinvizRateLimitError extends Error {
+  constructor() {
+    super('Finviz HTTP 429 (rate limited)');
+    this.name = 'FinvizRateLimitError';
+  }
+}
+
 async function fetchCsv(url: string): Promise<string[][]> {
   const res = await fetch(url, { headers: { 'User-Agent': UA } });
+  if (res.status === 429) {
+    // Don't let a rate-limit masquerade as "no rows". Log once and throw a
+    // typed error the screener fetch surfaces rather than silently catching.
+    console.warn('[finviz] HTTP 429 — rate limited');
+    throw new FinvizRateLimitError();
+  }
   if (!res.ok) throw new Error(`Finviz HTTP ${res.status}`);
   const text = await res.text();
   return parseCsv(text);
