@@ -20,10 +20,17 @@ import { sql } from 'kysely';
 import { getDb } from '../db/index.js';
 import { fetchFinvizDailyBars, type DailyBar } from './finviz.js';
 
-// Finviz Elite tolerates a few requests per second across its endpoints
-// (the screener path already uses ~3/cycle). 1 req/s leaves headroom for the
-// screener calls firing every 20s on a separate clock.
-const DRAIN_INTERVAL_MS = 1000;
+// Backfill cadence. Daily bars only change once a day (after the close), so
+// there's no urgency — but this loop runs continuously whenever its queue has
+// work, and the poller refills the queue with hundreds of tickers every cycle.
+// At the old 1 req/s (60/min) it dominated our Finviz quota and, stacked on the
+// poller's own live-screen calls, drove sustained HTTP 429s that starved the
+// Swing fetch (it lost the race every cycle → empty tab). Bars aren't latency-
+// sensitive, so throttle hard to leave the live screens ample headroom:
+// 1 fetch / 4s ≈ 15/min. A ~500-ticker universe still fully refreshes in ~35
+// min, well within a trading day. The global rateLimitGate in finviz.ts spaces
+// everything on top of this.
+const DRAIN_INTERVAL_MS = 4000;
 
 // How fresh is "fresh enough"? Bars only change once a day (after the close);
 // re-fetching the same ticker inside this window is wasteful. The midnight ET
