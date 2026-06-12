@@ -79,8 +79,9 @@ export interface EnrichedRow {
   vol_5min: number | null;
   rel_vol_5min: number | null;
   // 1-min relative volume — the fast "is the burst live right now" companion
-  // to rel_vol_5min (same % construction on a 60s window). Null until ~60s of
-  // samples exist or after an on-screen gap.
+  // to rel_vol_5min (same % construction on a 60s window). Cold-start
+  // extrapolated from ~20s of samples; null on a ticker's first cycle and
+  // after an on-screen gap.
   rel_vol_1min: number | null;
   mcap_m: number | null;
   country: string | null;

@@ -41,6 +41,19 @@ under `…/memory/` also carry the durable facts.
 
 ## What shipped this session (newest first, all on prod)
 
+00. **Fresh-burst alert 🚀 (2026-06-12, after the RVol study).** Catches the
+   "new ticker rallying from the very beginning" case (DSY: +10→+47% before the
+   screens even returned it; ignition alert structurally too slow — vol
+   component needs the 5-min read, PM penalty −8 kept DSY at 64<65). New
+   `pushFreshBurstAlerts` over the enriched union, first 3 min after first
+   sight: float ≤5M, chg 10–80, `max(rv1m,rv5m) ≥ 8000` (or day-RVol ≥30 in
+   REG — day-RVol is *useless in PM*, measured), PM+REG only, once/ticker/day.
+   Plus 1-min RVol cold start (~20s, second cycle). Sim: ~12.7/day, med +13pts
+   in 30min after alert, 47% ≥+15pts; catches DSY/CUPR/ASBP (+77/+76/+39).
+   Knobs in `FRESH_BURST` (`poller.ts`). **Watch live alert volume the first
+   PM/REG sessions — if spammy, raise `rvol_fast_min` 8000→10000 (15000 loses
+   DSY).**
+
 0. **RVol study + fixes (2026-06-12, committed after the ignition recalibration).**
    Reviewed Momentum's Heat + 5-min-RVol pipeline against an 8-day offline
    replay of prod per-cycle series (965k rows, simulation validated 0.995 vs

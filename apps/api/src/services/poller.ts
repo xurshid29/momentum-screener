@@ -86,6 +86,40 @@ const IGNITION = {
   reuse_max_ms: 180_000,   // 3 min ≈ 9 cycles
 };
 
+// Fresh-burst alert — "catch the vertical at first sight". The gap it closes
+// (measured 2026-06-12 on the DSY case + a 7-trading-day union replay): a
+// runner's move starts BEFORE Finviz's screens return the name (DSY ramped
+// ~+10% → +47% pre-sight), and the ignition alert can't fire fast — its volume
+// component needs a 5-min read, and a PM name eats the −8 exhaustion penalty
+// (DSY topped out at score 64 < 65 while ripping +47 → +134%). So this path
+// pings on the union's first minutes instead: nano-float + a violent early
+// volume read, before any score has a chance to mature.
+//
+// Simulated on the 7-day union series: ~12.7 alerts/day (≈10 PM + 3 REG),
+// median chg@alert +33%, median +13 pts more within 30 min (p75 +48),
+// 47% ≥ +15 pts; would have caught DSY (+77 after alert), CUPR (+76),
+// ASBP (+39) on 2026-06-12. To trade alert volume for conviction, raise
+// rvol_fast_min — but 15000 already loses DSY (first read 11231).
+const FRESH_BURST = {
+  // Only the first minutes after a ticker's first sight today (union of
+  // screens, restart-safe via the DB-seeded firstSeenAt). After this window
+  // the normal columns/score paths have caught up and this alert is just noise.
+  window_ms: 180_000,
+  // max(rel_vol_1min, rel_vol_5min) — the fastest read available (~20–40s
+  // after first sight with the 1-min cold-start). DSY-class first reads run
+  // 10k–50k; MASK-class non-starters sit ~600.
+  rvol_fast_min: 8000,
+  // OR an instant first-cycle day-RVol this high. Day-RVol is meaningless in
+  // premarket (DSY printed 0.14–1.05× during its entire vertical — PM volume
+  // is tiny vs a full average day), so this branch is regular-session only.
+  rvol_day_min: 30,
+  float_max_m: 5,   // every measured vertical was ≤ 4.4M float
+  chg_min: 10,      // flat volume-led names haven't committed yet
+  // Above the cap the start is already missed — GMM alerted at +64 with zero
+  // upside left; the sim's winners entered at +28..57.
+  chg_max: 80,
+};
+
 // Swing screener — multi-day setups. Runs inside the same 20s poll loop but
 // on a much slower cadence (every `cadence_cycles` cycles ≈ 20 min) since
 // daily-bar signals don't change intraday. See docs/swing-screener-spec.md.
@@ -162,8 +196,9 @@ export interface EnrichedRow extends ScreenerRow {
   // 1-min relative volume — "is the burst live RIGHT NOW". Same construction
   // on a 60s window (baseline = avg_volume / 390 one-min slices). Faster and
   // choppier than the 5-min read; the two carry independent signal (see the
-  // 2026-06-12 RVol study in docs/web-dashboard.md). Null until a ticker has
-  // ~60s of samples or after an on-screen gap.
+  // 2026-06-12 RVol study in docs/web-dashboard.md). Cold-start extrapolated
+  // from ~20s of samples (a fresh ripper is measurable on its second cycle);
+  // null on a ticker's very first cycle and after an on-screen gap.
   rel_vol_1min: number | null;
   // Anchored VWAP since the ticker first appeared *today*. Computed in-memory
   // from cycle-to-cycle volume deltas × the per-cycle price. Persists across
@@ -309,6 +344,8 @@ class PollerService {
   private alertedSwing = new Set<string>();
   // Tickers already Telegram-alerted from the Continuation dual-signal today.
   private alertedDualSignal = new Set<string>();
+  // Tickers already Telegram-alerted as a fresh burst today. See FRESH_BURST.
+  private alertedFreshBurst = new Set<string>();
   // Tickers that have traded in an Ignition pre-market cycle today. Feeds the
   // runner-score's pre-market-exhaustion penalty (a name that already ran in PM
   // gives back into the close). ET-day concept — cleared at midnight.
@@ -494,6 +531,7 @@ class PollerService {
       this.alertedIgnition.clear();
       this.alertedSwing.clear();
       this.alertedDualSignal.clear();
+      this.alertedFreshBurst.clear();
       this.seenInPremarketToday.clear();
       this.lastForcedSwingPostCloseDate = '';
       this.lastOutcomesDate = '';
@@ -753,6 +791,11 @@ class PollerService {
     // The 1-min rate is only honest with a recent anchor — after an on-screen
     // gap, a stale anchor would smear minutes of history into a "1-min" read.
     const ONE_MIN_MAX_AGE_SEC = 150;
+    // 1-min cold start: a fresh ripper must be measurable on its SECOND cycle
+    // (~20s after first sight), not after a full minute — the fresh-burst
+    // alert and the first Heat reads ride on it. One inter-cycle delta on an
+    // active name is real data (volume updates on ~88% of 20s polls).
+    const ONE_MIN_COLDSTART_SEC = 15;
     // Before a 5-min-old anchor exists, the burst is extrapolated from the
     // oldest sample once the window is at least this wide — so a fresh
     // ignition is measurable in ~80s, not 5 min (see the CNEY post-mortem).
@@ -826,7 +869,15 @@ class PollerService {
           const diff = volNow - h[0].volume;
           if (diff >= 0) vol5min = Math.round(diff * (FIVE_MIN_SEC / dt));
         }
-        const vol1min = windowRate(ONE_MIN_SEC, ONE_MIN_MAX_AGE_SEC);
+        let vol1min = windowRate(ONE_MIN_SEC, ONE_MIN_MAX_AGE_SEC);
+        if (vol1min == null && h.length > 0) {
+          // Cold start — extrapolate the short window to a 1-min-equivalent.
+          const dt = nowSec - h[0].ts;
+          if (dt >= ONE_MIN_COLDSTART_SEC && dt < ONE_MIN_SEC) {
+            const diff = volNow - h[0].volume;
+            if (diff >= 0) vol1min = Math.round(diff * (ONE_MIN_SEC / dt));
+          }
+        }
         if (r.avg_volume && r.avg_volume > 0) {
           const expected5min = r.avg_volume / SLICES_PER_DAY;
           if (vol5min != null && expected5min > 0) {
@@ -1180,6 +1231,7 @@ class PollerService {
     // cached list every cycle, doing no work but for no reason).
     if (!wasFirstPoll) {
       this.pushAlerts(enriched);
+      this.pushFreshBurstAlerts(enrichedByTicker.values(), session);
       this.pushIgnitionAlerts(ignition);
       if (swingFreshlyScored) this.pushSwingAlerts(scoredSwing);
       this.pushDualSignalAlerts(ignition);
@@ -1539,6 +1591,37 @@ class PollerService {
     }
   }
 
+  // Fresh-burst alert — see the FRESH_BURST block for the evidence and tuning.
+  // Iterates the enriched UNION (a fresh runner is usually ignition-first by
+  // 40s–2min, less extended than when Momentum catches it), gated to the first
+  // window_ms after a ticker's first sight today. Volume evidence is the
+  // fastest read available: the cold-start 1-min/5-min RVol, or — outside
+  // premarket, where day-RVol actually means something — an instant day-RVol
+  // on the very first cycle. PM + regular sessions only: an after-hours burst
+  // alert read hours later is noise, and the standard alerts cover AH.
+  private pushFreshBurstAlerts(rows: Iterable<EnrichedRow>, session: TradingSession): void {
+    if (!telegramEnabled() || this.alertsMuted) return;
+    if (session !== 'premarket' && session !== 'regular') return;
+    const nowMs = Date.now();
+    for (const r of rows) {
+      if (this.alertedFreshBurst.has(r.ticker)) continue;
+      const firstMs = this.firstSeenAt.get(r.ticker);
+      if (firstMs === undefined || nowMs - firstMs > FRESH_BURST.window_ms) continue;
+      if (r.float_m == null || r.float_m > FRESH_BURST.float_max_m) continue;
+      if (r.change_pct == null || r.change_pct < FRESH_BURST.chg_min) continue;
+      // Over the cap = the start is already missed. Skip WITHOUT dedup so a
+      // pullback under the cap later in the window still earns the alert.
+      if (r.change_pct > FRESH_BURST.chg_max) continue;
+      if (r.catalyst?.direction === 'bearish') continue;
+      const fast = Math.max(r.rel_vol_1min ?? 0, r.rel_vol_5min ?? 0);
+      const instantDay =
+        session !== 'premarket' && (r.rel_volume ?? 0) >= FRESH_BURST.rvol_day_min;
+      if (fast < FRESH_BURST.rvol_fast_min && !instantDay) continue;
+      this.alertedFreshBurst.add(r.ticker);
+      void sendTelegram(formatFreshBurstAlert(r, Math.round((nowMs - firstMs) / 1000)));
+    }
+  }
+
   // Dual-signal alert — fires the first time a Continuation ticker (≥ 2 days
   // of Ignition history) also clears the live Ignition score floor on the
   // same cycle. The CODX-day-2/3 trigger: the *confirmation* that the move
@@ -1647,6 +1730,29 @@ function formatIgnitionAlert(r: IgnitionRow): string {
   const lines = [
     `⚡ <b>${escapeHtml(r.ticker)}</b>  ${price}  ${chg}`.trimEnd(),
     `<b>Ignition ${r.runner_score}</b> · float ${b.float} / vol ${b.volume} / cat ${b.catalyst} / mat ${b.maturity} / pm ${b.premarket} / shelf ${b.shelf}`,
+    meta.join(' · '),
+    r.news_title ? `“${escapeHtml(r.news_title)}”` : '',
+    shelfAlertLine(r.shelf),
+    `<a href="${escapeHtml(r.finviz_url)}">Finviz</a> · <a href="${tv}">TradingView</a>`,
+  ];
+  return lines.filter(Boolean).join('\n');
+}
+
+// Render a fresh-burst alert — a just-appeared nano-float with a violent
+// early volume read (see FRESH_BURST). Deliberately light on score context:
+// the whole point is speed — the operator opens the chart and decides.
+function formatFreshBurstAlert(r: EnrichedRow, ageSec: number): string {
+  const price = r.price == null ? '' : `$${r.price.toFixed(2)}`;
+  const chg = r.change_pct == null ? '' : `${r.change_pct >= 0 ? '+' : ''}${r.change_pct.toFixed(1)}%`;
+  const meta: string[] = [`seen ${ageSec}s ago`];
+  if (r.float_m != null) meta.push(`float ${r.float_m.toFixed(1)}M`);
+  if (r.rel_vol_1min != null) meta.push(`RVol1m ${Math.round(r.rel_vol_1min)}%`);
+  if (r.rel_vol_5min != null) meta.push(`RVol5m ${Math.round(r.rel_vol_5min)}%`);
+  if (r.rel_volume != null) meta.push(`RVolDay ${r.rel_volume.toFixed(1)}x`);
+  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}`;
+  const lines = [
+    `🚀 <b>${escapeHtml(r.ticker)}</b>  ${price}  ${chg}`.trimEnd(),
+    `<b>FRESH BURST</b> — just hit the screens on violent volume`,
     meta.join(' · '),
     r.news_title ? `“${escapeHtml(r.news_title)}”` : '',
     shelfAlertLine(r.shelf),
