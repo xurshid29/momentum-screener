@@ -252,6 +252,14 @@ export function SelectedStockPanel({ payload }: SelectedStockPanelProps) {
         render: fmtBigPct,
       },
       {
+        title: 'RV 1m',
+        dataIndex: 'rel_vol_1min',
+        key: 'rel_vol_1min',
+        width: 70,
+        align: 'right',
+        render: fmtBigPct,
+      },
+      {
         // catalyst_score is an integer 0–100 (rule classifier or LLM-refined);
         // news_source is the originating feed. Both nullable.
         title: 'Cat',
@@ -442,6 +450,7 @@ function DetailsTab({ ticker, meta, news }: DetailsTabProps) {
           { label: 'Short Ratio',   value: fmtNumber(meta?.short_ratio, 2) },
           { label: 'RVol Day',      value: fmtRelVol(meta?.rel_volume) },
           { label: 'RVol 5m',       value: fmtBigPct(meta?.rel_vol_5min) },
+          { label: 'RVol 1m',       value: fmtBigPct(meta?.rel_vol_1min) },
           { label: 'Insider Own',   value: fmtPct(meta?.insider_own_pct) },
           { label: 'Insider Trans', value: <Coloured color={colorInsiderTrans(num(meta?.insider_trans_pct))}>{fmtPct(meta?.insider_trans_pct)}</Coloured> },
           { label: 'Inst Own',      value: fmtPct(meta?.inst_own_pct) },

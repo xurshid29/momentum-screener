@@ -159,6 +159,12 @@ export interface EnrichedRow extends ScreenerRow {
   vwap_reclaim: boolean;
   vol_5min: number | null;          // 5-min-equivalent traded volume (extrapolated during a ticker's first ~5 min)
   rel_vol_5min: number | null;      // (vol_5min / (avg_volume / 78)) * 100
+  // 1-min relative volume — "is the burst live RIGHT NOW". Same construction
+  // on a 60s window (baseline = avg_volume / 390 one-min slices). Faster and
+  // choppier than the 5-min read; the two carry independent signal (see the
+  // 2026-06-12 RVol study in docs/web-dashboard.md). Null until a ticker has
+  // ~60s of samples or after an on-screen gap.
+  rel_vol_1min: number | null;
   // Anchored VWAP since the ticker first appeared *today*. Computed in-memory
   // from cycle-to-cycle volume deltas × the per-cycle price. Persists across
   // PM → regular → AH within a single ET day so a pre-market spike's volume
@@ -743,6 +749,10 @@ class PollerService {
     // 3) classify rows + compute 5-min relative volume + build payload
     const nowSec = Math.floor(Date.now() / 1000);
     const FIVE_MIN_SEC = 300;
+    const ONE_MIN_SEC = 60;
+    // The 1-min rate is only honest with a recent anchor — after an on-screen
+    // gap, a stale anchor would smear minutes of history into a "1-min" read.
+    const ONE_MIN_MAX_AGE_SEC = 150;
     // Before a 5-min-old anchor exists, the burst is extrapolated from the
     // oldest sample once the window is at least this wide — so a fresh
     // ignition is measurable in ~80s, not 5 min (see the CNEY post-mortem).
@@ -775,37 +785,60 @@ class PollerService {
         this.firstSeenAt.set(r.ticker, firstSeenMs);
       }
 
-      // 5-min volume rate. Diff cumulative-day-volume against an anchor sample
-      // >= 5 min old for the exact rate. Before such a sample exists, fall back
-      // to the oldest sample we have (once the window is wide enough) and
-      // extrapolate it to a 5-min-equivalent — so a fresh ignition's volume
-      // burst is measurable within ~80s of first appearing, not 5 minutes.
+      // Rolling volume rates. Diff cumulative-day-volume against the YOUNGEST
+      // anchor sample >= window old, dt-scaled to the exact window. (Until
+      // 2026-06-12 the 5-min anchor was the OLDEST retained sample, unscaled —
+      // for any name tracked >5 min that silently stretched the window toward
+      // the 600s history cap, inflating rel_vol_5min ~2× (measured median
+      // 2.04× on 8 days of prod series). Historical rows before that date
+      // carry the inflated scale.) Before a window-old sample exists, the
+      // 5-min rate falls back to extrapolating the short window — so a fresh
+      // ignition's volume burst is measurable within ~80s of first appearing.
       let vol5min: number | null = null;
       let relVol5min: number | null = null;
+      let relVol1min: number | null = null;
       if (r.volume != null) {
+        const volNow = r.volume;
         let h = this.volHistory.get(r.ticker);
         if (!h) {
           h = [];
           this.volHistory.set(r.ticker, h);
         }
-        const fiveMinAnchor = h.find((p) => nowSec - p.ts >= FIVE_MIN_SEC);
-        if (fiveMinAnchor) {
-          const diff = r.volume - fiveMinAnchor.volume;
-          if (diff >= 0) vol5min = diff;
-        } else if (h.length > 0 && nowSec - h[0].ts >= MIN_WINDOW_SEC) {
+        // Volume traded over the trailing `windowSec`, from the youngest
+        // sample at least that old; null when the youngest qualifying sample
+        // is older than `maxAgeSec` (e.g. after an off-screen gap — an old
+        // anchor would be a stale average masquerading as a current rate).
+        const windowRate = (windowSec: number, maxAgeSec: number): number | null => {
+          for (let i = h.length - 1; i >= 0; i--) {
+            const age = nowSec - h[i].ts;
+            if (age >= windowSec) {
+              if (age > maxAgeSec) return null;
+              const diff = volNow - h[i].volume;
+              return diff >= 0 ? Math.round(diff * (windowSec / age)) : null;
+            }
+          }
+          return null;
+        };
+        vol5min = windowRate(FIVE_MIN_SEC, HISTORY_MAX_SEC);
+        if (vol5min == null && h.length > 0 && nowSec - h[0].ts >= MIN_WINDOW_SEC) {
           // Cold start — extrapolate the short window to a 5-min-equivalent.
           const dt = nowSec - h[0].ts;
-          const diff = r.volume - h[0].volume;
+          const diff = volNow - h[0].volume;
           if (diff >= 0) vol5min = Math.round(diff * (FIVE_MIN_SEC / dt));
         }
-        if (vol5min != null && r.avg_volume && r.avg_volume > 0) {
+        const vol1min = windowRate(ONE_MIN_SEC, ONE_MIN_MAX_AGE_SEC);
+        if (r.avg_volume && r.avg_volume > 0) {
           const expected5min = r.avg_volume / SLICES_PER_DAY;
-          if (expected5min > 0) {
+          if (vol5min != null && expected5min > 0) {
             relVol5min = +((vol5min / expected5min) * 100).toFixed(2);
+          }
+          const expected1min = r.avg_volume / (SLICES_PER_DAY * 5);
+          if (vol1min != null && expected1min > 0) {
+            relVol1min = +((vol1min / expected1min) * 100).toFixed(2);
           }
         }
         // Append current sample, trim history.
-        h.push({ ts: nowSec, volume: r.volume });
+        h.push({ ts: nowSec, volume: volNow });
         while (h.length > 0 && nowSec - h[0].ts > HISTORY_MAX_SEC) h.shift();
       }
 
@@ -911,12 +944,22 @@ class PollerService {
       }
       if (vwapReclaim) heat += 25;
       else if (aboveVwap === true) heat += 8;
+      // RVol tiers re-anchored 2026-06-12: the old cuts (150/300/800/2000) sat
+      // on the inflated pre-fix scale AND were saturated anyway — 80% of
+      // regular-session rows cleared 300 and 45% cleared 2000, so the
+      // component awarded near-constant points. New cuts ≈ p57/p73/p85/p93 of
+      // the true-5-min distribution on 8 days of prod momentum rows.
       if (relVol5min != null) {
-        if (relVol5min >= 2000) heat += 20;
-        else if (relVol5min >= 800) heat += 14;
-        else if (relVol5min >= 300) heat += 8;
-        else if (relVol5min >= 150) heat += 4;
+        if (relVol5min >= 30000) heat += 20;
+        else if (relVol5min >= 9000) heat += 14;
+        else if (relVol5min >= 3000) heat += 8;
+        else if (relVol5min >= 800) heat += 4;
       }
+      // Burst-live bonus: BOTH the 1-min and 5-min windows elevated (≈p80 of
+      // each). Measured P(+4 pts within 10 min) = 59.5% vs 30.7% base — the
+      // two windows carry independent signal; either alone is only ~43%.
+      if (relVol1min != null && relVol5min != null
+        && relVol1min >= 4000 && relVol5min >= 5000) heat += 6;
       if (isFresh) heat += 10; // fresh news this cycle
       heat = Math.max(0, Math.min(100, Math.round(heat)));
 
@@ -930,6 +973,7 @@ class PollerService {
         vwap_reclaim: vwapReclaim,
         vol_5min: vol5min,
         rel_vol_5min: relVol5min,
+        rel_vol_1min: relVol1min,
         vwap,
         above_vwap: aboveVwap,
         is_fresh_news: isFresh,
@@ -1252,6 +1296,7 @@ class PollerService {
               rel_volume: r.rel_volume,
               vol_5min: r.vol_5min,
               rel_vol_5min: r.rel_vol_5min,
+              rel_vol_1min: r.rel_vol_1min,
               mcap_m: r.mcap_m,
               country: r.country,
               company: r.company,
@@ -1286,6 +1331,7 @@ class PollerService {
               float_m: r.float_m,
               rel_volume: r.rel_volume,
               rel_vol_5min: r.rel_vol_5min,
+              rel_vol_1min: r.rel_vol_1min,
               catalyst_score: r.catalyst?.score ?? null,
               news_source: r.news_source,
               shelf_level: r.shelf?.level ?? null,
@@ -1595,6 +1641,7 @@ function formatIgnitionAlert(r: IgnitionRow): string {
   const meta: string[] = [];
   if (r.float_m != null) meta.push(`float ${r.float_m.toFixed(1)}M`);
   if (r.rel_vol_5min != null) meta.push(`RVol5m ${Math.round(r.rel_vol_5min)}%`);
+  if (r.rel_vol_1min != null) meta.push(`RVol1m ${Math.round(r.rel_vol_1min)}%`);
   if (r.catalyst) meta.push(`catalyst ${r.catalyst.score}`);
   const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}`;
   const lines = [
@@ -1629,6 +1676,7 @@ function formatDualSignalAlert(r: IgnitionRow, c: ContinuationCandidate): string
   const meta: string[] = [];
   if (r.float_m != null) meta.push(`float ${r.float_m.toFixed(1)}M`);
   if (r.rel_vol_5min != null) meta.push(`RVol5m ${Math.round(r.rel_vol_5min)}%`);
+  if (r.rel_vol_1min != null) meta.push(`RVol1m ${Math.round(r.rel_vol_1min)}%`);
   if (r.catalyst) meta.push(`catalyst ${r.catalyst.score}`);
   const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}`;
   const lines = [

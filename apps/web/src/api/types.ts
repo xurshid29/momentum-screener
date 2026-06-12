@@ -78,6 +78,10 @@ export interface EnrichedRow {
   rel_volume: number | null;
   vol_5min: number | null;
   rel_vol_5min: number | null;
+  // 1-min relative volume — the fast "is the burst live right now" companion
+  // to rel_vol_5min (same % construction on a 60s window). Null until ~60s of
+  // samples exist or after an on-screen gap.
+  rel_vol_1min: number | null;
   mcap_m: number | null;
   country: string | null;
   company: string | null;
@@ -305,6 +309,7 @@ export interface HistoryRow {
   rel_volume: number | null;
   vol_5min: number | null;
   rel_vol_5min: number | null;
+  rel_vol_1min: number | null;
   mcap_m: number | null;
   country: string | null;
   company: string | null;
@@ -337,6 +342,7 @@ export interface IgnitionHistoryRow {
   float_m: number | null;
   rel_volume: number | null;
   rel_vol_5min: number | null;
+  rel_vol_1min: number | null;
   catalyst_score: number | null;
   news_source: NewsSource | null;
   shelf_level: ShelfLevel | null;

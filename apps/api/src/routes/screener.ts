@@ -46,7 +46,7 @@ router.get('/history', authMiddleware, async (req, res) => {
     .innerJoin('screener_cycles as c', 'c.id', 'r.cycle_id')
     .select([
       'r.id', 'r.ticker', 'r.change_pct', 'r.float_m', 'r.float_is_proxy', 'r.price', 'r.volume',
-      'r.avg_volume', 'r.rel_volume', 'r.vol_5min', 'r.rel_vol_5min',
+      'r.avg_volume', 'r.rel_volume', 'r.vol_5min', 'r.rel_vol_5min', 'r.rel_vol_1min',
       'r.mcap_m', 'r.country', 'r.company', 'r.sector', 'r.industry',
       'r.short_float_pct', 'r.short_ratio',
       'r.insider_own_pct', 'r.insider_trans_pct',
@@ -78,7 +78,7 @@ router.get('/ignition-history', authMiddleware, async (req, res) => {
     .select([
       'i.id', 'i.ticker', 'i.runner_score', 'i.score_breakdown',
       'i.price', 'i.change_pct', 'i.float_m',
-      'i.rel_volume', 'i.rel_vol_5min',
+      'i.rel_volume', 'i.rel_vol_5min', 'i.rel_vol_1min',
       'i.catalyst_score', 'i.news_source', 'i.shelf_level',
       'c.polled_at', 'c.session', 'c.id as cycle_id',
     ])

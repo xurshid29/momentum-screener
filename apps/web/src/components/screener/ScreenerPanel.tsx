@@ -60,7 +60,7 @@ const APPEARED_TZ = 'Asia/Tashkent'; // UTC+5, no DST
 function HeatCell({ heat }: { heat: number }) {
   const color = heat >= 60 ? '#ff4d4f' : heat >= 40 ? '#fa8c16' : heat >= 20 ? '#fadb14' : '#8c8c8c';
   return (
-    <Tooltip title="Activity now: freshness + acceleration + VWAP reclaim + 5m-RVol + fresh news">
+    <Tooltip title="Activity now: freshness + acceleration + VWAP reclaim + 5m-RVol + 1m+5m burst + fresh news">
       <span style={{ color, fontWeight: 700 }}>{heat}</span>
     </Tooltip>
   );
@@ -228,11 +228,29 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
         align: 'right',
         render: (raw) => {
           const v = num(raw);
-          // 100% = exactly typical 5-min slice. >500% is hot, >5000% is extreme.
-          const color = v == null ? undefined : v >= 5000 ? '#faad14' : v >= 500 ? '#52c41a' : undefined;
+          // 100% = exactly typical 5-min slice. Cuts ≈ p57 / p86 of the
+          // momentum universe on the exact-window scale (fixed 2026-06-12).
+          const color = v == null ? undefined : v >= 10000 ? '#faad14' : v >= 1000 ? '#52c41a' : undefined;
           return <Text style={{ color }}>{fmtBigPct(raw)}</Text>;
         },
         sorter: (a, b) => (num(a.rel_vol_5min) ?? 0) - (num(b.rel_vol_5min) ?? 0),
+      },
+      {
+        // The fast companion read: volume over the trailing 60s vs a typical
+        // 1-min slice. Answers "is the burst live RIGHT NOW" — it collapses
+        // within a minute when buying stops, while 5m stays elevated. Both
+        // columns hot at once is the strongest live-surge tell.
+        title: 'RVol 1m',
+        dataIndex: 'rel_vol_1min',
+        key: 'rel_vol_1min',
+        width: 90,
+        align: 'right',
+        render: (raw) => {
+          const v = num(raw);
+          const color = v == null ? undefined : v >= 15000 ? '#faad14' : v >= 1000 ? '#52c41a' : undefined;
+          return <Text style={{ color }}>{fmtBigPct(raw)}</Text>;
+        },
+        sorter: (a, b) => (num(a.rel_vol_1min) ?? 0) - (num(b.rel_vol_1min) ?? 0),
       },
       { title: 'MCap', dataIndex: 'mcap_m', key: 'mcap_m', width: 70, align: 'right', render: fmtMcap },
       { title: 'Country', dataIndex: 'country', key: 'country', width: 90, ellipsis: true },

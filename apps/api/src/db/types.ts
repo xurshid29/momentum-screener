@@ -54,6 +54,7 @@ export interface ScreenerResultsTable {
   rel_volume: number | null;
   vol_5min: number | null;
   rel_vol_5min: number | null;
+  rel_vol_1min: number | null;
   mcap_m: number | null;
   country: string | null;
   company: string | null;
@@ -84,6 +85,7 @@ export interface IgnitionResultsTable {
   float_m: number | null;
   rel_volume: number | null;
   rel_vol_5min: number | null;
+  rel_vol_1min: number | null;
   catalyst_score: number | null;
   news_source: NewsSource | null;
   // Effective-shelf / dilution level at ignition time: 'shelf' | 'effective'

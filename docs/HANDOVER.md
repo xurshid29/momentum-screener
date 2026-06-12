@@ -41,6 +41,25 @@ under `…/memory/` also carry the durable facts.
 
 ## What shipped this session (newest first, all on prod)
 
+0. **RVol study + fixes (2026-06-12, committed after the ignition recalibration).**
+   Reviewed Momentum's Heat + 5-min-RVol pipeline against an 8-day offline
+   replay of prod per-cycle series (965k rows, simulation validated 0.995 vs
+   stored). Found + fixed: **(a)** the "5-min" RVol anchor drifted to the 600s
+   history cap for any name tracked >5 min — a ~10-min window, median **2.04×
+   inflated** (⚠️ **scale break: rows before 2026-06-12 carry the old scale**;
+   ignition volume tiers halved to 1500/500/250/100 to compensate); **(b)** new
+   **`rel_vol_1min`** end-to-end (column, persisted both tables, alerts meta) —
+   at matched alert rates it flags 43% of imminent surges vs 28% for the old
+   metric, equal precision, and 1m+5m both-hot is the strongest live tell
+   (59.5% vs 30.7% base); **(c)** Heat's RVol ladder was saturated (80% of rows
+   cleared tier 1) — re-anchored to measured percentiles + a +6 both-windows
+   burst bonus. Details in web-dashboard.md "Recent additions". **Watch:** Heat
+   distribution shifts (RVol tiers now actually differentiate) and ignition
+   scores for *established* names sit slightly lower on the corrected metric —
+   don't re-judge the recalibration off the first day or two; the 1m/5m
+   "drying-up" ratio (t1/t5 < 0.5 → cooling) is a measured candidate for a
+   future exit-assist.
+
 1. **Finviz rate-limit fix (the big one, 2026-06-11).** Swing tab was empty.
    Root cause: **Finviz Elite ceiling is ~1 req/s** (measured: a 2nd call 300ms
    after the 1st 429s), and we blew past it — daily-bars drained 60 calls/min +

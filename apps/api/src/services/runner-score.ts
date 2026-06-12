@@ -55,13 +55,19 @@ function floatScore(floatM: number | null): number {
 // so fall back to day relative volume — which the outcome data shows is itself a
 // clean monotonic predictor (day-RVol 25×+ → +4.4%/1d, the 2–3× gate floor is
 // dead at +0.2%). Take the stronger of the two reads. Max 30.
+//
+// 5-min tiers HALVED 2026-06-12 alongside the rel_vol_5min window fix: the
+// metric used to drift to a ~10-min window (measured ~2.04× inflated) for any
+// name tracked >5 min — the regime that drives most alert cycles — and these
+// tiers were calibrated on that inflated scale. Halving preserves the
+// 2026-06-12 outcome recalibration on the corrected metric.
 function volumeScore(relVol5m: number | null, relVolDay: number | null): number {
   let v5 = 0;
   if (relVol5m != null) {
-    if (relVol5m >= 3000) v5 = 30;
-    else if (relVol5m >= 1000) v5 = 24;
-    else if (relVol5m >= 500) v5 = 16;
-    else if (relVol5m >= 200) v5 = 7;
+    if (relVol5m >= 1500) v5 = 30;
+    else if (relVol5m >= 500) v5 = 24;
+    else if (relVol5m >= 250) v5 = 16;
+    else if (relVol5m >= 100) v5 = 7;
   }
   let vd = 0;
   if (relVolDay != null) {
