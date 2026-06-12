@@ -82,9 +82,9 @@ under `…/memory/` also carry the durable facts.
    apart**; typed `FinvizRateLimitError` (429 no longer silently "no rows");
    bounded swing empty-retry (2 min) in `poller.ts`. Verified: 429s ~30/min→0,
    swing repopulated. See `docs/web-dashboard.md` incident report.
-   - ⚠️ **Two temporary debug logs still in `poller.ts` to remove**:
-     `[poller] swing fetch —` (~line 605) and `[poller] swing scan empty —`
-     (~line 1058).
+   - Debug-log cleanup done 2026-06-13: the per-refresh `swing fetch —` log is
+     removed; the `swing scan empty —` warn was **kept deliberately** — it
+     fires only on the failure case (and now carries the fetch error).
 2. **Continuation demoted → "Faders" (2026-06-11).** Outcome data: the
    continuation pattern is a NEGATIVE long signal (−2.4%/28% win over 5d vs
    +3.2%/39% for fresh names). Moved tab to last, relabeled "Faders", banner
@@ -149,9 +149,10 @@ history (temp tables `ir_entry` / `scored`, joined `ignition_results` →
 
 ## Other deferred / known
 
-- **Remove the 2 swing debug logs** (above) — small cleanup.
-- **Record the ~1 req/s Finviz limit** in CLAUDE.md (currently only in this
-  handover + the incident report).
+- ✅ Swing debug-log cleanup (2026-06-13; empty-scan warn kept — failure-path
+  diagnostic) · ✅ Finviz ~1 req/s recorded in CLAUDE.md · ✅ GitHub Actions
+  Node 24 (checkout@v5 + `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true`, opted in
+  ahead of the 2026-06-16 forced default).
 - **Deeper Finviz relief:** share the after-hours v=152 quote overlay across
   screens (cuts AH calls ~9→~5/cycle). Non-urgent now that the gate exists.
 - **Retune from outcomes generally:** swing alert ≥65, ignition weights,

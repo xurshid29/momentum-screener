@@ -732,9 +732,6 @@ class PollerService {
           session,
         }).catch((e) => { swingFetchErr = e instanceof Error ? e.message : String(e); return [] as ScreenerRow[]; })
       : ([] as ScreenerRow[]);
-    if (shouldRefreshSwing) {
-      console.log(`[poller] swing fetch — session=${session} counter=${this.swingCounter} emptyRetry=${emptyRetry} raw=${swingRaw.length}${swingFetchErr ? ` ERR=${swingFetchErr}` : ''}`);
-    }
     // sh_price_u10 has no lower bound — drop sub-dime junk.
     const ignitionRows = ignitionRaw.filter(
       (r) => r.price != null && r.price >= IGNITION.min_price,
@@ -1265,7 +1262,7 @@ class PollerService {
       // debuggable case (raw=0 → fetch/429; filtered=0 → post-filter; scored=0
       // → scoring). A healthy scan stays quiet.
       if (scored.length === 0) {
-        console.warn(`[poller] swing scan empty — raw=${swingRaw.length} filtered=${swingRows.length} scored=0`);
+        console.warn(`[poller] swing scan empty — raw=${swingRaw.length} filtered=${swingRows.length} scored=0${swingFetchErr ? ` fetchErr=${swingFetchErr}` : ''}`);
       }
       // Replace only if the new scan actually produced rows — a transient
       // Finviz hiccup shouldn't blank out the swing list.

@@ -78,6 +78,8 @@ A standalone `ShelfService` (`services/shelf.ts`) runs alongside the poller: for
 
 **Important:** Add `-A "Mozilla/5.0"` to curl commands to avoid blocks. Add `-L` to follow the `export.ashx` → `export` redirect (Finviz silently moved this in early 2026).
 
+**Rate limit:** Finviz Elite's real ceiling is **~1 request/second** (measured 2026-06-11: a 2nd call 300ms after the 1st gets a 429). All API-side Finviz HTTP goes through `rateLimitGate()` in `apps/api/src/services/finviz.ts` (≥1.1s spacing) and 429s raise a typed `FinvizRateLimitError`. Keep manual curl probing under ~1/s too — hammering faster starves the live poller.
+
 ```bash
 # Screen stocks (v=111 overview, v=171 technical, v=131 ownership, v=161 financial)
 curl -sL -A "Mozilla/5.0" "https://elite.finviz.com/export?v=171&f=sh_price_o20,sh_price_u30,cap_midover&auth=$FINVIZ_API_TOKEN"
