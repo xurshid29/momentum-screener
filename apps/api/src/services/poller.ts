@@ -200,6 +200,11 @@ export interface EnrichedRow extends ScreenerRow {
   // from ~20s of samples (a fresh ripper is measurable on its second cycle);
   // null on a ticker's very first cycle and after an on-screen gap.
   rel_vol_1min: number | null;
+  // Change% now minus change% ~1 min ago — the local price direction that
+  // gives the (direction-blind) 1-min RVol its sign in the UI: a hot burst
+  // with this ≤ −2 is sell-side pressure (distribution/shakeout prints).
+  // Null until a ticker has ~60s of samples or after an on-screen gap.
+  chg_delta_1min: number | null;
   // Anchored VWAP since the ticker first appeared *today*. Computed in-memory
   // from cycle-to-cycle volume deltas × the per-cycle price. Persists across
   // PM → regular → AH within a single ET day so a pre-market spike's volume
@@ -277,6 +282,10 @@ class PollerService {
   // Per-ticker rolling volume samples (timestamp seconds, cumulative day volume).
   // Used to compute the last-5-minutes volume diff. Trimmed to ~10 minutes deep.
   private volHistory = new Map<string, Array<{ ts: number; volume: number }>>();
+  // Short rolling change% history per ticker — feeds chg_delta_1min (the
+  // local price direction paired with the 1-min RVol). Same lifecycle as
+  // volHistory: appended per enriched cycle, trimmed, cleared at midnight ET.
+  private chgHistory = new Map<string, Array<{ ts: number; chg: number }>>();
   // Per-ticker anchored VWAP tallies. cumPxVol and cumVol accumulate
   // (Δvolume × price) across cycles since first detection *today*; lastVolume
   // is the previous cycle's cumulative day volume, used to derive the delta.
@@ -558,6 +567,7 @@ class PollerService {
     if (session !== this.lastSession) {
       this.prevChange.clear();
       this.volHistory.clear();
+      this.chgHistory.clear();
       // vwapState is *not* cleared here. The Finviz `volume` field is cumulative
       // for the whole day, so volume deltas keep accumulating coherently across
       // PM → regular → AH. Keeping the tally lets the anchored VWAP match a
@@ -893,6 +903,29 @@ class PollerService {
         while (h.length > 0 && nowSec - h[0].ts > HISTORY_MAX_SEC) h.shift();
       }
 
+      // Local 1-min price direction — pairs with the direction-blind 1-min
+      // RVol (a hot burst while this is ≤ −2 reads as sell-side pressure).
+      // Youngest sample ≥ 1 min old, same staleness bound as the RVol anchor.
+      let chgDelta1min: number | null = null;
+      if (r.change_pct != null) {
+        let ch = this.chgHistory.get(r.ticker);
+        if (!ch) {
+          ch = [];
+          this.chgHistory.set(r.ticker, ch);
+        }
+        for (let i = ch.length - 1; i >= 0; i--) {
+          const age = nowSec - ch[i].ts;
+          if (age >= ONE_MIN_SEC) {
+            if (age <= ONE_MIN_MAX_AGE_SEC) {
+              chgDelta1min = +(r.change_pct - ch[i].chg).toFixed(2);
+            }
+            break;
+          }
+        }
+        ch.push({ ts: nowSec, chg: r.change_pct });
+        while (ch.length > 0 && nowSec - ch[0].ts > ONE_MIN_MAX_AGE_SEC) ch.shift();
+      }
+
       // Anchored VWAP — see EnrichedRow.vwap doc. First cycle seeds lastVolume
       // and returns null (no delta yet). Subsequent cycles accumulate
       // Δvolume × current price; reset is handled by the session-boundary
@@ -1025,6 +1058,7 @@ class PollerService {
         vol_5min: vol5min,
         rel_vol_5min: relVol5min,
         rel_vol_1min: relVol1min,
+        chg_delta_1min: chgDelta1min,
         vwap,
         above_vwap: aboveVwap,
         is_fresh_news: isFresh,

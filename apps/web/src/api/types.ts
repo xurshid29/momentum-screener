@@ -83,6 +83,9 @@ export interface EnrichedRow {
   // extrapolated from ~20s of samples; null on a ticker's first cycle and
   // after an on-screen gap.
   rel_vol_1min: number | null;
+  // Change% now minus change% ~1 min ago — gives the direction-blind 1-min
+  // RVol its sign in the UI (hot burst + this ≤ −2 = sell-side pressure).
+  chg_delta_1min: number | null;
   mcap_m: number | null;
   country: string | null;
   company: string | null;
