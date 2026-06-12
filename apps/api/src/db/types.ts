@@ -72,7 +72,7 @@ export interface ScreenerResultsTable {
 }
 
 // One row per Ignition-screener candidate per cycle. `score_breakdown` is the
-// per-component runner-score (float / volume / catalyst / earliness / halt).
+// per-component runner-score (float / volume / catalyst / maturity / premarket / shelf).
 export interface IgnitionResultsTable {
   id: Generated<string>;
   cycle_id: string;

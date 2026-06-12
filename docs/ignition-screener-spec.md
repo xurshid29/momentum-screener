@@ -3,8 +3,8 @@
 Implementation spec for Phase 2 of the runner-detection roadmap. See
 [catching-runners.md](catching-runners.md) for the strategy this builds on.
 
-**Status:** ✅ built (2026-05-17). Decisions taken: sidebar on the left edge,
-Telegram alert threshold runner-score ≥ 58, v1 cuts accepted.
+**Status:** ✅ built (2026-05-17); runner-score **recalibrated 2026-06-12** from
+forward outcomes (see §3). Telegram alert threshold runner-score ≥ 65.
 
 ## 1. What it delivers
 
@@ -35,19 +35,30 @@ via the Filters dialog yet.
 
 ## 3. The runner-score
 
-A new `apps/api/src/services/runner-score.ts` — pure function
-`scoreRunner(row) → { score, breakdown }`, 0–100:
+A `apps/api/src/services/runner-score.ts` — pure function
+`scoreRunner(row) → { score, breakdown }`, 0–100.
 
-| Component | Max | Logic |
-|---|---|---|
-| **Float** | 30 | `<2M→30`, `<5M→25`, `<10M→16`, `<15M→8`, else 0 |
-| **Volume burst** | 35 | `rel_vol_5min`: `≥3000→35`, `≥1000→27`, `≥500→18`, `≥200→8`; fallback day-RVol `≥10→6` |
-| **Catalyst** | 25 | direction-aware — bullish `score×0.25`, neutral/mixed `score×0.10`, **bearish → 0** |
-| **Change** | −35…0 | extended up: `≥300→−20`, `≥150→−12`, `≥80→−5`; **down-move: `≤−15→−35`, `<0→−12`** |
-| **Halt** | +12 | a halt headline this cycle (T1/T2 = catalyst landing now) |
-| **Shelf** | −15…0 | *Phase 3* — dilution penalty from the SEC shelf lookup: `active`→−15, `effective`→−10, `shelf`→−5 (see `services/shelf.ts`) |
+**Recalibrated 2026-06-12** against 22 days of forward-return outcomes
+(`screener_outcomes`). The study found the original score under-ranked its own
+best cohort: a fresh, regular-hours ignition up 25–100% intraday scored ~45
+(below the alert line) yet did **+14.9%/1d and held +14%/5d**, the only ignition
+slice that didn't give back — while the score spent its budget on catalyst
+*impact* and shelf risk, both miscalibrated for the 1-day horizon. The rebalance
+(validated: alert set `≥65` → +13.9%/1d, holds +5.2%/5d, vs the old `≥58` rule's
++4.7%/1d that gave back to −0.4% by day 5):
 
-Clamped 0–100. The sidebar ranks by it; the breakdown is shown on hover.
+| Component | Range | Logic | Why (outcomes) |
+|---|---|---|---|
+| **Float** | 0…30 | `<2M→30`, `<5M→25`, `<10M→16`, `<15M→8`, else 0 | `<2M` is the best 1d cohort |
+| **Volume** | 0…30 | `max` of two ladders — 5-min burst (`≥3000→30`, `≥1000→24`, `≥500→16`, `≥200→7`) **and** day-RVol (`≥25→24`, `≥10→14`, `≥5→7`, `≥3→3`) | `rel_vol_5min` is null/0 ~40% of the time; day-RVol predicts cleanly (25×+ → +4.4%/1d) and is no longer a mere fallback |
+| **Catalyst** | −15…+15 | type-aware, **not** impact-scaled: dilution/bankruptcy `−12`; M&A/legal `−8`; partnership/contract/13D-G/earnings `−5`; **FDA/clinical `+14`**; news-pending halt `+10`, news halt `+8`, vol/info halt `+4`; other bearish `−8`; else `0` | impact_score did **not** predict (high-impact trended negative); *type* did — FDA holds 5d, dilution/M&A/partnership fade, catalyst *absence* is the best alert cell so it stays neutral |
+| **Maturity** | −25…+12 | `≤−15→−25`, `<0→−12`, `<25→0`, **`25–100→+12`**, `<150→−6`, `<300→−15`, else `−25` | the 25–100% band is the sweet spot (rewarded, was a flat 0); >100% blows off; red is a non-runner |
+| **Pre-market** | −8…0 | `seen_in_premarket → −8` | a name that already ran in PM gave back (0.0%/1d vs +14.9% for the fresh regular-hours version) |
+| **Shelf** | −5…0 | `active → −5`, else 0 | the old `effective→−10 / shelf→−5` penalty was **inverted** at 1d — those names out-performed; an effective shelf is a *multi-day* kill-switch (still rides as the ⚠️), not a same-session drag |
+
+Clamped 0–100. The sidebar ranks by it; the breakdown is shown on hover. The
+`halt` and `earliness` breakdown keys were replaced by `maturity` + `premarket`
++ a halt-aware `catalyst`.
 
 ## 4. Backend — poller restructure
 
@@ -111,9 +122,12 @@ backtest endpoint/UI is a later add, not Phase 2.
 ## 5. Telegram — Ignition alerts
 
 A `pushIgnitionAlerts()` in the poller fires on either trigger — an ignition
-row's `runner_score ≥ 58`, **or** a bullish strong/major catalyst (catches a
-catalyst-led move before the volume burst lifts the score; bearish catalysts
-never alert). Deduped **once per ticker per ET day** (`alertedIgnition`, cleared
+row's detection score `≥ 65` (the score minus the shelf component, so dilution
+risk never *hides* an alert), **or** a premium catalyst (the type-aware catalyst
+component scoring `≥ 8` — FDA/clinical or a news-pending/news halt — catches a
+catalyst-led move before the volume burst lifts the score). Suppressed when the
+current change% is already `> 100` (blow-off), and bearish/dilution catalysts
+never alert. Deduped **once per ticker per ET day** (`alertedIgnition`, cleared
 at midnight). Message: ticker · runner-score + breakdown · price · %chg · float
 · RVol5m · catalyst · links. Reuses the existing `telegram.ts`.
 
@@ -170,7 +184,8 @@ mark Phase 2 done). One migration, no new dependency.
 
 1. **Sidebar placement** — left edge (recommended, scan-order
    Ignition→Screener→Charts) or right edge?
-2. **Ignition alert threshold** — runner-score `≥ 58`. Looser (more alerts) or
-   tighter?
+2. **Ignition alert threshold** — runner-score `≥ 65` (set 2026-06-12 from
+   outcomes; the sweep showed 58→~10/day +8.9%/1d, 70→~2/day +24.6%/1d). Revisit
+   the volume/conviction trade as more outcomes accrue on the new score.
 3. **v1 cuts OK?** — specifically: the ignition filter not user-editable yet,
    and no backtest UI (ad-hoc psql for tuning).

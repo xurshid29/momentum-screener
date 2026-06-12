@@ -223,7 +223,7 @@ export function SelectedStockPanel({ payload }: SelectedStockPanelProps) {
         align: 'right',
         render: (s: number, row) => {
           const b = row.score_breakdown;
-          const tooltip = `float ${b.float} · volume ${b.volume} · catalyst ${b.catalyst} · earliness ${b.earliness} · halt ${b.halt} · shelf ${b.shelf}`;
+          const tooltip = `float ${b.float} · volume ${b.volume} · catalyst ${b.catalyst} · maturity ${b.maturity} · premarket ${b.premarket} · shelf ${b.shelf}`;
           return (
             <Tooltip title={tooltip}>
               <span style={{ color: scoreColor(s), fontWeight: 700 }}>{Math.round(s)}</span>

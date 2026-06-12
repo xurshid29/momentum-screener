@@ -119,8 +119,8 @@ export interface RunnerScoreBreakdown {
   float: number;
   volume: number;
   catalyst: number;
-  earliness: number;
-  halt: number;
+  maturity: number;
+  premarket: number;
   shelf: number;
 }
 

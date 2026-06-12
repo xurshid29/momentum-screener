@@ -68,34 +68,50 @@ under `…/memory/` also carry the durable facts.
 
 ---
 
-## OPEN — the active question: review Ignition (data in hand, decision pending)
+## RESOLVED — Ignition recalibration (2026-06-12, code-complete, awaiting commit/deploy)
 
-The operator asked "is Ignition really helpful / doing its job?" I pulled
-`screener_outcomes`. **Verdict: real but narrow edge — NOT broken like
-Continuation, but mis-framed if treated as a hold.** Data (2026-06-12):
+The operator chose **(d) dig deeper → then recalibrate runner_score**. Done.
 
-- **runner_score predicts the 1-day move, monotonically** (its native horizon):
-  `<40 → +0.4%`, `40-58 → +1.5%`, `58-75 (alert) → +2.9%`, `75-100 → +10.1%`.
-  peak_5d also climbs hard with score (29%→64%). The score works.
-- **Edge is 1-day only** — alert bucket: 1d +2.9% → 3d +2.7% → **5d −0.9%**.
-  Spike then give-back. Correct for a scalp, wrong to hold.
-- **Momentum beats Ignition** on raw return (Mom +4.5%/1d vs Ign +1.0%; same
-  window). Fresh Momentum names are the better signal.
-- **~42% win rate even at the alert threshold** — asymmetric (small losses,
-  occasional big peak); only works with disciplined exit-into-strength.
+**Where the edge concentrates** (22-day `screener_outcomes`, ignition):
+- **The golden cohort**: fresh, *regular-hours* ignition up **25–100% intraday,
+  no pre-market run** → **+14.9%/1d and HOLDS +14%/5d** (the only ignition slice
+  that doesn't give back). The old score put it at avg ~45 (below the 58 line) —
+  only 29% alerted, and the *non-alerting* ones outperformed the alerting ones.
+  The score was inverted against its own best cohort.
+- **PM-exhaustion**: the *same* 25–100% move that traded in PM did 0.0%/1d.
+- **Catalyst TYPE, not impact**: FDA/clinical +14.6%/1d (holds 5d); dilution
+  −8.3, partnership −5.0, M&A −3.4 — yet M&A/partnership were scored *bullish*
+  and got positive points. High impact_score / urgency trended negative.
+- **Day rel_volume** (25×+ → +4.4%/1d) predicts cleanly; the 35-pt Volume
+  component keyed off `rel_vol_5min`, which is null/0 ~40% of the time.
+- **Shelf penalty was inverted**: effective/active shelf names out-performed at
+  1d (it's a multi-day kill-switch, not a same-session signal).
 
-**Decision NOT yet made.** Options presented to the operator:
-- (a) Keep, reframe as scalp + lean on Heat/VWAP exit cues (+ note 5d-hold is negative).
-- (b) Retune runner_score weights against 1d outcomes (have ~2000 rows).
-- (c) Raise alert threshold ~58 → ~70 (75-100 bucket was +10%/1d, far better).
-- (d) Dig deeper first: slice by catalyst-present, PM vs regular, float tier —
-  find WHERE the edge concentrates, then target it.
-- My lean: (a) + (d) — it has a genuine edge, just needs honest framing and we
-  should locate where it's strongest before retuning. **Operator to choose.**
+**Shipped (code-complete; typecheck + web build pass; NOT yet committed — operator
+pushes via VPN):** rewrote `runner-score.ts` — Float(30) + Volume(30, max of
+5-min & day-RVol ladders) + type-aware Catalyst(−15..+15) + Maturity(−25..+12,
+rewards the 25–100% band) + Pre-market(−8..0) + Shelf(−5..0, active only).
+Breakdown keys `earliness`/`halt` → `maturity`/`premarket`. Poller: new
+`seenInPremarketToday` set (midnight-cleared), `scoreRunner` call passes
+`catalyst_type` + `seen_in_premarket`, `alert_score` 58→**65**,
+`alert_entry_chg_max` 40→**100**, alert bypass retied to premium catalyst
+(`b.catalyst ≥ 8` = FDA/news-halt) instead of any bullish-strong/major. Web:
+`RunnerScoreBreakdown` + two tooltips updated. Spec §3 rewritten.
 
-Re-run the analysis with the queries used (they're in this session's history;
-the shape is `select bucket, avg(chg_1d/3d/5d), peak_5d, drawdown_5d, win
-from screener_outcomes where screen='ignition' and bars_forward>=N group by`).
+**Validation (reconstructed new score on history):** alert set `≥65 ∨ premium
+catalyst, cap 100` → **+13.9%/1d, +5.2%/5d, ~5/day** vs old `≥58, cap 40` →
++4.7%/1d, −0.4%/5d, ~8/day. Monotonic (58→+8.9, 65→+17.5, 70→+24.6). Win rate
+stays ~45% — it's an **asymmetric positive-skew lottery** (median ~flat); the
+recalibration concentrates the right-tail runners into the alert set and kills
+the 5-day give-back. Matches the operator's "ride winners, cut losers" thesis.
+
+**Watch after deploy:** new `screener_outcomes` rows for `screen='ignition'`
+will accrue under the new score — let ≥5d mature before judging live, don't
+retune off the first few days. The reconstruction used `first_change_pct` for
+maturity (live uses current `change_pct` via the day's max-score cycle) — a
+small in-sample/live gap to keep in mind. Queries used are in this session's
+history (temp tables `ir_entry` / `scored`, joined `ignition_results` →
+`screener_cycles` → `screener_outcomes`).
 
 ---
 

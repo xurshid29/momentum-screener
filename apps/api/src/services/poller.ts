@@ -64,15 +64,20 @@ const IGNITION = {
   top_n: 80,         // fetched from Finviz, then runner-score-ranked
   min_price: 0.10,   // post-filter — sh_price_u10 has no lower bound
   broadcast_n: 25,   // top-N (by runner-score) kept in the SSE payload + persisted
-  alert_score: 58,   // alert threshold — a no-catalyst momentum ignition caps ~60 (float 25 + volume 35)
-  // Suppress alerts when first detection is already too extended to trade. The
-  // 05-21/05-22 sample showed every "alert fired at +50%+" name (WHLR +146→
-  // −119, FRGT +93→−104, ORIS +54→−59, ATPC +89→−14) bled to the close,
-  // while the winners (SBFM +3→+47, MRM +6→+18, AKTX +50→+93, CODX +21→+31)
-  // all entered below this cap. We still keep the row in the SSE payload —
-  // only the Telegram push is gated, so a name that pulls back under the cap
-  // and re-fires the score gets a fresh second-leg alert.
-  alert_entry_chg_max: 40,
+  // Alert threshold on the recalibrated runner-score (2026-06-12). Validated
+  // against 22 days of forward outcomes: ≥65 alerts on ~5/day at +13.9%/1d
+  // (holds +5.2%/5d) vs the old ≥58 rule's +4.7%/1d that gave back by day 5.
+  // Lower thresholds trade conviction for volume (58→~10/day +8.9%/1d).
+  alert_score: 65,
+  // Suppress alerts when first detection is already too extended to trade.
+  // Outcomes set the real cliff at +100%: the 25–100% band is the strongest
+  // cohort (the recalibrated score rewards it), but >100% is a blow-off that
+  // fades (−6%/1d). The old cap of 40 was set from a tiny 05-21/05-22 sample
+  // and suppressed the 40–100% winners (e.g. AKTX entered ~+50% → +255%/1d).
+  // We still keep the row in the SSE payload — only the Telegram push is
+  // gated, so a name that pulls back under the cap and re-fires gets a fresh
+  // second-leg alert.
+  alert_entry_chg_max: 100,
   new_window_ms: 120_000,  // a ticker stays flagged "new" for 2 min after first entering the set
   // A transient empty Ignition fetch (the Finviz screener export occasionally
   // fails or returns an empty 200) shouldn't blank the sidebar or reset every
@@ -298,6 +303,10 @@ class PollerService {
   private alertedSwing = new Set<string>();
   // Tickers already Telegram-alerted from the Continuation dual-signal today.
   private alertedDualSignal = new Set<string>();
+  // Tickers that have traded in an Ignition pre-market cycle today. Feeds the
+  // runner-score's pre-market-exhaustion penalty (a name that already ran in PM
+  // gives back into the close). ET-day concept — cleared at midnight.
+  private seenInPremarketToday = new Set<string>();
   // Continuation list cache. The SQL aggregation over 5 days of ignition_results
   // costs ~1.5 s on the prod-sized dataset — too much for every 20 s cycle.
   // Refresh every CONTINUATION_REFRESH_CYCLES cycles (~10 min) and re-broadcast
@@ -479,6 +488,7 @@ class PollerService {
       this.alertedIgnition.clear();
       this.alertedSwing.clear();
       this.alertedDualSignal.clear();
+      this.seenInPremarketToday.clear();
       this.lastForcedSwingPostCloseDate = '';
       this.lastOutcomesDate = '';
       // "First seen today" is an ET-day concept — reset with the day.
@@ -963,6 +973,9 @@ class PollerService {
     } else {
       for (const r of ignitionRows) {
         if (!this.ignitionFirstSeen.has(r.ticker)) this.ignitionFirstSeen.set(r.ticker, nowMs);
+        // Mark anything igniting in pre-market so its score carries the
+        // exhaustion penalty all day (outcomes: PM-touched names give back).
+        if (session === 'premarket') this.seenInPremarketToday.add(r.ticker);
       }
       const ignitionPresent = new Set(ignitionRows.map((r) => r.ticker));
       for (const t of this.ignitionFirstSeen.keys()) {
@@ -976,10 +989,10 @@ class PollerService {
             float_m: e.float_m,
             rel_vol_5min: e.rel_vol_5min,
             rel_volume: e.rel_volume,
-            catalyst_score: e.catalyst?.score ?? null,
+            catalyst_type: e.catalyst?.type ?? null,
             catalyst_direction: e.catalyst?.direction ?? null,
             change_pct: e.change_pct,
-            is_halt: e.news_source === 'halt',
+            seen_in_premarket: this.seenInPremarketToday.has(r.ticker),
             shelf_level: e.shelf?.level ?? null,
           });
           const firstSeen = this.ignitionFirstSeen.get(r.ticker) ?? nowMs;
@@ -1456,16 +1469,20 @@ class PollerService {
   private pushIgnitionAlerts(rows: IgnitionRow[]): void {
     if (!telegramEnabled() || this.alertsMuted) return;
     for (const r of rows) {
-      const c = r.catalyst;
-      const bullishCatalyst =
-        c != null && c.direction === 'bullish' && (c.urgency === 'strong' || c.urgency === 'major');
+      // A premium catalyst — the type-aware catalyst component scoring ≥8, i.e.
+      // FDA/clinical or a news-pending / news-released halt — alerts even below
+      // the score threshold: it catches a catalyst-led move before the volume
+      // burst lifts the score. The old "any bullish strong/major" bypass fired
+      // for exactly the types the outcome data flagged as faders (M&A,
+      // partnership), so the bypass is now keyed to what the data rewards.
+      const b = r.score_breakdown;
+      const premiumCatalyst = b.catalyst >= 8;
       // Test the threshold against the score with the shelf penalty removed:
       // dilution risk ranks the sidebar and rides as the ⚠️ in the message,
       // but it must not *hide* an ignition from the alert. Detection and risk
       // are separate concerns.
-      const b = r.score_breakdown;
-      const detectionScore = b.float + b.volume + b.catalyst + b.earliness + b.halt;
-      if (detectionScore < IGNITION.alert_score && !bullishCatalyst) continue;
+      const detectionScore = b.float + b.volume + b.catalyst + b.maturity + b.premarket;
+      if (detectionScore < IGNITION.alert_score && !premiumCatalyst) continue;
       if (this.alertedIgnition.has(r.ticker)) continue;
       // Entry change% cap — see IGNITION.alert_entry_chg_max comment. We skip
       // *without* adding to alertedIgnition, so a pullback under the cap on a
@@ -1582,7 +1599,7 @@ function formatIgnitionAlert(r: IgnitionRow): string {
   const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}`;
   const lines = [
     `⚡ <b>${escapeHtml(r.ticker)}</b>  ${price}  ${chg}`.trimEnd(),
-    `<b>Ignition ${r.runner_score}</b> · float ${b.float} / vol ${b.volume} / cat ${b.catalyst} / early ${b.earliness} / halt ${b.halt} / shelf ${b.shelf}`,
+    `<b>Ignition ${r.runner_score}</b> · float ${b.float} / vol ${b.volume} / cat ${b.catalyst} / mat ${b.maturity} / pm ${b.premarket} / shelf ${b.shelf}`,
     meta.join(' · '),
     r.news_title ? `“${escapeHtml(r.news_title)}”` : '',
     shelfAlertLine(r.shelf),

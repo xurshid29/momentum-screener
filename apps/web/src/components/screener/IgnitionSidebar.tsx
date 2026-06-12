@@ -280,7 +280,7 @@ function IgnitionItem({
               keeps the click from also selecting the row. */}
           <Tooltip
             trigger="click"
-            title={`float ${b.float} · volume ${b.volume} · catalyst ${b.catalyst} · earliness ${b.earliness} · halt ${b.halt} · shelf ${b.shelf}`}
+            title={`float ${b.float} · volume ${b.volume} · catalyst ${b.catalyst} · maturity ${b.maturity} · premarket ${b.premarket} · shelf ${b.shelf}`}
           >
             <span
               onClick={(e) => e.stopPropagation()}
