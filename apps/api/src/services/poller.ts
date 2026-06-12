@@ -1466,6 +1466,10 @@ class PollerService {
               status: r.status,
               prev_change_pct: r.prev_change_pct,
               accel_delta: r.accel_delta,
+              heat: r.heat,
+              vwap: r.vwap,
+              above_vwap: r.above_vwap,
+              vwap_reclaim: r.vwap_reclaim,
             })),
           )
           .execute();

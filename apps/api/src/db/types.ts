@@ -70,6 +70,13 @@ export interface ScreenerResultsTable {
   status: RowStatus;
   prev_change_pct: number | null;
   accel_delta: number | null;
+  // Heat composite + the VWAP side at this cycle — persisted 2026-06-12 so
+  // the heat weights can be graded against screener_outcomes (the in-memory
+  // VWAP state is otherwise unrecoverable offline). Null on pre-migration rows.
+  heat: number | null;
+  vwap: number | null;
+  above_vwap: boolean | null;
+  vwap_reclaim: boolean | null;
 }
 
 // One row per Ignition-screener candidate per cycle. `score_breakdown` is the
