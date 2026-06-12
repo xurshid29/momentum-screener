@@ -138,7 +138,12 @@ const SWING = {
   // fetch failed), retry at most this often — NOT every cycle, so a Finviz
   // 429 in the after-hours burst isn't sustained by us hammering every 20s.
   empty_retry_ms: 2 * 60 * 1000,       // 2 min
-  alert_score: 65,
+  // Alert threshold on the recalibrated v2 swing score (2026-06-13, "early
+  // volatile breakout"). Validated by reconstruction on 508 full-horizon
+  // outcomes: v2 ≥60 → peak_5d +12.1 (17% reach +20, 7% reach +40, ~3.5
+  // det/day) vs the old ≥65 set's +2.8 / 0% / 0%. Day-1 fresh crosses at
+  // this line peaked +14.4 with the shallowest drawdowns.
+  alert_score: 60,
   // Force a refresh once per ET day at/after 16:30 ET — that's when today's
   // close has landed in Finviz quote_export, so the daily-bars service can
   // populate today's complete bar and we can score `close_in_top_q`.
@@ -1771,7 +1776,11 @@ class PollerService {
         c != null &&
         c.direction === 'bullish' &&
         (c.urgency === 'strong' || c.urgency === 'major');
-      if (!r.setup_flags.broke_out && !freshBullishCatalyst) continue;
+      // broke_out / broke_out_5d = day-1 / day-2 of a fresh cross of the
+      // prior 15-bar high (v2 semantics) — the *starting* breakout. A stale
+      // "still above the range" no longer alerts; that was the old flag's
+      // alerted-into-the-parabola failure mode.
+      if (!r.setup_flags.broke_out && !r.setup_flags.broke_out_5d && !freshBullishCatalyst) continue;
       this.alertedSwing.add(r.ticker);
       void sendTelegram(formatSwingAlert(r));
     }
@@ -1925,13 +1934,15 @@ function formatSwingAlert(r: SwingRow): string {
 
   // Trigger label — what got this past the gate.
   const trigger = flags.broke_out
-    ? '📈 10-day breakout'
-    : '🔥 fresh catalyst';
+    ? '📈 fresh breakout (day 1)'
+    : flags.broke_out_5d
+      ? '📈 breakout day 2'
+      : '🔥 fresh catalyst';
 
   const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}`;
   const lines = [
     `📊 <b>${escapeHtml(r.ticker)}</b>  ${price}  ${chg}`.trimEnd(),
-    `<b>Swing ${r.swing_score}</b> · ${trigger} · trend ${b.trend} / setup ${b.setup} / vol ${b.volume} / cat ${b.catalyst} / shelf ${b.shelf}`,
+    `<b>Swing ${r.swing_score}</b> · ${trigger} · volat ${b.volatility} / room ${b.room} / trig ${b.trigger} / vol ${b.volume} / ext ${b.extension} / shelf ${b.shelf}`,
     eyes.join(' · '),
     r.catalyst && r.news_title ? `“${escapeHtml(r.news_title)}”` : '',
     shelfAlertLine(r.shelf),

@@ -144,19 +144,24 @@ export interface IgnitionRow extends EnrichedRow {
   is_new: boolean;
 }
 
+// v2 ("early volatile breakout", 2026-06-13): volatility = ATR% of price,
+// room = distance below the 52w high, trigger = fresh range-high cross +
+// base + close strength, extension = stretched-above-20-SMA penalty (≤ 0).
 export interface SwingScoreBreakdown {
-  trend: number;
-  strength: number;
-  setup: number;        // composite: base + breakout + close strength
+  volatility: number;
+  room: number;
+  trigger: number;
   volume: number;
+  trend: number;
   catalyst: number;
+  extension: number;    // ≤ 0 — penalty
   shelf: number;        // ≤ 0 — penalty
 }
 
 export interface SwingSetupFlags {
-  in_base: boolean;
-  broke_out: boolean;       // the 10-day breakout — the alert trigger
-  broke_out_5d: boolean;    // smaller 5-day breakout
+  in_base: boolean;         // prior-15-close range ≤ 15%
+  broke_out: boolean;       // DAY-1 fresh cross of the prior 15-bar high — the alert trigger
+  broke_out_5d: boolean;    // day-2 of that cross
   close_in_top_q: boolean;
 }
 

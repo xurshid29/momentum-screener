@@ -59,31 +59,55 @@ A new `apps/api/src/services/swing-score.ts` — pure function
 `scoreSwing(row, dailyBars) → { score, breakdown }`, 0–100. Unlike
 runner-score, this score *requires daily-bar history* — see §6.
 
+**Recalibrated 2026-06-13 ("early volatile breakout") against 508 detections
+with a full 5-day outcome horizon.** The original (v1) weights were inverted
+against the screener's goal: the ≥65 alert set had the *lowest* forward
+upside (peak_5d +2.8 vs +8.4 for sub-50 scores); full SMA alignment (Trend
+25) peaked +5.6 vs +9.5 for the below-SMA50 reversal class it disqualified;
+the at-52w-high reward selected the worst upside band; the textbook
+5-day-base→breakout combo did worst of all (+4.2); and ATR — the single
+strongest upside predictor (≥8% ATR: 15% of detections peak ≥+20%, 5% ≥+40%;
+<3%: zero ever reached +20) — wasn't scored. v2, reconstructed on the same
+history: **≥60 → peak_5d +12.1, 17% ≥+20, 7% ≥+40 (~3.5 det/day)**; day-1
+fresh crosses peaked +14.4 with the shallowest drawdowns. Mean chg_5d is
+negative in every bucket — these names bleed on a passive 5-day hold; the
+score targets *peak capture* (enter the fresh break, exit into strength).
+
 | Component | Max | Logic |
 |---|---|---|
-| **Trend** | 25 | full alignment (price > 20-SMA > 50-SMA > 200-SMA) → 25; 3-of-3 partial → 18; price > 20-SMA only → 10; below 50-SMA → 0 |
-| **Strength** | 15 | distance from 52w high: within 5% → 15; 5–15% → 10; 15–30% → 5; > 30% → 0 |
-| **Setup pattern** | 25 | composite of base detection + breakout + close strength (see §3.1) |
+| **Volatility** | 25 | ATR-14 as % of price: ≥ 10% → 25; ≥ 8% → 22; ≥ 6% → 15; ≥ 4% → 7; below → 0 (a sub-4%-ATR large-cap structurally cannot print the 40–50% multi-day move this screen hunts) |
+| **Room** | 15 | distance *below* the 52w high: ≥ 30% below → 15; 15–30% → 10; 5–15% → 5; at the high → 3 (inverts v1's "strength" — depth is room to run, and the depressed bases are the downtrend-reversal setups) |
+| **Trigger** | 30 | fresh range-high cross + base quality + close strength (see §3.1) |
 | **Volume confirmation** | 15 | today's volume vs 20-day avg: ≥ 2.5x → 15; ≥ 1.5x → 10; ≥ 1.0x → 5 |
-| **Catalyst durability** | 20 | bullish strong/major catalyst with `catalyst_type ∈ {fda_approval, m&a, earnings_beat, contract_win, regulatory_approval}` → 20; bullish strong/major (other type) → 12; bullish watch → 5; bearish → 0 |
+| **Trend** | 10 | light structure nudge, no longer a gate: price > 50-SMA → +5; 50-SMA > 200-SMA → +5 (a reversal name can reach the alert line without it) |
+| **Catalyst durability** | 10 | bullish strong/major durable type → 10; bullish strong/major other → 6; bullish watch → 3; bearish → 0 (halved from v1 — the setup carries the score) |
+| **Extension penalty** | −15…0 | price vs 20-SMA: ≥ 30% above → −15; ≥ 15% → −8 (chg_5d bleeds monotonically with extension; 30% above the 20-SMA is mid-parabola, not starting) |
 | **Shelf penalty** | −25…0 | `active`→−25, `effective`→−15, `shelf`→−7. Heavier than intraday because a multi-day hold gives the company time to file a takedown. |
 
 Final score clamped 0–100. Sort desc, take top ~25 for the swing tab.
+Alert line: **≥ 60** AND (day-1/day-2 fresh breakout OR fresh bullish
+strong/major catalyst).
 
-### 3.1 Setup-pattern subscore (out of 25)
+### 3.1 Trigger subscore (out of 30)
 
-Three signals on the *last 10 daily bars*, scored independently and summed:
+Three signals on the daily bars, scored independently and summed:
 
-- **Base detection** (max 10) — last 5 closes within a 10% range → 10; within
-  15% → 6; within 20% → 3; else 0. A tight base just before a breakout is the
-  ideal setup.
-- **Breakout** (max 10) — today's close above the high of the prior 5 days
-  (small breakout) → 5; above the high of prior 10 days (larger breakout) → 10.
-- **Close strength** (max 5) — today's close in top 25% of day's range → 5;
-  in top 50% → 3; below midpoint → 0.
+- **Fresh breakout** (max 20) — today is the FIRST close above the prior
+  15-bar high → 20 (`broke_out`, the alert trigger); second day of that
+  cross → 12 (`broke_out_5d`); still above but crossed ≥3 bars ago → 4;
+  not above → 0. Plain "above the prior high" stays true on every bar of a
+  ramp — freshness is what makes it a *starting* breakout, and the same
+  mechanism catches a flat-consolidation break and the first thrust out of
+  a downtrend base.
+- **Base quality** (max 6) — prior **15** closes (excluding today) within a
+  15% range → 6 (`in_base`); within 25% → 3; else 0. (v1's 5-day ≤10% base
+  mostly proxied low volatility — outcome data showed those names had the
+  lowest forward peaks.)
+- **Close strength** (max 4) — today's close in top 25% of day's range → 4;
+  in top 50% → 2; below midpoint → 0.
 
-The composite captures "tight base → expansion bar → close on the highs," which
-is the canonical swing entry.
+The composite captures "multi-week range → first expansion bar through the
+range high → close on the highs" — the *start* of the move, not its middle.
 
 ## 4. Backend — cadence and integration
 
@@ -204,7 +228,8 @@ the daily-bar score breakdown, but not v1.)
 A `pushSwingAlerts()` in the poller, fired on the periodic Swing eval. Push
 once per ticker per ET day when:
 
-- `swing_score ≥ 65` **and** at least one of `broke_out` or
+- `swing_score ≥ 60` (v2, 2026-06-13) **and** at least one of `broke_out` /
+  `broke_out_5d` (day-1 / day-2 fresh cross) or
   `bullish strong/major catalyst this cycle` is true.
 
 Deduped via `alertedSwing: Set<ticker>`, cleared at midnight. Message:
@@ -260,8 +285,8 @@ v1 wire-up doesn't drift:
 
 1. **Swing cadence** — every 60 cycles (≈20 min) inside the existing 20s
    poll loop, plus a forced 16:30 ET post-close refresh.
-2. **Alert threshold** — `swing_score ≥ 65`, additionally requires
-   `broke_out` or a bullish strong/major catalyst this cycle.
+2. **Alert threshold** — v1 locked `swing_score ≥ 65` + `broke_out`;
+   superseded 2026-06-13 by v2: `≥ 60` + day-1/day-2 fresh cross (see §3/§7).
 3. **Universe price range** — `$2–$50`.
 4. **Float range** — `5M–100M` (post-filter; min mcap `$50M`).
 5. **Score weights** — Trend 25 + Strength 15 + Setup 25 + Volume 15 +
@@ -271,9 +296,11 @@ v1 wire-up doesn't drift:
 6. **Daily-bar source** — Finviz `quote_export?t=TICKER&p=d` (we already use
    Finviz Elite; Yahoo as fallback if/when needed for delisted/long-halted
    tickers).
-7. **`broke_out` semantics** — score both 5-day and 10-day prior-high breaks
-   (5-day worth 5 pts, 10-day worth 10 pts, additive inside §3.1). Alert
-   trigger requires the 10-day break (the bigger signal).
+7. **`broke_out` semantics** — v1 scored 5-day/10-day prior-high breaks;
+   superseded 2026-06-13: `broke_out` = day-1 FRESH cross of the prior
+   15-bar high, `broke_out_5d` = day-2 of that cross (column names kept,
+   meaning changed — see §3.1). A stale still-above-the-range no longer
+   flags or alerts.
 
 If later data motivates a change, retune §3's weights against the recorded
 `swing_results` outcomes rather than ad-hoc.

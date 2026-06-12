@@ -41,6 +41,20 @@ under `…/memory/` also carry the durable facts.
 
 ## What shipped this session (newest first, all on prod)
 
+000. **Swing score v2 — "early volatile breakout" (2026-06-13).** Operator
+   review confirmed by outcomes: old score was INVERTED (alert set ≥65 had the
+   LOWEST upside, peak_5d +2.8 vs +8.4 for sub-50; mature-trend/at-high/
+   tight-base rewards all backwards; ATR unscored). v2: Volatility(25, ATR%) +
+   Room(15, below-52w-high) + Trigger(30, day-1/2 FRESH 15-bar-high cross +
+   15-bar base + close) + Volume(15) + Trend(10 nudge, reversals allowed) +
+   Catalyst(10) + Extension(−15..0) + Shelf. Alert ≥60 + fresh cross.
+   Reconstruction-validated: ≥60 → peak5 +12.1, 17%≥+20, 7%≥+40, ~3.5/day.
+   ⚠️ breakdown keys + flag semantics changed 2026-06-13 (broke_out = day-1
+   fresh cross); old/new swing scores not comparable across the date. chg_5d
+   negative everywhere — score targets peak capture, not passive holds.
+   **Watch:** let new-score outcomes mature ≥5d before judging; expect ~2-4
+   alerts/day.
+
 00. **Fresh-burst alert 🚀 (2026-06-12, after the RVol study).** Catches the
    "new ticker rallying from the very beginning" case (DSY: +10→+47% before the
    screens even returned it; ignition alert structurally too slow — vol

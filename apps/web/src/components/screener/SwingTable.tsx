@@ -98,7 +98,7 @@ export function SwingTable({ rows: allRows, onOpenCatalyst }: Props) {
         align: 'right',
         render: (s: number, row) => {
           const b = row.score_breakdown;
-          const tip = `trend ${b.trend} · strength ${b.strength} · setup ${b.setup} · volume ${b.volume} · catalyst ${b.catalyst} · shelf ${b.shelf}`;
+          const tip = `volatility ${b.volatility} · room ${b.room} · trigger ${b.trigger} · volume ${b.volume} · trend ${b.trend} · catalyst ${b.catalyst} · extension ${b.extension} · shelf ${b.shelf}`;
           return (
             <Tooltip title={tip}>
               <span style={{ color: scoreColor(s), fontWeight: 700, fontSize: 13 }}>
@@ -267,18 +267,20 @@ export function SwingTable({ rows: allRows, onOpenCatalyst }: Props) {
 
 // Compact icon strip for the three setup signals — base · breakout · close
 // strength. Each badge only renders when its flag is true; an absent badge
-// is a "no" signal. The 10-day breakout shows as ↑10 (the alert trigger),
-// the smaller 5-day shows as ↑5 in a warning color.
+// is a "no" signal. v2 semantics (2026-06-13): the breakout badge means a
+// FRESH cross of the prior 15-bar high — ↑D1 = first day (the alert
+// trigger), ↑D2 = second day. A name merely still-above-its-range shows
+// neither (the old flag fired all the way up a parabola).
 function SetupFlagStrip({ flags }: { flags: SwingSetupFlags }) {
   type Item = { color: string; label: string; title: string };
   const items: Item[] = [];
   if (flags.in_base) {
-    items.push({ color: '#52c41a', label: 'B', title: 'In tight base (5-day close range ≤ 10%)' });
+    items.push({ color: '#52c41a', label: 'B', title: 'In base (prior 15-day close range ≤ 15%)' });
   }
   if (flags.broke_out) {
-    items.push({ color: '#52c41a', label: '↑10', title: 'Broke out — close above 10-day prior high' });
+    items.push({ color: '#52c41a', label: '↑D1', title: 'Fresh breakout — FIRST close above the prior 15-day high (alert trigger)' });
   } else if (flags.broke_out_5d) {
-    items.push({ color: '#faad14', label: '↑5', title: 'Broke 5-day prior high (smaller signal)' });
+    items.push({ color: '#faad14', label: '↑D2', title: 'Breakout day 2 — second close above the prior 15-day high' });
   }
   if (flags.close_in_top_q) {
     items.push({ color: '#52c41a', label: 'C', title: "Close in top 25% of today's range" });
