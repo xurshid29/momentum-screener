@@ -206,11 +206,14 @@ export interface EnrichedRow extends ScreenerRow {
   // Null until a ticker has ~60s of samples or after an on-screen gap.
   chg_delta_1min: number | null;
   // Anchored VWAP since the ticker first appeared *today*. Computed in-memory
-  // from cycle-to-cycle volume deltas × the per-cycle price. Persists across
+  // from cycle-to-cycle volume deltas × the per-cycle price; restart-safe
+  // (rebuilt from today's persisted cycles on boot). Persists across
   // PM → regular → AH within a single ET day so a pre-market spike's volume
-  // keeps weighting the indicator into the regular session — matches a chart
-  // "Session/Day" VWAP. Null on the first cycle (no delta yet) and whenever
-  // price or volume is missing.
+  // keeps weighting the indicator into the regular session. ≈ a chart's
+  // "Session" VWAP only when the name has been screening since the session
+  // start — a name first sighted mid-move gets an anchored-at-detection VWAP
+  // (pre-sight volume is unknowable from the screen exports). Null on the
+  // first cycle (no delta yet) and whenever price or volume is missing.
   vwap: number | null;
   above_vwap: boolean | null;
   is_fresh_news: boolean;
@@ -284,14 +287,16 @@ class PollerService {
   private volHistory = new Map<string, Array<{ ts: number; volume: number }>>();
   // Short rolling change% history per ticker — feeds chg_delta_1min (the
   // local price direction paired with the 1-min RVol). Same lifecycle as
-  // volHistory: appended per enriched cycle, trimmed, cleared at midnight ET.
+  // volHistory: appended per enriched cycle, trimmed, cleared at session
+  // boundaries (the change% basis swaps there).
   private chgHistory = new Map<string, Array<{ ts: number; chg: number }>>();
   // Per-ticker anchored VWAP tallies. cumPxVol and cumVol accumulate
   // (Δvolume × price) across cycles since first detection *today*; lastVolume
   // is the previous cycle's cumulative day volume, used to derive the delta.
   // Persists across PM → regular → AH so a pre-market spike's volume keeps
-  // weighting the VWAP into regular hours (matches a chart's day-session VWAP).
-  // Reset at midnight ET only.
+  // weighting the VWAP into regular hours. Reset at midnight ET only, and
+  // rebuilt from today's persisted cycles on boot (seedVwapState) so deploys
+  // don't re-anchor every VWAP mid-day.
   private vwapState = new Map<string, { cumPxVol: number; cumVol: number; lastVolume: number }>();
   // Previous cycle's above-VWAP state per ticker, for detecting a reclaim
   // (below → above) the cycle it happens. Same lifecycle as vwapState.
@@ -494,6 +499,67 @@ class PollerService {
     }
   }
 
+  // Rebuild the per-ticker anchored-VWAP tallies from today's persisted cycles
+  // so a restart/deploy doesn't silently re-anchor every VWAP at the restart
+  // minute. Measured on UBXG after the 2026-06-12 deploys: the live VWAP read
+  // 7.36 (anchored at the last restart) vs 8.06 from the true day anchor —
+  // price sat on the WRONG side of the ▲/▼ flag, and Heat's above-VWAP/reclaim
+  // points ran on the shallow anchor. screener_results stores per-cycle
+  // volume + price, so Σ(Δvol × price) over today's rows reproduces the live
+  // tally exactly for Momentum-screened tickers. Ignition-only names aren't
+  // recoverable (ignition_results carries no volume column) — they cold-start
+  // like before.
+  private async seedVwapState() {
+    try {
+      const rows = await sql<{
+        ticker: string;
+        cum_px_vol: number;
+        cum_vol: number;
+        last_volume: number;
+        last_price: number | null;
+      }>`
+        with s as (
+          select r.ticker, c.polled_at, r.price, r.volume,
+                 lag(r.volume) over (partition by r.ticker order by c.polled_at) as pv
+          from screener_results r
+          join screener_cycles c on c.id = r.cycle_id
+          where (c.polled_at at time zone 'America/New_York')::date
+                = (now() at time zone 'America/New_York')::date
+            and r.volume is not null and r.price > 0
+        )
+        select ticker,
+          coalesce(sum((volume - pv) * price) filter (where volume > pv), 0)::float8 as cum_px_vol,
+          coalesce(sum(volume - pv) filter (where volume > pv), 0)::float8 as cum_vol,
+          (array_agg(volume order by polled_at desc))[1]::float8 as last_volume,
+          (array_agg(price order by polled_at desc))[1]::float8 as last_price
+        from s
+        group by ticker
+      `.execute(getDb());
+      let withTally = 0;
+      for (const r of rows.rows) {
+        const cumPxVol = Number(r.cum_px_vol);
+        const cumVol = Number(r.cum_vol);
+        // Seed lastVolume even when no delta accumulated yet (single stored
+        // row) — the first live cycle then diffs against the stored snapshot
+        // instead of burning a cycle re-seeding.
+        this.vwapState.set(r.ticker, { cumPxVol, cumVol, lastVolume: Number(r.last_volume) });
+        if (cumVol > 0) {
+          withTally += 1;
+          // Seed the above/below side too, so a genuine below→above cross on
+          // the first live cycle still registers as a ↑VWAP reclaim.
+          if (r.last_price != null) {
+            this.prevAboveVwap.set(r.ticker, Number(r.last_price) >= cumPxVol / cumVol);
+          }
+        }
+      }
+      console.log(
+        `[poller] seeded VWAP for ${rows.rows.length} tickers (${withTally} with accumulated volume) from today's history`,
+      );
+    } catch (err) {
+      console.error('[poller] could not seed VWAP (continuing):', err);
+    }
+  }
+
   async start() {
     if (this.running) return;
     this.running = true;
@@ -506,6 +572,7 @@ class PollerService {
     // normally because lastEtDate will then differ from the new day.
     this.lastEtDate = etDateString(new Date());
     await this.seedFirstSeen();
+    await this.seedVwapState();
     console.log(`[poller] starting (every ${this.config.interval_sec}s)`);
     void this.tick();
     this.timer = setInterval(() => void this.tick(), this.config.interval_sec * 1000);
@@ -927,9 +994,10 @@ class PollerService {
       }
 
       // Anchored VWAP — see EnrichedRow.vwap doc. First cycle seeds lastVolume
-      // and returns null (no delta yet). Subsequent cycles accumulate
-      // Δvolume × current price; reset is handled by the session-boundary
-      // clear above, so each session carries its own anchor.
+      // and returns null (no delta yet); subsequent cycles accumulate
+      // Δvolume × current price. Cleared at midnight ET only (sessions share
+      // the day's anchor) and rebuilt from today's persisted cycles on boot
+      // (seedVwapState), so a deploy doesn't re-anchor every VWAP mid-day.
       let vwap: number | null = null;
       let aboveVwap: boolean | null = null;
       let vwapReclaim = false;

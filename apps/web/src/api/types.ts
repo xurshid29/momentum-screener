@@ -107,10 +107,13 @@ export interface EnrichedRow {
   heat: number;
   // True the cycle price reclaims VWAP (below → at/above) — drives a ↑VWAP badge.
   vwap_reclaim: boolean;
-  // Anchored VWAP since first detection today. Persists across PM → regular →
-  // AH so a pre-market spike's volume keeps weighting the indicator (matches a
-  // chart's day-session VWAP). Null on cycle 1 (no delta yet) and whenever
-  // price/volume is missing. Resets at midnight ET.
+  // Anchored VWAP since first detection today (restart-safe — rebuilt from
+  // persisted cycles on boot). Persists across PM → regular → AH so a
+  // pre-market spike's volume keeps weighting the indicator. ≈ a chart's
+  // session VWAP only when the name has been screening since the session
+  // start; a name first sighted mid-move gets an anchored-at-detection VWAP.
+  // Null on cycle 1 (no delta yet) and whenever price/volume is missing.
+  // Resets at midnight ET.
   vwap: number | null;
   above_vwap: boolean | null;
   is_fresh_news: boolean;
