@@ -41,6 +41,15 @@ under `…/memory/` also carry the durable facts.
 
 ## What shipped this session (newest first, all on prod)
 
+0000. **Ignition float cap 15→25M (2026-06-15).** CAST (16.5M → +364%) was
+   excluded from ignition entirely. 10-day study: 15–25M band runs as hard as
+   2–5M, harder than 10–15M (34% vs 14% reach +40%); 25–50M falls off → 25M
+   ceiling. Paired change: `IGNITION.float_max_m 15→25` + runner-score ladder
+   `<25M→6` (cap + score must move together or raised names never reach the 65
+   line). ~4.7 new ignition-eligible names/day. fresh-burst stays ≤5M
+   (nano-float validation doesn't transfer). **Watch:** grade the 15–25M band
+   vs `screener_outcomes` once mature; the 82-row study was a momentum proxy.
+
 000. **Swing score v2 — "early volatile breakout" (2026-06-13).** Operator
    review confirmed by outcomes: old score was INVERTED (alert set ≥65 had the
    LOWEST upside, peak_5d +2.8 vs +8.4 for sub-50; mature-trend/at-high/

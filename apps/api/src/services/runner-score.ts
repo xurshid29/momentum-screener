@@ -40,13 +40,20 @@ export interface RunnerScoreInput {
   shelf_level: ShelfLevel | null;    // effective shelf / dilution risk (informational; only 'active' drags)
 }
 
-// Smaller float = more violent move per dollar of buying.
+// Smaller float = more violent move per dollar of buying. The 15→25M band was
+// added 2026-06-15 when the ignition float cap rose 15→25M: a 10-day study
+// across the momentum universe found 15–25M names run *harder* than the 10–15M
+// band already included (34% reach +40%, median +28% vs 14% / +16%) — the 15M
+// cliff was arbitrary, and zeroing 15–25M kept genuine runners (e.g. CAST 16.5M
+// → +364%) out of the alert set entirely. Kept monotonic + conservative (6 <
+// the 10–15M band's 8) since the thesis still holds and the sample is small.
 function floatScore(floatM: number | null): number {
   if (floatM == null) return 0;
   if (floatM < 2) return 30;
   if (floatM < 5) return 25;
   if (floatM < 10) return 16;
   if (floatM < 15) return 8;
+  if (floatM < 25) return 6;
   return 0;
 }
 

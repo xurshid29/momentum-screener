@@ -26,7 +26,7 @@ post-filtered in code:
 |---|---|---|
 | Finviz filter | `ind_stocksonly,sh_price_u10,sh_relvol_o2,sh_curvol_o500` | under $10 (includes sub-$1), relvol > 2, real volume > 500K — **no change% filter** (volume leads, not price) |
 | Pre-market filter | `ind_stocksonly,sh_price_u10,sh_relvol_o2,sh_curvol_o100` | session-aware override (premarket only) — same gates with the volume floor dropped to 100K so nano-floats become visible before they've already ripped through the regular-session threshold (the WHLR post-mortem) |
-| `floatMaxM` | `15` | post-filter ceiling (vs Momentum's 35) |
+| `floatMaxM` | `25` | post-filter ceiling (raised 15→25M 2026-06-15; 15–25M names run as hard as 2–5M and harder than 10–15M — the 15M cliff was arbitrary; 25–50M falls off so 25M is the ceiling) |
 | `topN` | `80` | fetch wide, then runner-score-rank down to the displayed top ~15 |
 | code post-filter | `price >= 0.10` | drop sub-dime junk (`sh_price_u10` has no lower bound) |
 
@@ -49,7 +49,7 @@ slice that didn't give back — while the score spent its budget on catalyst
 
 | Component | Range | Logic | Why (outcomes) |
 |---|---|---|---|
-| **Float** | 0…30 | `<2M→30`, `<5M→25`, `<10M→16`, `<15M→8`, else 0 | `<2M` is the best 1d cohort |
+| **Float** | 0…30 | `<2M→30`, `<5M→25`, `<10M→16`, `<15M→8`, `<25M→6`, else 0 | `<2M` is the best 1d cohort; 15–25M band added 2026-06-15 with the cap raise (kept < the 10–15M weight to stay monotonic on a small sample) |
 | **Volume** | 0…30 | `max` of two ladders — 5-min burst (`≥1500→30`, `≥500→24`, `≥250→16`, `≥100→7`) **and** day-RVol (`≥25→24`, `≥10→14`, `≥5→7`, `≥3→3`) | `rel_vol_5min` is null/0 ~40% of the time; day-RVol predicts cleanly (25×+ → +4.4%/1d) and is no longer a mere fallback. 5-min tiers halved 2026-06-12 with the `rel_vol_5min` window fix (the old metric drifted to a ~10-min window, ~2× inflated — the scale the original tiers were calibrated on) |
 | **Catalyst** | −15…+15 | type-aware, **not** impact-scaled: dilution/bankruptcy `−12`; M&A/legal `−8`; partnership/contract/13D-G/earnings `−5`; **FDA/clinical `+14`**; news-pending halt `+10`, news halt `+8`, vol/info halt `+4`; other bearish `−8`; else `0` | impact_score did **not** predict (high-impact trended negative); *type* did — FDA holds 5d, dilution/M&A/partnership fade, catalyst *absence* is the best alert cell so it stays neutral |
 | **Maturity** | −25…+12 | `≤−15→−25`, `<0→−12`, `<25→0`, **`25–100→+12`**, `<150→−6`, `<300→−15`, else `−25` | the 25–100% band is the sweet spot (rewarded, was a flat 0); >100% blows off; red is a non-runner |

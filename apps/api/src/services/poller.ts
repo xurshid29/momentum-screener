@@ -60,7 +60,15 @@ const IGNITION = {
   // variant drops the volume floor to 100K while keeping the relvol > 2
   // gate so we don't flood with thin-print noise.
   premarket_filter: 'ind_stocksonly,sh_price_u10,sh_relvol_o2,sh_curvol_o100',
-  float_max_m: 15,
+  // Raised 15→25M (2026-06-15). A 10-day study found 15–25M names run as hard
+  // as the 2–5M cohort and harder than 10–15M (34% reach +40% vs 14%); the
+  // band adds ~4.7 ignition-eligible names/day (price<$10, relVol>2), of which
+  // a large fraction run. Float is post-filtered in code — Finviz drops
+  // null-float rows if it's in the query string. Beyond 25M the edge falls off
+  // (25–50M: 12% reach +40%), so 25M is the ceiling. Paired with the
+  // runner-score float ladder extension (15–25M → 6 pts) — cap + score move
+  // together or higher-float names enter but never score onto the alert line.
+  float_max_m: 25,
   top_n: 80,         // fetched from Finviz, then runner-score-ranked
   min_price: 0.10,   // post-filter — sh_price_u10 has no lower bound
   broadcast_n: 25,   // top-N (by runner-score) kept in the SSE payload + persisted
