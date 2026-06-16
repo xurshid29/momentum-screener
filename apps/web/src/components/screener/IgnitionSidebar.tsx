@@ -9,6 +9,7 @@ import { CatalystBadge } from '../common/CatalystBadge';
 import { ShelfBadge } from '../common/ShelfBadge';
 import { WarningBadge, useIsWarned } from '../common/WarningBadge';
 import { TickerLink } from '../common/TickerLink';
+import { TickerLinks } from '../common/TickerLinks';
 import { WatchlistStar } from '../common/WatchlistStar';
 import { fmtPrice, fmtPct, num } from '../../utils/format';
 import { CatalystNewsModal } from './CatalystNewsModal';
@@ -275,6 +276,9 @@ function IgnitionItem({
               />
             )}
             <WarningBadge ticker={row.ticker} size={12} />
+            <span style={{ marginLeft: 6, display: 'inline-flex', verticalAlign: 'middle' }}>
+              <TickerLinks ticker={row.ticker} finvizUrl={row.finviz_url} />
+            </span>
           </span>
           {/* Click (not hover) opens the score breakdown; stopPropagation
               keeps the click from also selecting the row. */}
