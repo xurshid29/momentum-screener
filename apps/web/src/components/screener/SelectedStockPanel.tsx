@@ -6,7 +6,6 @@ import type { ColumnsType } from 'antd/es/table';
 import { useSelection } from '../../context/SelectionContext';
 import { newsApi } from '../../api/news';
 import { screenerApi } from '../../api/screener';
-import { ShelfBadge } from '../common/ShelfBadge';
 import { TickerLink } from '../common/TickerLink';
 import { WatchlistStar } from '../common/WatchlistStar';
 import { WarningBadge } from '../common/WarningBadge';
@@ -16,11 +15,8 @@ import type {
   CyclePayload,
   EnrichedRow,
   HistoryRow,
-  IgnitionHistoryRow,
   NewsArticle,
   RowStatus,
-  ShelfLevel,
-  TradingSession,
 } from '../../api/types';
 import { fmtPct, fmtPrice, fmtVolume, fmtFloat, fmtMcap, fmtRelVol, fmtBigPct, num } from '../../utils/format';
 
@@ -37,28 +33,6 @@ const STATUS_COLOR: Record<NonNullable<RowStatus>, string> = {
   UP: 'green',
   NEWS: 'purple',
 };
-
-// Compact session tags for the Ignition history table.
-const SESSION_COLOR: Record<TradingSession, string> = {
-  premarket: 'blue',
-  regular: 'green',
-  afterhours: 'orange',
-  closed: 'default',
-};
-const SESSION_SHORT: Record<TradingSession, string> = {
-  premarket: 'PM',
-  regular: 'REG',
-  afterhours: 'AH',
-  closed: '—',
-};
-
-// Runner-score color tiers — same bands as IgnitionSidebar.scoreColor.
-function scoreColor(s: number): string {
-  if (s >= 75) return '#ff4d4f';
-  if (s >= 55) return '#fa8c16';
-  if (s >= 40) return '#fadb14';
-  return '#8c8c8c';
-}
 
 interface SelectedStockPanelProps {
   payload: CyclePayload | null;
@@ -112,16 +86,6 @@ export function SelectedStockPanel({ payload }: SelectedStockPanelProps) {
   const { data: history } = useQuery({
     queryKey: ['history', selected, payload?.cycle_id],
     queryFn: () => (selected ? screenerApi.history(selected, 100) : Promise.resolve([] as HistoryRow[])),
-    enabled: !!selected,
-  });
-
-  // Ignition history — per-cycle runner-score evolution for the selected
-  // ticker. Read from ignition_results, so it covers sub-$1 volume-led names
-  // that never met the Momentum filter (and thus aren't in `history`).
-  const { data: ignitionHistory } = useQuery({
-    queryKey: ['ignition-history', selected, payload?.cycle_id],
-    queryFn: () =>
-      selected ? screenerApi.ignitionHistory(selected, 200) : Promise.resolve([] as IgnitionHistoryRow[]),
     enabled: !!selected,
   });
 
@@ -197,97 +161,6 @@ export function SelectedStockPanel({ payload }: SelectedStockPanelProps) {
     [history],
   );
 
-  const ignitionColumns: ColumnsType<IgnitionHistoryRow> = useMemo(
-    () => [
-      {
-        title: 'Time',
-        dataIndex: 'polled_at',
-        key: 'polled_at',
-        width: 80,
-        render: (iso: string) => <span>{fmtTime(iso)}</span>,
-      },
-      {
-        title: '',
-        dataIndex: 'session',
-        key: 'session',
-        width: 50,
-        render: (s: TradingSession) => (
-          <Tag color={SESSION_COLOR[s]} style={{ margin: 0, fontSize: 10 }}>{SESSION_SHORT[s]}</Tag>
-        ),
-      },
-      {
-        title: 'Score',
-        dataIndex: 'runner_score',
-        key: 'runner_score',
-        width: 64,
-        align: 'right',
-        render: (s: number, row) => {
-          const b = row.score_breakdown;
-          const tooltip = `float ${b.float} · volume ${b.volume} · catalyst ${b.catalyst} · maturity ${b.maturity} · premarket ${b.premarket} · shelf ${b.shelf}`;
-          return (
-            <Tooltip title={tooltip}>
-              <span style={{ color: scoreColor(s), fontWeight: 700 }}>{Math.round(s)}</span>
-            </Tooltip>
-          );
-        },
-      },
-      {
-        title: 'Chg %',
-        dataIndex: 'change_pct',
-        key: 'change_pct',
-        width: 70,
-        align: 'right',
-        render: (raw) => {
-          const v = num(raw);
-          return <Text style={{ color: (v ?? 0) >= 0 ? '#52c41a' : '#ff4d4f' }}>{fmtPct(raw)}</Text>;
-        },
-      },
-      { title: 'Price', dataIndex: 'price', key: 'price', width: 64, align: 'right', render: fmtPrice },
-      {
-        title: 'RV 5m',
-        dataIndex: 'rel_vol_5min',
-        key: 'rel_vol_5min',
-        width: 70,
-        align: 'right',
-        render: fmtBigPct,
-      },
-      {
-        title: 'RV 1m',
-        dataIndex: 'rel_vol_1min',
-        key: 'rel_vol_1min',
-        width: 70,
-        align: 'right',
-        render: fmtBigPct,
-      },
-      {
-        // catalyst_score is an integer 0–100 (rule classifier or LLM-refined);
-        // news_source is the originating feed. Both nullable.
-        title: 'Cat',
-        key: 'catalyst',
-        width: 56,
-        align: 'right',
-        render: (_v, row) =>
-          row.catalyst_score == null && row.news_source == null
-            ? <Text type="secondary">—</Text>
-            : (
-                <Tooltip title={row.news_source ?? ''}>
-                  <span>{row.catalyst_score ?? '—'}</span>
-                </Tooltip>
-              ),
-      },
-      {
-        title: 'Shelf',
-        dataIndex: 'shelf_level',
-        key: 'shelf_level',
-        width: 50,
-        align: 'center',
-        render: (lvl: ShelfLevel | null) =>
-          lvl ? <ShelfBadge shelf={{ level: lvl, latest_form: '', latest_filed_at: '', days_since: 0, forms: [] }} size={12} /> : null,
-      },
-    ],
-    [],
-  );
-
   if (!selected) {
     return (
       <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -324,23 +197,6 @@ export function SelectedStockPanel({ payload }: SelectedStockPanelProps) {
                   dataSource={history ?? []}
                   pagination={false}
                   sticky
-                />
-              </div>
-            ),
-          },
-          {
-            key: 'ignition',
-            label: `Ignition${ignitionHistory && ignitionHistory.length ? ` (${ignitionHistory.length})` : ''}`,
-            children: (
-              <div style={{ height: '100%', overflow: 'auto' }}>
-                <Table<IgnitionHistoryRow>
-                  rowKey="id"
-                  size="small"
-                  columns={ignitionColumns}
-                  dataSource={ignitionHistory ?? []}
-                  pagination={false}
-                  sticky
-                  locale={{ emptyText: 'No ignition history for this ticker' }}
                 />
               </div>
             ),

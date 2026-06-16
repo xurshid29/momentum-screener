@@ -62,33 +62,6 @@ router.get('/history', authMiddleware, async (req, res) => {
   res.json({ data: rows });
 });
 
-// GET /api/screener/ignition-history?ticker=X&limit=N
-// Per-ticker history from the Ignition screener. Same access pattern as
-// /history above, but reads ignition_results — so it covers volume-led
-// sub-$1 names that never met the Momentum filter. Useful for inspecting
-// how runner_score evolved cycle-by-cycle around a move.
-router.get('/ignition-history', authMiddleware, async (req, res) => {
-  const ticker = typeof req.query.ticker === 'string' ? req.query.ticker.toUpperCase() : null;
-  if (!ticker) return res.status(400).json({ error: 'ticker query param required' });
-  const limit = Math.min(parseInt(String(req.query.limit ?? '200'), 10) || 200, 1000);
-  const db = getDb();
-  const rows = await db
-    .selectFrom('ignition_results as i')
-    .innerJoin('screener_cycles as c', 'c.id', 'i.cycle_id')
-    .select([
-      'i.id', 'i.ticker', 'i.runner_score', 'i.score_breakdown',
-      'i.price', 'i.change_pct', 'i.float_m',
-      'i.rel_volume', 'i.rel_vol_5min', 'i.rel_vol_1min',
-      'i.catalyst_score', 'i.news_source', 'i.shelf_level',
-      'c.polled_at', 'c.session', 'c.id as cycle_id',
-    ])
-    .where('i.ticker', '=', ticker)
-    .orderBy('c.polled_at', 'desc')
-    .limit(limit)
-    .execute();
-  res.json({ data: rows });
-});
-
 // POST /api/screener/swing/backfill
 // Enqueue tickers for daily-bar backfill in the DailyBarsService. Either an
 // explicit list (`{ tickers: ['AAPL', ...] }`) or no body to seed from the

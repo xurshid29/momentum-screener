@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Typography, List, Tag, Tabs } from 'antd';
+import { Typography, List, Tag } from 'antd';
 import { newsApi } from '../../api/news';
 import { useSelection } from '../../context/SelectionContext';
 import { CatalystAnalyzeButton } from './CatalystAnalyzeButton';
@@ -17,16 +17,9 @@ const SOURCE_COLOR: Record<string, string> = {
   halt: 'red',
 };
 
-// When the screener has at most this many rows we presume the user is in
-// pre-market prep mode and auto-flip to the Universe tab. The choice is
-// sticky once the user manually clicks a tab.
-const AUTO_UNIVERSE_THRESHOLD = 3;
-
 interface NewsRoomPanelProps {
   payload: CyclePayload | null;
 }
-
-type TabKey = 'screener' | 'universe';
 
 export function NewsRoomPanel({ payload }: NewsRoomPanelProps) {
   const tickers = useMemo(
@@ -34,42 +27,9 @@ export function NewsRoomPanel({ payload }: NewsRoomPanelProps) {
     [payload?.rows],
   );
 
-  const [activeTab, setActiveTab] = useState<TabKey>('screener');
-  const userPickedRef = useRef(false);
-
-  // Auto-switch to Universe when the screener is empty/sparse, until the user
-  // explicitly picks a tab.
-  useEffect(() => {
-    if (userPickedRef.current) return;
-    setActiveTab(tickers.length <= AUTO_UNIVERSE_THRESHOLD ? 'universe' : 'screener');
-  }, [tickers.length]);
-
-  const onTabChange = (k: string) => {
-    userPickedRef.current = true;
-    setActiveTab(k as TabKey);
-  };
-
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <Tabs
-        activeKey={activeTab}
-        onChange={onTabChange}
-        size="small"
-        className="tabs-fill-height"
-        tabBarStyle={{ padding: '0 8px', margin: 0 }}
-        items={[
-          {
-            key: 'screener',
-            label: 'Screener News',
-            children: <ScreenerNewsTab payload={payload} tickers={tickers} />,
-          },
-          {
-            key: 'universe',
-            label: 'Universe News',
-            children: <UniverseNewsTab payload={payload} />,
-          },
-        ]}
-      />
+      <ScreenerNewsTab payload={payload} tickers={tickers} />
     </div>
   );
 }
@@ -100,36 +60,6 @@ function ScreenerNewsTab({ payload, tickers }: { payload: CyclePayload | null; t
   return (
     <NewsListPane
       headerRight={`${tickers.length} tickers · ${data?.length ?? 0} headlines`}
-      items={data ?? []}
-      emptyText={emptyText}
-    />
-  );
-}
-
-// News for the entire trading universe (structural filter, momentum stripped).
-// Refetches on every screener cycle so fresh Benzinga deltas the poller just
-// persisted show up here too — even when the article ticker isn't in the
-// active screener.
-function UniverseNewsTab({ payload }: { payload: CyclePayload | null }) {
-  const qc = useQueryClient();
-
-  const { data, isLoading } = useQuery({
-    queryKey: ['news', 'universe'],
-    queryFn: () => newsApi.feed(100, undefined, { universe: true, hours: 24 }),
-    refetchInterval: 60_000,
-  });
-
-  useEffect(() => {
-    if (payload?.fresh_news?.length) {
-      qc.invalidateQueries({ queryKey: ['news', 'universe'] });
-    }
-  }, [payload?.cycle_id, payload?.fresh_news?.length, qc]);
-
-  const emptyText = isLoading ? 'Loading universe news…' : 'No universe news in the last 24h';
-
-  return (
-    <NewsListPane
-      headerRight={`${data?.length ?? 0} headlines · last 24h`}
       items={data ?? []}
       emptyText={emptyText}
     />

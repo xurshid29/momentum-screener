@@ -131,6 +131,21 @@ never alert. Deduped **once per ticker per ET day** (`alertedIgnition`, cleared
 at midnight). Message: ticker · runner-score + breakdown · price · %chg · float
 · RVol5m · catalyst · links. Reuses the existing `telegram.ts`.
 
+**New-ignition heads-up (🆕, added 2026-06-16).** A separate `pushNewIgnitionAlerts()`
+fires once per ticker per ET day when a *recently-appeared* ignition (within
+`NEW_IGNITION.window_ms` = 15 min of its first sighting today) has built into
+the **40–64** score band (below the high-conviction ≥65 line), with chg 10–100%
+and a non-bearish catalyst. It skips anything already pinged by the 🚀
+fresh-burst alert (≤5M nano-floats) or the ≥65 alert, so a ticker is never
+triple-alerted — the three alerts partition the space: fresh-burst (nano early),
+new-ignition (mid-float building), ignition (matured high-conviction). The ≥65
+alert fires hours late for fresh names (they score 15–30 — float/volume aren't
+populated on the first cycles), which this fills. ~6–8/day; dial =
+`NEW_IGNITION.alert_score`. **Restart-safety:** all ignition cross-cycle state
+(`ignitionFirstSeen` + the alert-dedup sets) is rebuilt on boot by
+`seedIgnitionState()` from today's `ignition_results`, so a deploy neither
+flashes the whole list as "new" nor re-blasts alerts.
+
 ## 6. Frontend — the Ignition sidebar
 
 New `apps/web/src/components/screener/IgnitionSidebar.tsx`:

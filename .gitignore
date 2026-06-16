@@ -16,3 +16,4 @@ dist/
 
 # Database
 db/schema.sql
+data/

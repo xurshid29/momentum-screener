@@ -5,7 +5,6 @@ import type {
   HistoryByDayRow,
   HistoryByDayScreen,
   HistoryRow,
-  IgnitionHistoryRow,
   OutcomeSummaryResponse,
   OutcomesGroupBy,
   OutcomesHorizon,
@@ -22,13 +21,6 @@ export const screenerApi = {
   async history(ticker: string, limit = 100): Promise<HistoryRow[]> {
     const res = await apiClient.get<HistoryRow[]>(
       `/api/screener/history?ticker=${encodeURIComponent(ticker)}&limit=${limit}`,
-    );
-    return res.data;
-  },
-
-  async ignitionHistory(ticker: string, limit = 200): Promise<IgnitionHistoryRow[]> {
-    const res = await apiClient.get<IgnitionHistoryRow[]>(
-      `/api/screener/ignition-history?ticker=${encodeURIComponent(ticker)}&limit=${limit}`,
     );
     return res.data;
   },

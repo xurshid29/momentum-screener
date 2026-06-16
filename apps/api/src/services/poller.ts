@@ -128,6 +128,20 @@ const FRESH_BURST = {
   chg_max: 80,
 };
 
+// New-ignition heads-up (2026-06-16). The operator wants a ping when a fresh
+// ignition shows up, but the ≥65 alert fires hours late (fresh names score
+// 15–30 — float/volume aren't populated on a ticker's first cycles), and the
+// 🚀 fresh-burst alert only covers nano-floats (≤5M). This fills the middle:
+// a name *recently appeared* in the ignition set that has built into the
+// 40–64 band (below the high-conviction line) while still young. Catches the
+// 5–25M movers (post the cap raise) early. ~6–8/day; dial = alert_score.
+const NEW_IGNITION = {
+  alert_score: 40,             // floor; the ≥65 IGNITION alert owns 65+
+  window_ms: 15 * 60 * 1000,   // "recently appeared" — first 15 min in the set today
+  chg_min: 10,
+  chg_max: 100,
+};
+
 // Swing screener — multi-day setups. Runs inside the same 20s poll loop but
 // on a much slower cadence (every `cadence_cycles` cycles ≈ 20 min) since
 // daily-bar signals don't change intraday. See docs/swing-screener-spec.md.
@@ -373,6 +387,8 @@ class PollerService {
   private alertedDualSignal = new Set<string>();
   // Tickers already Telegram-alerted as a fresh burst today. See FRESH_BURST.
   private alertedFreshBurst = new Set<string>();
+  // Tickers already Telegram-alerted as a new ignition today. See NEW_IGNITION.
+  private alertedNewIgnition = new Set<string>();
   // Tickers that have traded in an Ignition pre-market cycle today. Feeds the
   // runner-score's pre-market-exhaustion penalty (a name that already ran in PM
   // gives back into the close). ET-day concept — cleared at midnight.
@@ -573,6 +589,42 @@ class PollerService {
     }
   }
 
+  // Rebuild ignition cross-cycle state from today's persisted ignition_results
+  // so a restart/deploy doesn't (a) flash every current ignition as "new" (the
+  // is_new flag keyed off the in-memory ignitionFirstSeen, which reset to the
+  // restart time), or (b) re-blast Telegram alerts for names that already
+  // alerted today (the dedup sets are in-memory too). Mirrors seedFirstSeen /
+  // seedVwapState. Per ticker today: earliest cycle → ignitionFirstSeen; mark
+  // every already-seen ticker as new-ignition-alerted (it appeared earlier, so
+  // it is NOT new); mark ≥65-peak tickers as ignition-alerted (they had their
+  // high-conviction shot — but a name that hasn't crossed 65 yet can still fire
+  // post-deploy).
+  private async seedIgnitionState() {
+    try {
+      const rows = await sql<{ ticker: string; first_ms: number; peak_score: number }>`
+        select i.ticker,
+          min(extract(epoch from c.polled_at) * 1000)::bigint as first_ms,
+          max(i.runner_score)::int as peak_score
+        from ignition_results i join screener_cycles c on c.id = i.cycle_id
+        where (c.polled_at at time zone 'America/New_York')::date
+              = (now() at time zone 'America/New_York')::date
+        group by i.ticker
+      `.execute(getDb());
+      for (const r of rows.rows) {
+        this.ignitionFirstSeen.set(r.ticker, Number(r.first_ms));
+        // Already appeared today → not "new", so it must not re-fire the
+        // new-ignition heads-up after a deploy.
+        this.alertedNewIgnition.add(r.ticker);
+        if (Number(r.peak_score) >= IGNITION.alert_score) this.alertedIgnition.add(r.ticker);
+      }
+      console.log(
+        `[poller] seeded ignition state for ${rows.rows.length} tickers from today's history`,
+      );
+    } catch (err) {
+      console.error('[poller] could not seed ignition state (continuing):', err);
+    }
+  }
+
   async start() {
     if (this.running) return;
     this.running = true;
@@ -586,6 +638,7 @@ class PollerService {
     this.lastEtDate = etDateString(new Date());
     await this.seedFirstSeen();
     await this.seedVwapState();
+    await this.seedIgnitionState();
     console.log(`[poller] starting (every ${this.config.interval_sec}s)`);
     void this.tick();
     this.timer = setInterval(() => void this.tick(), this.config.interval_sec * 1000);
@@ -621,6 +674,7 @@ class PollerService {
       this.alertedSwing.clear();
       this.alertedDualSignal.clear();
       this.alertedFreshBurst.clear();
+      this.alertedNewIgnition.clear();
       this.seenInPremarketToday.clear();
       this.lastForcedSwingPostCloseDate = '';
       this.lastOutcomesDate = '';
@@ -1345,6 +1399,7 @@ class PollerService {
       this.pushAlerts(enriched);
       this.pushFreshBurstAlerts(enrichedByTicker.values(), session);
       this.pushIgnitionAlerts(ignition);
+      this.pushNewIgnitionAlerts(ignition, nowMs);
       if (swingFreshlyScored) this.pushSwingAlerts(scoredSwing);
       this.pushDualSignalAlerts(ignition);
     }
@@ -1707,6 +1762,29 @@ class PollerService {
     }
   }
 
+  // New-ignition heads-up — see the NEW_IGNITION block. Fires once per ticker
+  // per ET day when a *recently-appeared* ignition (within window_ms of its
+  // first sighting today — restart-safe via the DB-seeded ignitionFirstSeen)
+  // has built into the 40–64 score band. The middle ground between the 🚀
+  // fresh-burst alert (nano-floats, ≤5M) and the ≥65 high-conviction alert
+  // (which fresh names don't reach for hours). Skips names already pinged by
+  // either neighbour so a ticker isn't triple-alerted.
+  private pushNewIgnitionAlerts(rows: IgnitionRow[], nowMs: number): void {
+    if (!telegramEnabled() || this.alertsMuted) return;
+    for (const r of rows) {
+      if (this.alertedNewIgnition.has(r.ticker)) continue;
+      if (this.alertedFreshBurst.has(r.ticker)) continue;   // already 🚀'd
+      // The ≥65 alert owns the high-conviction band; this is the build-up ping.
+      if (r.runner_score >= IGNITION.alert_score || r.runner_score < NEW_IGNITION.alert_score) continue;
+      const firstSeen = this.ignitionFirstSeen.get(r.ticker);
+      if (firstSeen === undefined || nowMs - firstSeen > NEW_IGNITION.window_ms) continue;
+      if (r.change_pct == null || r.change_pct < NEW_IGNITION.chg_min || r.change_pct > NEW_IGNITION.chg_max) continue;
+      if (r.catalyst?.direction === 'bearish') continue;
+      this.alertedNewIgnition.add(r.ticker);
+      void sendTelegram(formatNewIgnitionAlert(r, Math.round((nowMs - firstSeen) / 1000)));
+    }
+  }
+
   // Fresh-burst alert — see the FRESH_BURST block for the evidence and tuning.
   // Iterates the enriched UNION (a fresh runner is usually ignition-first by
   // 40s–2min, less extended than when Momentum catches it), gated to the first
@@ -1850,6 +1928,31 @@ function formatIgnitionAlert(r: IgnitionRow): string {
   const lines = [
     `⚡ <b>${escapeHtml(r.ticker)}</b>  ${price}  ${chg}`.trimEnd(),
     `<b>Ignition ${r.runner_score}</b> · float ${b.float} / vol ${b.volume} / cat ${b.catalyst} / mat ${b.maturity} / pm ${b.premarket} / shelf ${b.shelf}`,
+    meta.join(' · '),
+    r.news_title ? `“${escapeHtml(r.news_title)}”` : '',
+    shelfAlertLine(r.shelf),
+    `<a href="${escapeHtml(r.finviz_url)}">Finviz</a> · <a href="${tv}">TradingView</a>`,
+  ];
+  return lines.filter(Boolean).join('\n');
+}
+
+// Render a new-ignition heads-up — a freshly-appeared ignition building into
+// the 40–64 band (see NEW_IGNITION). Same shape as the ignition alert but
+// flagged as a building/early signal, not high-conviction.
+function formatNewIgnitionAlert(r: IgnitionRow, ageSec: number): string {
+  const b = r.score_breakdown;
+  const price = r.price == null ? '' : `$${r.price.toFixed(2)}`;
+  const chg = r.change_pct == null ? '' : `${r.change_pct >= 0 ? '+' : ''}${r.change_pct.toFixed(1)}%`;
+  const age = ageSec < 60 ? `${ageSec}s` : `${Math.round(ageSec / 60)}m`;
+  const meta: string[] = [`seen ${age} ago`];
+  if (r.float_m != null) meta.push(`float ${r.float_m.toFixed(1)}M`);
+  if (r.rel_vol_1min != null) meta.push(`RVol1m ${Math.round(r.rel_vol_1min)}%`);
+  if (r.rel_vol_5min != null) meta.push(`RVol5m ${Math.round(r.rel_vol_5min)}%`);
+  if (r.catalyst) meta.push(`catalyst ${r.catalyst.score}`);
+  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}`;
+  const lines = [
+    `🆕 <b>${escapeHtml(r.ticker)}</b>  ${price}  ${chg}`.trimEnd(),
+    `<b>New ignition ${r.runner_score}</b> (building) · float ${b.float} / vol ${b.volume} / cat ${b.catalyst} / mat ${b.maturity}`,
     meta.join(' · '),
     r.news_title ? `“${escapeHtml(r.news_title)}”` : '',
     shelfAlertLine(r.shelf),

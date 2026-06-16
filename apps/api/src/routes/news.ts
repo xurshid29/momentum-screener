@@ -2,7 +2,6 @@ import { Router } from 'express';
 import { sql } from 'kysely';
 import { authMiddleware } from '../middleware/auth.js';
 import { getDb } from '../db/index.js';
-import { universe } from '../services/universe.js';
 import { getOrClassifyArticle } from '../services/classify-article.js';
 import { fetchAndStoreTickerNews } from '../services/ticker-news.js';
 
@@ -84,13 +83,9 @@ router.get('/', authMiddleware, async (req, res) => {
   res.json({ data: rows.map(shapeNewsRow) });
 });
 
-// GET /api/news/feed?tickers=A,B,C&universe=true&hours=N&limit=N — latest news.
-// Filtering is intersected:
+// GET /api/news/feed?tickers=A,B,C&limit=N — latest news for a ticker set.
 //   - tickers (comma-separated) → restrict to articles linked to any of these
-//   - universe=true             → restrict to UniverseService.getUniverse()
-//                                 (structural filter without momentum gates)
-// Both can be combined; both omitted → unfiltered feed. `hours` defaults to 24
-// to keep the universe payload bounded since the universe set is ~2k tickers.
+//   - omitted                   → unfiltered feed
 router.get('/feed', authMiddleware, async (req, res) => {
   const limit = Math.min(parseInt(String(req.query.limit ?? '50'), 10) || 50, 200);
   const tickersParam = typeof req.query.tickers === 'string' ? req.query.tickers : '';
@@ -98,26 +93,8 @@ router.get('/feed', authMiddleware, async (req, res) => {
     .split(',')
     .map((t) => t.trim().toUpperCase())
     .filter(Boolean);
-  const useUniverse = req.query.universe === 'true' || req.query.universe === '1';
-  const hours = Math.min(Math.max(parseInt(String(req.query.hours ?? '24'), 10) || 24, 1), 168);
 
-  // Intersect ticker filters: explicit list AND universe set, when both given.
-  let effectiveTickers: string[] | null = null;
-  if (useUniverse) {
-    const uni = universe.getUniverse();
-    if (tickerList.length > 0) {
-      effectiveTickers = tickerList.filter((t) => uni.has(t));
-    } else {
-      effectiveTickers = Array.from(uni);
-    }
-    // Universe not yet loaded → return empty rather than the full firehose.
-    if (effectiveTickers.length === 0) {
-      res.json({ data: [] });
-      return;
-    }
-  } else if (tickerList.length > 0) {
-    effectiveTickers = tickerList;
-  }
+  const effectiveTickers: string[] | null = tickerList.length > 0 ? tickerList : null;
 
   const db = getDb();
   let q = db
@@ -134,13 +111,6 @@ router.get('/feed', authMiddleware, async (req, res) => {
   if (effectiveTickers) {
     const tickerArr = effectiveTickers;
     q = q.where(sql<boolean>`EXISTS (SELECT 1 FROM news_ticker_links WHERE article_id = a.id AND ticker = ANY(${tickerArr}::text[]))`);
-  }
-
-  if (useUniverse) {
-    // Bound the scan when the ticker set is large (~2k); otherwise the orderBy
-    // limit query may walk the full news_articles index.
-    const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000);
-    q = q.where('a.published_at', '>=', cutoff);
   }
 
   const rows = await q.execute();

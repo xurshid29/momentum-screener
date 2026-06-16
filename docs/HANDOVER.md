@@ -41,6 +41,17 @@ under `…/memory/` also carry the durable facts.
 
 ## What shipped this session (newest first, all on prod)
 
+00000. **Ignition restart-seeding + 🆕 new-ignition alert + 2 removals (2026-06-16).**
+   (1) `seedIgnitionState()` on boot rebuilds `ignitionFirstSeen` + alert-dedup
+   sets from today's `ignition_results` — fixes deploys flashing the whole list
+   as "new" and re-blasting alerts (same restart-safe pattern as
+   firstSeen/VWAP). (2) New 🆕 alert for a recently-appeared ignition (≤15 min
+   old) building into the 40–64 band (chg 10–100, non-bearish, dedup/day,
+   skips already-🚀/≥65) — fills the gap between fresh-burst (≤5M) and the ≥65
+   alert that fires hours late. ~6–8/day; dial `NEW_IGNITION.alert_score`.
+   (3) Removed Universe News tab + `/feed?universe=true`, and the Quote-Details
+   Ignition sub-tab + `/ignition-history` endpoint.
+
 0000. **Ignition float cap 15→25M (2026-06-15).** CAST (16.5M → +364%) was
    excluded from ignition entirely. 10-day study: 15–25M band runs as hard as
    2–5M, harder than 10–15M (34% vs 14% reach +40%); 25–50M falls off → 25M
