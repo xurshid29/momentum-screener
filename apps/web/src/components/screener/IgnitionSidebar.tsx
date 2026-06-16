@@ -10,7 +10,6 @@ import { ShelfBadge } from '../common/ShelfBadge';
 import { WarningBadge, useIsWarned } from '../common/WarningBadge';
 import { TickerLink } from '../common/TickerLink';
 import { TickerLinks } from '../common/TickerLinks';
-import { WatchlistStar } from '../common/WatchlistStar';
 import { fmtPrice, fmtPct, num } from '../../utils/format';
 import { CatalystNewsModal } from './CatalystNewsModal';
 
@@ -249,8 +248,7 @@ function IgnitionItem({
       <div style={{ flex: '1 1 auto', minWidth: 0, padding: '6px 8px' }}>
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
           <span>
-            <WatchlistStar ticker={row.ticker} size={12} />
-            <span style={{ marginLeft: 4, marginRight: 4, display: 'inline-flex', verticalAlign: 'middle' }}>
+            <span style={{ marginRight: 6, display: 'inline-flex', verticalAlign: 'middle' }}>
               <TickerLinks ticker={row.ticker} finvizUrl={row.finviz_url} />
             </span>
             <TickerLink
