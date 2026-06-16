@@ -250,7 +250,9 @@ function IgnitionItem({
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
           <span>
             <WatchlistStar ticker={row.ticker} size={12} />
-            <span style={{ marginRight: 4 }} />
+            <span style={{ marginLeft: 4, marginRight: 4, display: 'inline-flex', verticalAlign: 'middle' }}>
+              <TickerLinks ticker={row.ticker} finvizUrl={row.finviz_url} />
+            </span>
             <TickerLink
               ticker={row.ticker}
               onSelect={onSelect}
@@ -276,9 +278,6 @@ function IgnitionItem({
               />
             )}
             <WarningBadge ticker={row.ticker} size={12} />
-            <span style={{ marginLeft: 6, display: 'inline-flex', verticalAlign: 'middle' }}>
-              <TickerLinks ticker={row.ticker} finvizUrl={row.finviz_url} />
-            </span>
           </span>
           {/* Click (not hover) opens the score breakdown; stopPropagation
               keeps the click from also selecting the row. */}
