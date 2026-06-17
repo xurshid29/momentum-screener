@@ -189,6 +189,19 @@ const DUAL_SIGNAL = {
   min_ignition_score: 40,
 };
 
+// A live tick-feed catch surfaced in the dashboard (the 🛰️ section of the
+// Ignition sidebar) — a name the per-second detector caught surging BEFORE the
+// Finviz screens returned it. Drops out once the screens catch up (it becomes a
+// normal row) or after a TTL if it faded. Dashboard-only — see onTickCandidate.
+export interface TickCatch {
+  ticker: string;
+  price: number;
+  change_pct: number;
+  rel_vol: number;
+  mom_pct: number;
+  caught_at: string;   // ISO of first detection
+}
+
 export interface CyclePayload {
   cycle_id: string;
   polled_at: string;
@@ -203,6 +216,7 @@ export interface CyclePayload {
   ignition: IgnitionRow[];
   swing: SwingRow[];
   continuation: ContinuationCandidate[];
+  tick_catches: TickCatch[];
 }
 
 export interface EnrichedRow extends ScreenerRow {
@@ -390,8 +404,10 @@ class PollerService {
   private alertedFreshBurst = new Set<string>();
   // Tickers already Telegram-alerted as a new ignition today. See NEW_IGNITION.
   private alertedNewIgnition = new Set<string>();
-  // Tickers already 🛰️-alerted by the live tick feed today. See onTickCandidate.
-  private alertedTick = new Set<string>();
+  // Live tick-feed catches today, keyed by ticker (once per ticker per ET day).
+  // Surfaced in the dashboard's 🛰️ section, NOT Telegram. Pruned each cycle
+  // once the screens catch up or after TICK_CATCH_TTL_MS. See onTickCandidate.
+  private tickCatches = new Map<string, TickCatch & { caught_ms: number }>();
   // Tickers that have traded in an Ignition pre-market cycle today. Feeds the
   // runner-score's pre-market-exhaustion penalty (a name that already ran in PM
   // gives back into the close). ET-day concept — cleared at midnight.
@@ -678,7 +694,7 @@ class PollerService {
       this.alertedDualSignal.clear();
       this.alertedFreshBurst.clear();
       this.alertedNewIgnition.clear();
-      this.alertedTick.clear();
+      this.tickCatches.clear();
       this.seenInPremarketToday.clear();
       this.lastForcedSwingPostCloseDate = '';
       this.lastOutcomesDate = '';
@@ -1365,6 +1381,28 @@ class PollerService {
       .map((r) => r.ticker);
     const freshList = enriched.filter((r) => r.is_fresh_news).map((r) => r.ticker);
 
+    // Tick-feed catches for the dashboard 🛰️ section. A catch drops out once
+    // the screens catch up (it's now a normal Ignition/Momentum row, so don't
+    // double-show it) or after the TTL (it surged then faded, never confirmed).
+    const TICK_CATCH_TTL_MS = 15 * 60 * 1000;
+    const nowMsTick = Date.now();
+    const screened = new Set<string>([
+      ...ignition.map((r) => r.ticker),
+      ...enriched.map((r) => r.ticker),
+    ]);
+    const tickCatchList: TickCatch[] = [];
+    for (const [t, tc] of this.tickCatches) {
+      if (screened.has(t) || nowMsTick - tc.caught_ms > TICK_CATCH_TTL_MS) {
+        this.tickCatches.delete(t);
+        continue;
+      }
+      tickCatchList.push({
+        ticker: tc.ticker, price: tc.price, change_pct: tc.change_pct,
+        rel_vol: tc.rel_vol, mom_pct: tc.mom_pct, caught_at: tc.caught_at,
+      });
+    }
+    tickCatchList.sort((a, b) => b.caught_at.localeCompare(a.caught_at));
+
     const payload: CyclePayload = {
       cycle_id: cycleId,
       polled_at: new Date().toISOString(),
@@ -1374,6 +1412,7 @@ class PollerService {
       ignition,
       swing: scoredSwing,
       continuation: this.lastContinuation,
+      tick_catches: tickCatchList,
       banners: { new_with_catalyst: newWithCatalyst, fresh_news: freshList },
       fresh_news: enriched
         .filter((r) => r.is_fresh_news && r.news_title)
@@ -1401,11 +1440,15 @@ class PollerService {
     // cached list every cycle, doing no work but for no reason).
     if (!wasFirstPoll) {
       this.pushAlerts(enriched);
-      this.pushFreshBurstAlerts(enrichedByTicker.values(), session);
       this.pushIgnitionAlerts(ignition);
-      this.pushNewIgnitionAlerts(ignition, nowMs);
       if (swingFreshlyScored) this.pushSwingAlerts(scoredSwing);
       this.pushDualSignalAlerts(ignition);
+      // Telegram is reserved for high-conviction (above): ≥65 ignition, fresh
+      // strong/major catalyst, dual-signal, swing. The high-frequency EARLY
+      // signals — tick-feed 🛰️, fresh-burst 🚀, new-ignition 🆕 — moved to the
+      // DASHBOARD (2026-06-17 operator call): too noisy as pushes, glanceable
+      // on screen. pushFreshBurstAlerts / pushNewIgnitionAlerts kept dormant
+      // for easy re-enable; the tick feed surfaces via payload.tick_catches.
     }
 
     // Fire-and-forget LLM refinement of any rule-classified articles.
@@ -1798,24 +1841,26 @@ class PollerService {
   // today, and mark all of them so the slower ≥65 / fresh-burst / new-ignition
   // alerts don't re-ping the same ticker hours later. Once per ticker per ET day.
   onTickCandidate(c: TickCandidate): void {
-    if (
-      this.alertedTick.has(c.ticker) ||
-      this.alertedIgnition.has(c.ticker) ||
-      this.alertedFreshBurst.has(c.ticker) ||
-      this.alertedNewIgnition.has(c.ticker)
-    ) return;
-    this.alertedTick.add(c.ticker);
-    this.alertedFreshBurst.add(c.ticker);
-    this.alertedNewIgnition.add(c.ticker);
-    this.alertedIgnition.add(c.ticker);
-    // Always log (even when Telegram is off/muted) so the live rollout is
-    // observable — what the detector caught, at what chg, and how hot.
+    if (this.tickCatches.has(c.ticker)) return;   // once per ticker per ET day
+    const nowMs = Date.now();
+    this.tickCatches.set(c.ticker, {
+      ticker: c.ticker,
+      price: c.price,
+      change_pct: c.change_pct,
+      rel_vol: c.rel_vol,
+      mom_pct: c.mom_pct,
+      caught_at: new Date(nowMs).toISOString(),
+      caught_ms: nowMs,
+    });
+    // Dashboard-only — the operator's call (2026-06-17): a high-frequency
+    // "catch it early" signal belongs on a glanceable surface (the 🛰️ section
+    // of the Ignition sidebar), not as a Telegram push. Telegram is reserved
+    // for the rare high-conviction alerts (≥65 ignition, premium catalyst,
+    // dual-signal, swing). We still log every catch for observability.
     console.log(
       `[tickfeed] 🛰️ candidate ${c.ticker} $${c.price.toFixed(2)} ` +
       `${c.change_pct >= 0 ? '+' : ''}${c.change_pct.toFixed(1)}% · ${c.rel_vol}x rv · +${c.mom_pct.toFixed(0)}%/60s`,
     );
-    if (!telegramEnabled() || this.alertsMuted) return;
-    void sendTelegram(formatTickAlert(c));
   }
 
   // Fresh-burst alert — see the FRESH_BURST block for the evidence and tuning.
@@ -1994,21 +2039,8 @@ function formatNewIgnitionAlert(r: IgnitionRow, ageSec: number): string {
   return lines.filter(Boolean).join('\n');
 }
 
-// Render a live tick-feed alert (🛰️) — an ignition START caught on the
-// per-second tape before the Finviz screener surfaced it. Light by design: the
-// whole point is speed. Carries the tick read (chg%, rel-vol) + chart links;
-// the regular screener picks the name up within ~20s and enriches it normally.
-function formatTickAlert(c: TickCandidate): string {
-  const price = `$${c.price.toFixed(2)}`;
-  const chg = `${c.change_pct >= 0 ? '+' : ''}${c.change_pct.toFixed(1)}%`;
-  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(c.ticker)}`;
-  const fv = `https://elite.finviz.com/quote?t=${encodeURIComponent(c.ticker)}&ty=c&p=h&b=1`;
-  return [
-    `🛰️ <b>${escapeHtml(c.ticker)}</b>  ${price}  ${chg}`,
-    `<b>TICK — caught before the screener</b> · ${c.rel_vol}× rel-vol · +${c.mom_pct.toFixed(0)}% in 60s`,
-    `<a href="${escapeHtml(fv)}">Finviz</a> · <a href="${tv}">TradingView</a>`,
-  ].join('\n');
-}
+// (formatTickAlert removed 2026-06-17 — tick catches are dashboard-only now,
+// surfaced via payload.tick_catches, not Telegram. See onTickCandidate.)
 
 // Render a fresh-burst alert — a just-appeared nano-float with a violent
 // early volume read (see FRESH_BURST). Deliberately light on score context:

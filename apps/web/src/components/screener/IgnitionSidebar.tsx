@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Typography, Tooltip, Empty, Button, Popover, List } from 'antd';
 import { CloseOutlined, EyeInvisibleOutlined } from '@ant-design/icons';
-import type { CatalystInfo, CyclePayload, IgnitionRow } from '../../api/types';
+import type { CatalystInfo, CyclePayload, IgnitionRow, TickCatch } from '../../api/types';
 import { useSelection } from '../../context/SelectionContext';
 import { useLayout } from '../../context/LayoutContext';
 import { useHiddenTickers } from '../../hooks/useHiddenTickers';
@@ -98,6 +98,9 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
   );
   const newRows = all.filter((r) => r.is_new);
   const topRows = all.filter((r) => !r.is_new);
+  // Live tick-feed catches — surged on the per-second feed before the screens
+  // returned them. Pinned at the very top; drop out once a screen catches up.
+  const tickCatches = (payload?.tick_catches ?? []).filter((t) => !hidden.has(t.ticker));
   const hiddenList = [...hidden].sort();
 
   const renderRow = (r: IgnitionRow) => (
@@ -167,7 +170,25 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
         </span>
       </div>
 
-      {all.length === 0 ? (
+      {/* Live ticks — caught before the screens; pinned above everything */}
+      {tickCatches.length > 0 && (
+        <div
+          style={{
+            flex: '0 0 auto',
+            maxHeight: '38%',
+            overflow: 'auto',
+            background: '#0d1b26',
+            borderBottom: '2px solid #1765ad',
+          }}
+        >
+          <SectionHeader label="🛰️ LIVE TICKS" count={tickCatches.length} color="#40a9ff" />
+          {tickCatches.map((tc) => (
+            <TickItem key={tc.ticker} tc={tc} selected={tc.ticker === selected} onSelect={setSelected} />
+          ))}
+        </div>
+      )}
+
+      {all.length === 0 && tickCatches.length === 0 ? (
         <div style={{ flex: '1 1 auto', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}
@@ -205,6 +226,46 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+// A live tick-feed catch row — lighter than an ignition row (no score yet; the
+// screens haven't returned it). Shows the surge read + how long ago, clickable
+// to chart it. The 🛰️ blue palette distinguishes it from scored ignitions.
+function TickItem({ tc, selected, onSelect }: { tc: TickCatch; selected: boolean; onSelect: (t: string) => void }) {
+  const agoMs = Date.now() - new Date(tc.caught_at).getTime();
+  const ago = agoMs < 60_000 ? `${Math.round(agoMs / 1000)}s` : `${Math.round(agoMs / 60_000)}m`;
+  return (
+    <div
+      onClick={() => onSelect(tc.ticker)}
+      style={{
+        display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
+        padding: '5px 8px', borderBottom: '1px solid #14304a', cursor: 'pointer',
+        borderLeft: '3px solid #1890ff',
+        background: selected ? '#15395b' : undefined,
+      }}
+    >
+      <span style={{ minWidth: 0 }}>
+        <span style={{ marginRight: 6, display: 'inline-flex', verticalAlign: 'middle' }}>
+          <TickerLinks ticker={tc.ticker} />
+        </span>
+        <TickerLink
+          ticker={tc.ticker}
+          onSelect={onSelect}
+          stopPropagation
+          style={{ color: '#69c0ff', fontWeight: 600, fontSize: 13 }}
+        />
+        <span style={{ marginLeft: 6, fontSize: 10, color: '#8c8c8c' }}>
+          {Math.round(tc.rel_vol)}× rv · {ago} ago
+        </span>
+      </span>
+      <span style={{ flex: '0 0 auto' }}>
+        <Text type="secondary" style={{ fontSize: 11, marginRight: 6 }}>{fmtPrice(tc.price)}</Text>
+        <Text style={{ color: (num(tc.change_pct) ?? 0) >= 0 ? '#52c41a' : '#ff4d4f', fontWeight: 600 }}>
+          {fmtPct(tc.change_pct)}
+        </Text>
+      </span>
     </div>
   );
 }

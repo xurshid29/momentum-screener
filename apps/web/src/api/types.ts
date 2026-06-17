@@ -296,6 +296,18 @@ export interface NewsHeadline {
 // change_pct/price/volume reflect after-hours figures, not the regular close.
 export type TradingSession = 'premarket' | 'regular' | 'afterhours' | 'closed';
 
+// A live tick-feed catch — caught surging on the per-second feed before the
+// Finviz screens returned it. Shown in the 🛰️ section of the Ignition sidebar
+// until the screens catch up or it ages out. See poller.ts onTickCandidate.
+export interface TickCatch {
+  ticker: string;
+  price: number;
+  change_pct: number;
+  rel_vol: number;
+  mom_pct: number;
+  caught_at: string;
+}
+
 export interface CyclePayload {
   cycle_id: string;
   polled_at: string | null;
@@ -307,6 +319,7 @@ export interface CyclePayload {
   continuation: ContinuationRow[];
   banners: { new_with_catalyst: string[]; fresh_news: string[] };
   fresh_news: NewsHeadline[];
+  tick_catches: TickCatch[];
 }
 
 export interface HistoryRow {
