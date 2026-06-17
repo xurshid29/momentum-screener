@@ -21,6 +21,7 @@ import { fetchHalts, type TradeHalt } from './halts.js';
 import { broadcast } from './sse.js';
 import { sendTelegram, telegramEnabled, escapeHtml } from './telegram.js';
 import { scoreRunner, type RunnerScoreBreakdown } from './runner-score.js';
+import type { TickCandidate } from './tick-detect.js';
 import {
   scoreSwing,
   type SwingScoreBreakdown,
@@ -389,6 +390,8 @@ class PollerService {
   private alertedFreshBurst = new Set<string>();
   // Tickers already Telegram-alerted as a new ignition today. See NEW_IGNITION.
   private alertedNewIgnition = new Set<string>();
+  // Tickers already 🛰️-alerted by the live tick feed today. See onTickCandidate.
+  private alertedTick = new Set<string>();
   // Tickers that have traded in an Ignition pre-market cycle today. Feeds the
   // runner-score's pre-market-exhaustion penalty (a name that already ran in PM
   // gives back into the close). ET-day concept — cleared at midnight.
@@ -675,6 +678,7 @@ class PollerService {
       this.alertedDualSignal.clear();
       this.alertedFreshBurst.clear();
       this.alertedNewIgnition.clear();
+      this.alertedTick.clear();
       this.seenInPremarketToday.clear();
       this.lastForcedSwingPostCloseDate = '';
       this.lastOutcomesDate = '';
@@ -1785,6 +1789,29 @@ class PollerService {
     }
   }
 
+  // Live tick-feed candidate (🛰️) — TickFeedService caught an ignition START on
+  // the Databento per-second tape, typically 30–90s before the Finviz screener
+  // surfaces it (validated: DSY/GLXG/BYAH 15–90s earlier, much lower chg). The
+  // detection rule already qualifies it (rel-vol surge + momentum on a low-float
+  // universe name), so this just fires the fast "look NOW" alert. Mutually
+  // exclusive with the poll-based paths: skip if any already alerted this name
+  // today, and mark all of them so the slower ≥65 / fresh-burst / new-ignition
+  // alerts don't re-ping the same ticker hours later. Once per ticker per ET day.
+  onTickCandidate(c: TickCandidate): void {
+    if (!telegramEnabled() || this.alertsMuted) return;
+    if (
+      this.alertedTick.has(c.ticker) ||
+      this.alertedIgnition.has(c.ticker) ||
+      this.alertedFreshBurst.has(c.ticker) ||
+      this.alertedNewIgnition.has(c.ticker)
+    ) return;
+    this.alertedTick.add(c.ticker);
+    this.alertedFreshBurst.add(c.ticker);
+    this.alertedNewIgnition.add(c.ticker);
+    this.alertedIgnition.add(c.ticker);
+    void sendTelegram(formatTickAlert(c));
+  }
+
   // Fresh-burst alert — see the FRESH_BURST block for the evidence and tuning.
   // Iterates the enriched UNION (a fresh runner is usually ignition-first by
   // 40s–2min, less extended than when Momentum catches it), gated to the first
@@ -1959,6 +1986,22 @@ function formatNewIgnitionAlert(r: IgnitionRow, ageSec: number): string {
     `<a href="${escapeHtml(r.finviz_url)}">Finviz</a> · <a href="${tv}">TradingView</a>`,
   ];
   return lines.filter(Boolean).join('\n');
+}
+
+// Render a live tick-feed alert (🛰️) — an ignition START caught on the
+// per-second tape before the Finviz screener surfaced it. Light by design: the
+// whole point is speed. Carries the tick read (chg%, rel-vol) + chart links;
+// the regular screener picks the name up within ~20s and enriches it normally.
+function formatTickAlert(c: TickCandidate): string {
+  const price = `$${c.price.toFixed(2)}`;
+  const chg = `${c.change_pct >= 0 ? '+' : ''}${c.change_pct.toFixed(1)}%`;
+  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(c.ticker)}`;
+  const fv = `https://elite.finviz.com/quote?t=${encodeURIComponent(c.ticker)}&ty=c&p=h&b=1`;
+  return [
+    `🛰️ <b>${escapeHtml(c.ticker)}</b>  ${price}  ${chg}`,
+    `<b>TICK — caught before the screener</b> · ${c.rel_vol}× rel-vol · +${c.mom_pct.toFixed(0)}% in 60s`,
+    `<a href="${escapeHtml(fv)}">Finviz</a> · <a href="${tv}">TradingView</a>`,
+  ].join('\n');
 }
 
 // Render a fresh-burst alert — a just-appeared nano-float with a violent

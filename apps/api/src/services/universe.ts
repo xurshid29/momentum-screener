@@ -39,6 +39,11 @@ class UniverseService {
   private running = false;
   private inFlight = false;
   private tickers = new Set<string>();
+  // Prior-session close per ticker, derived from the v=110 Price + Change the
+  // refresh already fetches (close = price / (1 + change%/100)). Used by the
+  // tick-feed detector to measure chg% from prior close for the whole universe
+  // without any extra fetch. Refreshed every cycle.
+  private priorCloses = new Map<string, number>();
   private lastFilter = '';
   private lastRefreshedAt: Date | null = null;
   private lastError: string | null = null;
@@ -55,6 +60,10 @@ class UniverseService {
 
   getUniverse(): Set<string> {
     return this.tickers;
+  }
+
+  getPriorCloses(): Map<string, number> {
+    return this.priorCloses;
   }
 
   isInUniverse(ticker: string): boolean {
@@ -91,13 +100,25 @@ class UniverseService {
       if (!res.ok) throw new Error(`Finviz HTTP ${res.status}`);
       const text = await res.text();
       const rows = parseCsv(text);
-      // v=110 header: No, Ticker, Company, Sector, Industry, Country, ...
+      // v=110 header: No, Ticker, Company, Sector, Industry, Country,
+      //   Market Cap, P/E, Price, Change, Volume  → Price=8, Change=9.
       const next = new Set<string>();
+      const priors = new Map<string, number>();
       for (let i = 1; i < rows.length; i++) {
         const t = rows[i][1];
-        if (t) next.add(t.toUpperCase());
+        if (!t) continue;
+        const tk = t.toUpperCase();
+        next.add(tk);
+        // prior close = price / (1 + change%/100); change% is always vs the
+        // prior close, so this holds at any time of day.
+        const price = parseFloat(rows[i][8]);
+        const chg = parseFloat(String(rows[i][9]).replace('%', ''));
+        if (Number.isFinite(price) && price > 0 && Number.isFinite(chg) && chg > -100) {
+          priors.set(tk, price / (1 + chg / 100));
+        }
       }
       this.tickers = next;
+      this.priorCloses = priors;
       this.lastFilter = universeFilter;
       this.lastRefreshedAt = new Date();
       this.lastError = null;

@@ -16,6 +16,7 @@ import { poller } from './services/poller.js';
 import { universe } from './services/universe.js';
 import { shelf } from './services/shelf.js';
 import { dailyBars } from './services/daily-bars.js';
+import { tickfeed } from './services/tickfeed.js';
 import { outcomes } from './services/outcomes.js';
 import { telegramBot } from './services/telegram-bot.js';
 
@@ -47,6 +48,7 @@ app.get('/health', async (_req, res) => {
     universe: universe.status(),
     shelf: shelf.status(),
     daily_bars: dailyBars.status(),
+    tickfeed: tickfeed.status(),
     outcomes: outcomes.status(),
     telegram_bot: telegramBot.status(),
     timestamp: new Date().toISOString(),
@@ -74,6 +76,7 @@ app.listen(port, () => {
   universe.start();
   shelf.start();
   dailyBars.start();
+  tickfeed.start();
   telegramBot.start();
   // One-time catch-up: backfill outcomes for the existing detection history on
   // boot (the post-close trigger only covers go-forward days). Delayed so the

@@ -23,6 +23,9 @@ REGISTRATION_OPEN=true                                   # public sign-up — cl
 TELEGRAM_BOT_TOKEN=...                                   # optional — Telegram bot token for push alerts + commands
 TELEGRAM_CHAT_ID=...                                     # optional — destination chat id for alerts + command auth
 TELEGRAM_USER_ID=...                                     # optional — dashboard user uuid the bot acts as for /hidden + /unhide
+DATABENTO_API_KEY=db-...                                 # optional — Databento live (EQUS.MINI) for the tick-feed early-ignition detector
+TICKFEED_ENABLED=true                                    # optional — turn on the live tick feed (needs DATABENTO_API_KEY + a Standard/US-Equities subscription); off unless exactly 'true'
+TICKFEED_PYTHON=python3                                  # optional — python interpreter for the sidecar (default python3)
 ```
 
 ## Database Schema

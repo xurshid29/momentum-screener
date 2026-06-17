@@ -24,10 +24,19 @@ COPY apps/api/ apps/api/
 RUN npm run build --workspace=apps/api
 
 # ─── runtime ───────────────────────────────────────────────────────────────
-FROM ${NODE_IMAGE} AS runtime
+# Debian slim (not the alpine ARG) so the tick-feed sidecar's Python deps
+# (databento → numpy/pandas/zstandard) install from manylinux wheels instead of
+# building against musl. Only pulled in when TICKFEED_ENABLED=true at runtime.
+FROM node:25-slim AS runtime
 
 ENV NODE_ENV=production
 WORKDIR /app
+
+# Python + the Databento live client for the tick-feed sidecar (sidecar/tickfeed.py).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 python3-pip ca-certificates \
+    && pip3 install --no-cache-dir --break-system-packages databento \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Reinstall only production deps. We need every workspace's package.json
 # present (npm validates the lockfile against the full workspace tree), but
@@ -39,6 +48,7 @@ RUN npm ci --omit=dev --workspaces --include-workspace-root \
     && npm cache clean --force
 
 COPY --from=builder /repo/apps/api/dist /app/apps/api/dist
+COPY apps/api/sidecar /app/apps/api/sidecar
 
 EXPOSE 3001
 CMD ["node", "apps/api/dist/index.js"]
