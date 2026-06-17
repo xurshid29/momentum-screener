@@ -1798,7 +1798,6 @@ class PollerService {
   // today, and mark all of them so the slower ≥65 / fresh-burst / new-ignition
   // alerts don't re-ping the same ticker hours later. Once per ticker per ET day.
   onTickCandidate(c: TickCandidate): void {
-    if (!telegramEnabled() || this.alertsMuted) return;
     if (
       this.alertedTick.has(c.ticker) ||
       this.alertedIgnition.has(c.ticker) ||
@@ -1809,6 +1808,13 @@ class PollerService {
     this.alertedFreshBurst.add(c.ticker);
     this.alertedNewIgnition.add(c.ticker);
     this.alertedIgnition.add(c.ticker);
+    // Always log (even when Telegram is off/muted) so the live rollout is
+    // observable — what the detector caught, at what chg, and how hot.
+    console.log(
+      `[tickfeed] 🛰️ candidate ${c.ticker} $${c.price.toFixed(2)} ` +
+      `${c.change_pct >= 0 ? '+' : ''}${c.change_pct.toFixed(1)}% · ${c.rel_vol}x rv · +${c.mom_pct.toFixed(0)}%/60s`,
+    );
+    if (!telegramEnabled() || this.alertsMuted) return;
     void sendTelegram(formatTickAlert(c));
   }
 
