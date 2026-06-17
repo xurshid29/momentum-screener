@@ -23,6 +23,13 @@ body {
   font-weight: 600;
 }
 
+/* Just-appeared rows (~75s) — a green flash + left accent so a freshly-arrived
+   ticker catches the eye wherever it sorts. After fresh-news so it wins the tie. */
+.screener-row-new > td {
+  background: rgba(115, 209, 61, 0.15) !important;
+  box-shadow: inset 3px 0 0 #52c41a;
+}
+
 /* "Avoid / burned" rows — dimmed so pump-and-dump offenders recede from
    attention. Warned + fresh-news at once: the dim wins (it's a stronger
    signal to skip than the fresh-news highlight is to look). */

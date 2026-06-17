@@ -54,3 +54,14 @@ export function fmtBigPct(n: number | string | null | undefined): string {
 export function num(n: number | string | null | undefined): number | null {
   return asNum(n);
 }
+
+// True when an ISO timestamp is within the last `withinSec` seconds. Drives the
+// "just appeared" NEW badge + row highlight on the Ignition / Momentum lists.
+// Recomputed each render (SSE cadence ~20s), so the highlight clears within a
+// cycle of the window expiring.
+export function isFreshArrival(iso: string | null | undefined, withinSec = 75): boolean {
+  if (!iso) return false;
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return false;
+  return Date.now() - t < withinSec * 1000;
+}

@@ -10,7 +10,7 @@ import { ShelfBadge } from '../common/ShelfBadge';
 import { WarningBadge, useIsWarned } from '../common/WarningBadge';
 import { TickerLink } from '../common/TickerLink';
 import { TickerLinks } from '../common/TickerLinks';
-import { fmtPrice, fmtPct, num } from '../../utils/format';
+import { fmtPrice, fmtPct, num, isFreshArrival } from '../../utils/format';
 import { CatalystNewsModal } from './CatalystNewsModal';
 
 const { Text } = Typography;
@@ -231,6 +231,9 @@ function IgnitionItem({
     row.rel_vol_5min != null ? `${Math.round(row.rel_vol_5min)}% rv5` : null,
   ].filter(Boolean);
 
+  // Just appeared on the screen (~75s) — green flash so a fresh ignition
+  // catches the eye even when its score sorts it down the list.
+  const fresh = isFreshArrival(row.first_seen_at);
   return (
     <div
       onClick={() => onSelect(row.ticker)}
@@ -238,8 +241,9 @@ function IgnitionItem({
         display: 'flex',
         alignItems: 'stretch',
         borderBottom: '1px solid #2a2a2a',
+        borderLeft: fresh ? '3px solid #52c41a' : '3px solid transparent',
         cursor: 'pointer',
-        background: selected ? '#15395b' : undefined,
+        background: selected ? '#15395b' : fresh ? 'rgba(115,209,61,0.12)' : undefined,
         // Burned/avoid rows recede (the ⛔ badge stays full-opacity is fine —
         // dimming the whole row is the at-a-glance "skip this" cue).
         opacity: warned && !selected ? 0.5 : 1,
@@ -257,6 +261,17 @@ function IgnitionItem({
               stopPropagation
               style={{ color: '#fff', fontWeight: 600, fontSize: 13 }}
             />
+            {fresh && (
+              <span
+                style={{
+                  marginLeft: 5, fontSize: 9, fontWeight: 700, letterSpacing: 0.5,
+                  color: '#52c41a', border: '1px solid #52c41a', borderRadius: 3,
+                  padding: '0 3px', verticalAlign: 'middle',
+                }}
+              >
+                NEW
+              </span>
+            )}
             {row.shelf && (
               <span style={{ marginLeft: 4 }}>
                 <ShelfBadge shelf={row.shelf} size={12} />

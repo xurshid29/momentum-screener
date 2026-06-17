@@ -12,7 +12,7 @@ import { WatchlistStar } from '../common/WatchlistStar';
 import { CatalystBadge } from '../common/CatalystBadge';
 import { ShelfBadge } from '../common/ShelfBadge';
 import { WarningBadge, useIsWarned } from '../common/WarningBadge';
-import { fmtPct, fmtFloat, fmtPrice, fmtVolume, fmtMcap, fmtRelVol, fmtBigPct, num } from '../../utils/format';
+import { fmtPct, fmtFloat, fmtPrice, fmtVolume, fmtMcap, fmtRelVol, fmtBigPct, num, isFreshArrival } from '../../utils/format';
 import { FiltersDialog } from './FiltersDialog';
 import { CatalystNewsModal } from './CatalystNewsModal';
 import { SwingTable } from './SwingTable';
@@ -422,7 +422,11 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
                   pagination={false}
                   sticky
                   rowClassName={(r) =>
-                    [isWarned(r.ticker) ? 'screener-row-warned' : '', r.is_fresh_news ? 'screener-row-fresh' : '']
+                    [
+                      isWarned(r.ticker) ? 'screener-row-warned' : '',
+                      r.is_fresh_news ? 'screener-row-fresh' : '',
+                      isFreshArrival(r.first_seen_at) ? 'screener-row-new' : '',
+                    ]
                       .filter(Boolean)
                       .join(' ')
                   }
