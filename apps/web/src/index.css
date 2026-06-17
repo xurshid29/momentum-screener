@@ -23,10 +23,14 @@ body {
   font-weight: 600;
 }
 
-/* Just-appeared rows (~75s) — a green flash + left accent so a freshly-arrived
-   ticker catches the eye wherever it sorts. After fresh-news so it wins the tie. */
+/* Just-appeared rows (~75s) — a green flash so a freshly-arrived ticker
+   catches the eye wherever it sorts. After fresh-news so it wins the tie. */
 .screener-row-new > td {
   background: rgba(115, 209, 61, 0.15) !important;
+}
+/* Left accent only on the first cell — not every td (that drew a green line
+   between every column and broke the row's look). */
+.screener-row-new > td:first-child {
   box-shadow: inset 3px 0 0 #52c41a;
 }
 
