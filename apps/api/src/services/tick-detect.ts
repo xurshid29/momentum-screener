@@ -50,6 +50,7 @@ interface SymbolState {
   bars: TickBar[];          // trailing window (trimmed to history_sec)
   quietVols: number[];      // rolling trailing-60s share-vols sampled while quiet
   fired: boolean;           // once per symbol per session
+  diagnosed: boolean;       // logged a near-miss reason once (see drainDiagnostics)
 }
 
 function median(xs: number[]): number {
@@ -63,6 +64,16 @@ export class TickDetector {
   // prior close per symbol (vs which change% is measured). Seeded daily from
   // the universe / daily_bars; a symbol with no prior close can't be scored.
   private priorClose = new Map<string, number>();
+  // Near-miss diagnostics — when a tracked name reaches cum_min% but does NOT
+  // fire, we record once WHY (gapped = no baseline, vs which gate it failed).
+  // Drained + logged by the service so the live rollout is debuggable.
+  private diag: string[] = [];
+
+  drainDiagnostics(): string[] {
+    const out = this.diag;
+    this.diag = [];
+    return out;
+  }
 
   setPriorClose(ticker: string, close: number): void {
     if (close > 0) this.priorClose.set(ticker, close);
@@ -87,7 +98,7 @@ export class TickDetector {
 
     let st = this.state.get(ticker);
     if (!st) {
-      st = { bars: [], quietVols: [], fired: false };
+      st = { bars: [], quietVols: [], fired: false, diagnosed: false };
       this.state.set(ticker, st);
     }
     st.bars.push(bar);
@@ -124,9 +135,9 @@ export class TickDetector {
       : 0;
 
     if (st.fired) return null;
-    if (baseline < TICK_DETECT.baseline_min_sh) return null;
-    const relVol = winVol / baseline;
+    const relVol = baseline > 0 ? winVol / baseline : 0;
     if (
+      baseline >= TICK_DETECT.baseline_min_sh &&
       cum >= TICK_DETECT.cum_min &&
       mom >= TICK_DETECT.mom_min &&
       relVol >= TICK_DETECT.relvol_min &&
@@ -141,6 +152,18 @@ export class TickDetector {
         rel_vol: +relVol.toFixed(1),
         mom_pct: +mom.toFixed(1),
       };
+    }
+    // Near-miss diagnostic — a tracked name reached an igniting chg% but didn't
+    // fire. Record the binding reason ONCE so we can tell gappers (no baseline)
+    // from gate failures, without log spam.
+    if (cum >= TICK_DETECT.cum_min && !st.diagnosed) {
+      st.diagnosed = true;
+      const reason =
+        baseline < TICK_DETECT.baseline_min_sh ? `no-baseline (gapped, base=${Math.round(baseline)}sh, ${st.quietVols.length} quiet)`
+        : relVol < TICK_DETECT.relvol_min ? `low-relvol (${relVol.toFixed(1)}x < ${TICK_DETECT.relvol_min})`
+        : mom < TICK_DETECT.mom_min ? `low-mom (+${mom.toFixed(0)}%/60s < ${TICK_DETECT.mom_min})`
+        : `reverting (pos ${pos.toFixed(2)} < ${TICK_DETECT.near_high})`;
+      this.diag.push(`${ticker} +${cum.toFixed(0)}% — ${reason}`);
     }
     return null;
   }

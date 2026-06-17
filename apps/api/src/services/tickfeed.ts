@@ -140,6 +140,10 @@ class TickFeedService {
       this.candidates++;
       poller.onTickCandidate(cand);
     }
+    // Surface near-miss reasons (gapped vs which gate) so the rollout is
+    // debuggable — why a moving name didn't fire.
+    const diag = this.detector.drainDiagnostics();
+    for (const d of diag) console.log(`[tickfeed] near-miss: ${d}`);
   }
 }
 
