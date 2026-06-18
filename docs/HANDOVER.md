@@ -1,9 +1,18 @@
-# Session Handover — 2026-06-12
+# Session Handover — updated 2026-06-18
 
 A running handover so a fresh session can continue without re-deriving context.
 **Read `docs/web-dashboard.md` first** (the canonical status doc); this file is
 the "where we are right now + what's open" layer on top of it. Memory files
 under `…/memory/` also carry the durable facts.
+
+**CURRENT FOCUS (2026-06-18): the live tick-feed early-ignition detector 🛰️** —
+built, activated, validated in prod, and Option B shipped (catches → dashboard
+🛰️ LIVE TICKS section, Telegram rebalanced to high-conviction only). See the
+top "What shipped" entry (000000) for the full state + the OPEN items to pick
+up next (outcome tracking, re-surge suppression, baseline restart-seeding,
+candidate enrichment). The detailed durable record is the [[tick_feed_scoping]]
+memory. ⚠️ Process note: that work briefly looked reverted in the working tree
+but was committed (`3903b9e`) — **trust the commits/origin, not the tree.**
 
 ---
 
@@ -41,9 +50,12 @@ under `…/memory/` also carry the durable facts.
 
 ## What shipped this session (newest first, all on prod)
 
-000000. **Live tick-feed early-ignition detector 🛰️ (2026-06-17) — BUILT, ACTIVATED, VALIDATED LIVE.** Subscribed Databento Standard/US-Equities ($199/mo, live EQUS.MINI flat, $0 metered), `TICKFEED_ENABLED=true` on droplet. Stream/CRAM-auth works; healthy at scale (2.6k symbols, ~300k bars/day, no errors). **First prod win: MNTS caught 20 min before the momentum screen.** Additive edge (big wins on relvol-gated slow-burns; ties/trails on fast-starters; re-surge pings on already-visible names). ⚠️ **Alert-only — tick catches fire a 🛰️ Telegram alert but are NOT in the dashboard UI until Finviz surfaces them (the main unbuilt piece — a Telegram-only vs in-dashboard product call). Also deferred: outcome-tracking for tick catches, re-surge suppression, restart-seeding of baselines.** Detail in [[tick_feed_scoping]]. (Original build entry below.)
+000000. **Live tick-feed early-ignition detector 🛰️ — BUILT, ACTIVATED, VALIDATED, + Option B shipped (2026-06-17→18).** Databento EQUS.MINI per-second feed catches an ignition START 30–90s before Finviz. Subscribed Standard/US-Equities ($199/mo flat, live EQUS.MINI included, $0 metered), `TICKFEED_ENABLED=true` on the droplet, stream/CRAM-auth works, healthy at scale (2.6k symbols, ~300k bars/day, no errors). **First prod win: MNTS caught 20 min before the momentum screen.** Additive edge — big wins on relvol-gated slow-burns, ties/trails on fast-starters Finviz's change gate catches.
+   - **Option B (`3903b9e`, live): tick catches go to the DASHBOARD, not Telegram.** A pinned **🛰️ LIVE TICKS** section atop the Ignition sidebar (`payload.tick_catches`, blue palette, `TickItem`); `onTickCandidate` records to a `tickCatches` Map (no push), pruned when a screen catches the name up or after a 15-min TTL. **Telegram rebalanced**: 🚀 fresh-burst + 🆕 new-ignition pushes SILENCED (dormant, easy re-enable — those names already show in the sidebar); Telegram now high-conviction only (≥65 ignition, momentum strong/major catalyst, dual-signal, swing).
+   - ⚠️ **Git incident (2026-06-18):** a working-tree revert of Option B briefly made the code *look* alert-only — but `3903b9e` was committed/pushed/deployed. **Check origin/commits, not just the working tree.** Tree restored + clean.
+   - **STILL OPEN (next session):** (a) no forward-outcome tracking for tick catches — instrument into `screener_outcomes`-style grading to prove the edge over time; (b) HAO-style re-surge suppression — watch whether catches on already-long-visible names feel noisy; (c) deploys reset detector baselines (even web-only) — add restart-seeding like ignition/VWAP; (d) tick catches are display-only (no float/catalyst/shelf enrichment, no DB persistence). Detail in [[tick_feed_scoping]] memory + the original build entry below.
 
-000000b. **Tick feed — original build entry (behind a flag, pre-activation).** Databento EQUS.MINI per-second feed → catch ignition START 30–90s before Finviz. Offline-validated ($0 free credit): rel-volume (not $) separates real ignitions (9.8–100× baseline) from blips (0.3–0.7×); DSY/GLXG/BYAH caught 15–90s early at far lower chg; gappers (INHD/RGNT) uncatchable; 3–5% false-fire on fizzlers. Pieces: `tick-detect.ts` (pure causal detector, verified by `scripts/verify-tick-detect.ts`), `sidecar/tickfeed.py` (official `databento` Live client — no Node client exists; fields verified vs 0.80), `tickfeed.ts` (spawns sidecar, feeds detector), `poller.onTickCandidate` (🛰️ alert, mutually exclusive w/ other alert paths), universe prior-close extension, Dockerfile (runtime → Debian slim + python3 + databento; **image built+verified locally, 767MB**). **ALL behind `TICKFEED_ENABLED` (default off) → prod unaffected.** ⚠️ **Go-live remaining:** (1) subscribe Databento **Standard / US Equities $199/mo** (live EQUS.MINI), (2) `DATABENTO_API_KEY` already in prod .env, (3) set `TICKFEED_ENABLED=true` on the droplet, (4) smoke-test the live stream/auth handshake (the one untested-until-live bit — CRAM auth + `for record in client` streaming). Ceiling: recovers Finviz's lag on *ramping* runners, can't catch *gappers* (the biggest movers). Full detail in web-dashboard.md + [[tick_feed_scoping]] memory.
+000000b. **Tick feed — original build entry (behind a flag, pre-activation).** Databento EQUS.MINI per-second feed → catch ignition START 30–90s before Finviz. Offline-validated ($0 free credit): rel-volume (not $) separates real ignitions (9.8–100× baseline) from blips (0.3–0.7×); DSY/GLXG/BYAH caught 15–90s early at far lower chg; gappers (INHD/RGNT) uncatchable; 3–5% false-fire on fizzlers. Pieces: `tick-detect.ts` (pure causal detector, verified by `scripts/verify-tick-detect.ts`), `sidecar/tickfeed.py` (official `databento` Live client — no Node client exists; fields verified vs 0.80), `tickfeed.ts` (spawns sidecar, feeds detector), `poller.onTickCandidate` (🛰️ alert, mutually exclusive w/ other alert paths), universe prior-close extension, Dockerfile (runtime → Debian slim + python3 + databento; **image built+verified locally, 767MB**). **ALL behind `TICKFEED_ENABLED` (default off).** ✅ **Go-live DONE** (subscription + flag + smoke-test all complete — see entry 000000 above). Ceiling: recovers Finviz's lag on *ramping* runners, can't catch *gappers* (the biggest movers). Full detail in web-dashboard.md + [[tick_feed_scoping]] memory.
 
 00000. **Ignition restart-seeding + 🆕 new-ignition alert + 2 removals (2026-06-16).**
    (1) `seedIgnitionState()` on boot rebuilds `ignitionFirstSeen` + alert-dedup
