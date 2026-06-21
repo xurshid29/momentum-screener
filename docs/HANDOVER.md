@@ -6,13 +6,13 @@ the "where we are right now + what's open" layer on top of it. Memory files
 under `…/memory/` also carry the durable facts.
 
 **CURRENT FOCUS (2026-06-21): Trade Journal — IBKR import + P&L calendar 📅,
-the first piece of the trade-journal/report system.** Built locally + verified
-(builds green, integration test vs real Postgres passes, P&L matches the
-operator's Tradervue to the penny) but **NOT yet committed/deployed** — operator
-pushes via VPN, and `dbmate up` (new `broker_imports` + `trade_executions`
-tables) runs on the CI deploy. See the top "What shipped" entry (TJ) for state +
-the next step (the screener-attribution join). No new env vars. Prior focus —
-the tick-feed detector 🛰️ — remains live with its own open items (entry 000000).
+the first piece of the trade-journal/report system. LIVE on prod + validated.**
+Deployed (3 pushes: feature + 2 follow-up fixes); the operator imported real May
++ June statements and **gross P&L matches their Tradervue to the penny** (net
+within ~4¢ — per-trade rounding, not a logic gap). See the top "What shipped"
+entry (TJ) for state + the next step (**the screener-attribution join — the
+actual payoff**). No new env vars. Prior focus — the tick-feed detector 🛰️ —
+remains live with its own open items (entry 000000).
 
 **CURRENT FOCUS (2026-06-18): the live tick-feed early-ignition detector 🛰️** —
 built, activated, validated in prod, and Option B shipped (catches → dashboard
@@ -59,10 +59,11 @@ but was committed (`3903b9e`) — **trust the commits/origin, not the tree.**
 
 ## What shipped this session (newest first, all on prod unless noted)
 
-TJ. **Trade Journal — IBKR import + Tradervue-style P&L calendar 📅 (2026-06-21, BUILT + VERIFIED LOCAL, not yet deployed).** New top-level `/journal` page (header Dashboard|Journal switch). Drag-drop an IBKR TradeLog `.tlg` → server parses + dedupes + stores; a month P&L calendar (net/gross toggle, green/red day cells with trade counts, weekly + monthly totals, month summary strip); click a day → round-trip drill-down.
-   - **Model:** `broker_imports` (file meta + sha256) + `trade_executions` (one row/fill, `UNIQUE(user_id, exec_id)` → idempotent re-import). Round-trip *trades* are **derived in code** (`services/ibkr-tlg.ts` `matchTrades`), not stored — flat-to-flat per symbol, P&L `−Σamount` (`+Σcommission` net), attributed to the **exit date** (overnight holds land on close day). Routes under `/api/trades` (import/calendar/day/imports + DELETE). `express.json` limit 100kb→5mb.
-   - **Validated:** reproduces the operator's Tradervue exactly — gross daily P&L matches to the penny across all 8 sample days (gross $327.88 / net $233.19); an integration test vs local Postgres confirms import → dedup (92 dupes skipped on re-upload) → calendar → drill-down. Migration applied + tested on a fresh local DB via `dbmate up`.
-   - **NEXT / OPEN:** (a) **the payoff** — join trades to `screener_outcomes` + detections on `(ticker, et_date)` for per-trade screener attribution (the "analyze the whole process" report). (b) Only IBKR `.tlg` STK_TRD parsed (options/futures records ignored). (c) One overnight trade's *count* differs from Tradervue by 1 (they also tally it on the open day); P&L unaffected. (d) Deploy: commit → CI runs `dbmate up`; no new env vars.
+TJ. **Trade Journal — IBKR import + Tradervue-style P&L calendar 📅 (2026-06-21, LIVE ON PROD + VALIDATED).** New top-level `/journal` page (header Dashboard|Journal switch). Drag-drop an IBKR TradeLog `.tlg` → server parses + dedupes + stores; a month P&L calendar (net/gross toggle, green/red day cells with trade counts, weekly + monthly totals, month summary strip); click a day → round-trip drill-down. The calendar auto-lands on the most recent month with trades (and jumps to the imported month after an import) so importing an older statement isn't an empty grid.
+   - **Model:** `broker_imports` (file meta + sha256) + `trade_executions` (one row/fill, `UNIQUE(user_id, exec_id)` → idempotent re-import; free-form text cols are `text` — IBKR open/close can be a sub-code like `C;IA`, venue can be a list). Round-trip *trades* are **derived in code** (`services/ibkr-tlg.ts` `matchTrades`), not stored — flat-to-flat per symbol, P&L `−Σamount` (`+Σcommission` net), attributed to the **exit date** (overnight holds land on close day). Routes under `/api/trades` (import/calendar/day/range/imports + DELETE). `express.json` limit 100kb→5mb.
+   - **Validated on prod:** the operator imported real **May + June** statements — **gross P&L matches their Tradervue to the penny** (May −$98.03, June $327.88); net within ~4¢ (per-trade cents rounding vs TV's sum-then-round — not a logic gap; commission totals agree to ~1¢). Day cells use compact whole-dollar formatting; the header keeps full cents. An integration test vs Postgres confirms import → dedup → calendar → drill-down.
+   - **Shipped as 3 pushes:** feature (`ebaabcd`) + fix: widen text cols for `C;IA` open/close (`37235b6`) + fix: calendar lands on the month with data (`9a9a33e`).
+   - **NEXT / OPEN:** (a) **the payoff (next big step)** — join trades to `screener_outcomes` + detections on `(ticker, et_date)` for per-trade screener attribution (the "analyze the whole process" report). (b) Only IBKR `.tlg` STK_TRD parsed (options/futures records ignored). (c) One overnight trade's *count* differs from Tradervue by 1 (they also tally it on the open day); P&L unaffected. (d) Optional: make net penny-exact (sum raw, round once) — currently ~4¢/mo off TV.
    - Aside: **charts investigation** (can the TV embed show 1s/10s off the Databento feed?) — **no** (closed iframe fetches its own 15-min-delayed data; free embed floors at 1-min). Path = Lightweight Charts aggregating our 1s feed, but needs bar capture+SSE+persistence. Written up in web-dashboard.md "TradingView free embed widget". Deferred.
 
 000000. **Live tick-feed early-ignition detector 🛰️ — BUILT, ACTIVATED, VALIDATED, + Option B shipped (2026-06-17→18).** Databento EQUS.MINI per-second feed catches an ignition START 30–90s before Finviz. Subscribed Standard/US-Equities ($199/mo flat, live EQUS.MINI included, $0 metered), `TICKFEED_ENABLED=true` on the droplet, stream/CRAM-auth works, healthy at scale (2.6k symbols, ~300k bars/day, no errors). **First prod win: MNTS caught 20 min before the momentum screen.** Additive edge — big wins on relvol-gated slow-burns, ties/trails on fast-starters Finviz's change gate catches.
