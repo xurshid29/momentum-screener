@@ -209,6 +209,20 @@ router.get('/day', authMiddleware, async (req, res) => {
   res.json({ data: { date: date.data, trades, summary: summarize(trades) } });
 });
 
+// ─── overall date span of a user's fills (so the UI can land on real data) ──
+router.get('/range', authMiddleware, async (req, res) => {
+  const db = getDb();
+  const row = await db
+    .selectFrom('trade_executions')
+    .select([
+      sql<string | null>`min(et_date)::text`.as('min'),
+      sql<string | null>`max(et_date)::text`.as('max'),
+    ])
+    .where('user_id', '=', req.user!.userId)
+    .executeTakeFirst();
+  res.json({ data: { min: row?.min ?? null, max: row?.max ?? null } });
+});
+
 // ─── import history ─────────────────────────────────────────────────────────
 router.get('/imports', authMiddleware, async (req, res) => {
   const db = getDb();

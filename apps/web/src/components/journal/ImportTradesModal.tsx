@@ -10,7 +10,9 @@ import type { BrokerImport, ImportResult } from '../../api/types';
 const { Dragger } = Upload;
 const { Text, Paragraph } = Typography;
 
-export function ImportTradesModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function ImportTradesModal(
+  { open, onClose, onImported }: { open: boolean; onClose: () => void; onImported?: (periodEnd: string | null) => void },
+) {
   const { message } = App.useApp();
   const qc = useQueryClient();
   const [result, setResult] = useState<ImportResult | null>(null);
@@ -21,6 +23,7 @@ export function ImportTradesModal({ open, onClose }: { open: boolean; onClose: (
     qc.invalidateQueries({ queryKey: ['trade-imports'] });
     qc.invalidateQueries({ queryKey: ['trade-calendar'] });
     qc.invalidateQueries({ queryKey: ['trade-day'] });
+    qc.invalidateQueries({ queryKey: ['trade-range'] });
   };
 
   const importMut = useMutation({
@@ -32,6 +35,9 @@ export function ImportTradesModal({ open, onClose }: { open: boolean; onClose: (
           (res.duplicates ? ` · ${res.duplicates} already on file` : ''),
       );
       invalidate();
+      // Jump the calendar to the imported statement's month so the data shows
+      // immediately (the page otherwise sits on the current, possibly empty month).
+      if (res.executions_imported > 0) onImported?.(res.period_end);
     },
     onError: (e: Error) => message.error(e.message || 'Import failed'),
   });

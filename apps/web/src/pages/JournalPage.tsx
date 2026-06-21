@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button, DatePicker, Segmented, Space, Typography, Spin, Empty } from 'antd';
 import { LeftOutlined, RightOutlined, ImportOutlined } from '@ant-design/icons';
 import dayjs, { type Dayjs } from 'dayjs';
@@ -19,6 +19,19 @@ export function JournalPage() {
 
   const from = month.startOf('month').format('YYYY-MM-DD');
   const to = month.endOf('month').format('YYYY-MM-DD');
+
+  // On first load, land on the most recent month that actually has trades —
+  // otherwise the calendar opens on the current month, which is empty if the
+  // user only imported older statements. Fires once; user navigation wins after.
+  const rangeQ = useQuery({ queryKey: ['trade-range'], queryFn: () => tradesApi.range() });
+  const didInit = useRef(false);
+  useEffect(() => {
+    if (didInit.current || !rangeQ.isSuccess) return;
+    didInit.current = true;
+    const max = rangeQ.data?.max;
+    if (max && !dayjs(max).isSame(month, 'month')) setMonth(dayjs(max));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rangeQ.isSuccess, rangeQ.data]);
 
   const calQ = useQuery({
     queryKey: ['trade-calendar', from, to],
@@ -102,7 +115,11 @@ export function JournalPage() {
         <PnlCalendar month={month} days={calQ.data?.days ?? []} mode={mode} onDayClick={setDay} />
       )}
 
-      <ImportTradesModal open={importOpen} onClose={() => setImportOpen(false)} />
+      <ImportTradesModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImported={(periodEnd) => { if (periodEnd) setMonth(dayjs(periodEnd)); }}
+      />
       <DayDetailModal date={day} onClose={() => setDay(null)} />
     </div>
   );

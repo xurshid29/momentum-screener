@@ -19,6 +19,11 @@ export const tradesApi = {
     return res.data;
   },
 
+  async range(): Promise<{ min: string | null; max: string | null }> {
+    const res = await apiClient.get<{ min: string | null; max: string | null }>('/api/trades/range');
+    return res.data;
+  },
+
   async imports(): Promise<BrokerImport[]> {
     const res = await apiClient.get<BrokerImport[]>('/api/trades/imports');
     return res.data;
