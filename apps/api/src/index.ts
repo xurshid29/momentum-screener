@@ -12,6 +12,7 @@ import authRouter from './routes/auth.js';
 import screenerRouter from './routes/screener.js';
 import newsRouter from './routes/news.js';
 import prefsRouter from './routes/prefs.js';
+import tradesRouter from './routes/trades.js';
 import { poller } from './services/poller.js';
 import { universe } from './services/universe.js';
 import { shelf } from './services/shelf.js';
@@ -37,7 +38,9 @@ const app = express();
 const port = process.env.PORT || 3001;
 
 app.use(cors());
-app.use(express.json());
+// 5mb (default is 100kb) — broker statement uploads (/api/trades/import) post the
+// raw .tlg text as JSON; a year of fills is still well under this.
+app.use(express.json({ limit: '5mb' }));
 
 app.get('/health', async (_req, res) => {
   const dbOk = await checkConnection();
@@ -59,6 +62,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/screener', screenerRouter);
 app.use('/api/news', newsRouter);
 app.use('/api/prefs', prefsRouter);
+app.use('/api/trades', tradesRouter);
 
 app.use((_req, res) => {
   res.status(404).json({ error: 'Not found' });

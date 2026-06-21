@@ -385,6 +385,82 @@ export interface ClassifyArticleResponse extends NewsClassification {
   cached: boolean;
 }
 
+// ─── trades / journal ───────────────────────────────────────────────────────
+// One ET trading day's realized P&L (round-trips attributed to their exit date).
+export interface DayAggregate {
+  et_date: string;
+  gross_pnl: number;
+  net_pnl: number;
+  commission: number;
+  trade_count: number;
+  win_count: number;
+  loss_count: number;
+}
+
+export interface TradesSummary {
+  net_pnl: number;
+  gross_pnl: number;
+  commission: number;
+  trade_count: number;
+  win_count: number;
+  loss_count: number;
+  win_rate: number | null;
+}
+
+export interface CalendarResponse {
+  from: string | null;
+  to: string | null;
+  days: DayAggregate[];
+  summary: TradesSummary;
+}
+
+// A flat-to-flat round trip in one symbol (the calendar-cell drill-down rows).
+export interface MatchedTrade {
+  symbol: string;
+  side: 'long' | 'short';
+  quantity: number;
+  entry_at: string;
+  exit_at: string;
+  et_date: string;
+  avg_entry: number | null;
+  avg_exit: number | null;
+  gross_pnl: number;
+  commission: number;
+  net_pnl: number;
+  fills: number;
+  is_open: boolean;
+}
+
+export interface DayDetail {
+  date: string;
+  trades: MatchedTrade[];
+  summary: TradesSummary;
+}
+
+export interface ImportResult {
+  import_id: string;
+  account: string | null;
+  account_name: string | null;
+  period_start: string | null;
+  period_end: string | null;
+  executions_seen: number;
+  executions_imported: number;
+  duplicates: number;
+  skipped: number;
+}
+
+export interface BrokerImport {
+  id: string;
+  broker: string;
+  filename: string | null;
+  account: string | null;
+  period_start: string | null;
+  period_end: string | null;
+  executions_seen: number;
+  executions_imported: number;
+  created_at: string;
+}
+
 // ─── prefs ─────────────────────────────────────────────────────────────────
 export interface ChartPref {
   user_id: string;

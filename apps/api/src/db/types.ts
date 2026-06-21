@@ -280,6 +280,49 @@ export interface UserWatchlistTable {
   updated_at: Generated<Date>;
 }
 
+// One uploaded broker statement file (IBKR TradeLog .tlg for now). Informational
+// metadata + a content hash; the actual dedup is per-fill on trade_executions.
+export interface BrokerImportsTable {
+  id: Generated<string>;
+  user_id: string;
+  broker: Generated<string>;
+  filename: string | null;
+  account: string | null;
+  file_hash: string | null;
+  period_start: ColumnType<string | null, string | null, string | null>;
+  period_end: ColumnType<string | null, string | null, string | null>;
+  executions_seen: Generated<number>;
+  executions_imported: Generated<number>;
+  created_at: Generated<Date>;
+}
+
+// One broker fill (leg). The source of truth — round-trip "trades" (flat-to-flat
+// per symbol) are derived in code (services/ibkr-tlg.ts), not stored. Unique on
+// (user_id, exec_id) so re-importing an overlapping file is idempotent.
+// `executed_at` is ET wall clock (no tz); `et_date` is the ET trading date used
+// for all calendar grouping. See db/migrations/…_broker_trades.sql.
+export interface TradeExecutionsTable {
+  id: Generated<string>;
+  user_id: string;
+  import_id: string | null;
+  exec_id: string;
+  symbol: string;
+  description: string | null;
+  venue: string | null;
+  side: string;                 // 'buy' | 'sell'
+  open_close: string | null;    // 'O' | 'C'
+  action_raw: string | null;
+  quantity: number;             // signed
+  multiplier: Generated<number>;
+  price: number;
+  amount: number;               // quantity × price, signed
+  commission: Generated<number>;
+  currency: Generated<string>;
+  executed_at: ColumnType<Date, Date | string, Date | string>;
+  et_date: ColumnType<string, string, string>;
+  created_at: Generated<Date>;
+}
+
 export interface Database {
   users: UsersTable;
   screener_settings: ScreenerSettingsTable;
@@ -298,4 +341,6 @@ export interface Database {
   user_hidden_tickers: UserHiddenTickersTable;
   user_watchlist: UserWatchlistTable;
   user_flagged_tickers: UserFlaggedTickersTable;
+  broker_imports: BrokerImportsTable;
+  trade_executions: TradeExecutionsTable;
 }

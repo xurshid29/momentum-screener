@@ -42,6 +42,8 @@ Postgres, migrations via `dbmate` in `db/migrations/`.
 | `user_filter_presets` | Per-user saved filters: `user_id`, `name`, `filter` (jsonb), `is_default` |
 | `user_panel_layout` | Per-user panel sizing/visibility: `user_id`, `layout` (jsonb) |
 | `user_chart_prefs` | Per-user chart slots: `user_id`, `slot` (1..4), `ticker`, `interval` |
+| `broker_imports` | Per-user uploaded broker statement (IBKR `.tlg`): `account`, `file_hash`, period, fill counts |
+| `trade_executions` | Per-user broker fills: `exec_id` (UNIQUE per user — idempotent re-import), `symbol`, `side`, signed `quantity`/`amount`, `commission`, `executed_at` (ET wall clock), `et_date`. Round-trip *trades* (flat-to-flat, P&L by exit date) are derived in `services/ibkr-tlg.ts`, not stored. Powers the `/journal` P&L calendar |
 
 ## Code Conventions
 
