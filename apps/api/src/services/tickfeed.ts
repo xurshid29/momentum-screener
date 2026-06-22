@@ -91,13 +91,28 @@ class TickFeedService {
       this.child = child;
       this.rl = createInterface({ input: child.stdout });
       this.rl.on('line', (line) => this.onBar(line));
-      child.stderr.on('data', (b) => process.stderr.write(`[tickfeed.py] ${b}`));
+      child.stderr.on('data', (b) => {
+        const s = String(b);
+        process.stderr.write(`[tickfeed.py] ${s}`);
+        // Surface real errors to /health so a wedged feed isn't silently shown
+        // as "running" (the 2026-06-22 Databento connection-limit incident,
+        // where bars_seen sat at 0 for ~21h with last_error null).
+        if (/error|bentoerror|connection limit|traceback/i.test(s)) {
+          this.lastError = s.replace(/\s+/g, ' ').trim().slice(0, 300);
+        }
+      });
       child.on('exit', (code) => {
         console.error(`[tickfeed] sidecar exited (code ${code}) — restarting`);
         this.child = null;
         if (this.running) setTimeout(() => this.spawnSidecar(), TICKFEED.restart_delay_ms);
       });
       console.log(`[tickfeed] sidecar spawned: ${TICKFEED.python} ${TICKFEED.sidecar}`);
+      // Re-send the universe shortly after every spawn (incl. respawns) so a
+      // restarted sidecar gets its SUB promptly instead of waiting for the
+      // 10-min sync timer and tripping its own 120s no-symbols exit. On the
+      // very first spawn the universe is usually still empty here — the +30s
+      // initial sync covers that; this matters for respawns.
+      setTimeout(() => { if (this.running && this.child === child) this.sync(); }, 3000);
     } catch (err) {
       this.lastError = err instanceof Error ? err.message : String(err);
       console.error('[tickfeed] failed to spawn sidecar:', this.lastError);
@@ -119,8 +134,14 @@ class TickFeedService {
     for (const [t, c] of priors) this.detector.setPriorClose(t, c);
     const syms = Array.from(universe.getUniverse());
     if (syms.length > 0 && this.child?.stdin.writable) {
-      this.child.stdin.write(`SUB ${syms.join(',')}\n`);
-      console.log(`[tickfeed] synced ${syms.length} symbols, ${priors.size} prior closes`);
+      // Chunk into modest SUB lines — a single 3000+-symbol line risked being
+      // split across the sidecar's stdin reads ("unknown command: …"). Each
+      // line is a complete, newline-terminated SUB it can parse independently.
+      const CHUNK = 400;
+      for (let i = 0; i < syms.length; i += CHUNK) {
+        this.child.stdin.write(`SUB ${syms.slice(i, i + CHUNK).join(',')}\n`);
+      }
+      console.log(`[tickfeed] synced ${syms.length} symbols (${Math.ceil(syms.length / CHUNK)} SUB lines), ${priors.size} prior closes`);
     }
   }
 
@@ -134,6 +155,7 @@ class TickFeedService {
     if (!m || typeof m.s !== 'string' || typeof m.c !== 'number') return;
     this.barsSeen++;
     this.lastBarAt = Date.now();
+    if (this.lastError) this.lastError = null; // bars flowing again — clear the stale error
     const bar: TickBar = { ts_sec: m.t, close: m.c, high: m.h, low: m.l, volume: m.v };
     const cand = this.detector.addBar(m.s, bar);
     if (cand) {
