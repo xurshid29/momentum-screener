@@ -1381,18 +1381,21 @@ class PollerService {
       .map((r) => r.ticker);
     const freshList = enriched.filter((r) => r.is_fresh_news).map((r) => r.ticker);
 
-    // Tick-feed catches for the dashboard 🛰️ section. A catch drops out once
-    // the screens catch up (it's now a normal Ignition/Momentum row, so don't
-    // double-show it) or after the TTL (it surged then faded, never confirmed).
+    // Tick-feed catches for the dashboard 🛰️ section — kept as a rolling
+    // "recent catches" feed for the TTL window so they're actually VISIBLE.
+    // We deliberately do NOT drop a catch the moment a screen picks the name
+    // up: the volume-led Ignition screen catches the same surge within a cycle
+    // or two, and pruning on that made every catch flash for only seconds →
+    // the section looked permanently empty (operator "never saw it work",
+    // 2026-06-23). A catch now shows its early metrics + "Xm ago" even once the
+    // name is also an Ignition row below — that's the point: it proves the tick
+    // feed flagged it first. Only the TTL prunes (surged-then-faded, or simply
+    // aged out of the recent window).
     const TICK_CATCH_TTL_MS = 15 * 60 * 1000;
     const nowMsTick = Date.now();
-    const screened = new Set<string>([
-      ...ignition.map((r) => r.ticker),
-      ...enriched.map((r) => r.ticker),
-    ]);
     const tickCatchList: TickCatch[] = [];
     for (const [t, tc] of this.tickCatches) {
-      if (screened.has(t) || nowMsTick - tc.caught_ms > TICK_CATCH_TTL_MS) {
+      if (nowMsTick - tc.caught_ms > TICK_CATCH_TTL_MS) {
         this.tickCatches.delete(t);
         continue;
       }
