@@ -404,6 +404,10 @@ class PollerService {
   private alertedFreshBurst = new Set<string>();
   // Tickers already Telegram-alerted as a new ignition today. See NEW_IGNITION.
   private alertedNewIgnition = new Set<string>();
+  // Tickers already Telegram-alerted as a live tick catch today (🛰️). Separate
+  // from `tickCatches` (15-min display TTL) so a re-catch after the dashboard
+  // row ages out doesn't re-ping — once per ticker per ET day.
+  private alertedTickCatch = new Set<string>();
   // Live tick-feed catches today, keyed by ticker (once per ticker per ET day).
   // Surfaced in the dashboard's 🛰️ section, NOT Telegram. Pruned each cycle
   // once the screens catch up or after TICK_CATCH_TTL_MS. See onTickCandidate.
@@ -694,6 +698,7 @@ class PollerService {
       this.alertedDualSignal.clear();
       this.alertedFreshBurst.clear();
       this.alertedNewIgnition.clear();
+      this.alertedTickCatch.clear();
       this.tickCatches.clear();
       this.seenInPremarketToday.clear();
       this.lastForcedSwingPostCloseDate = '';
@@ -1837,12 +1842,11 @@ class PollerService {
 
   // Live tick-feed candidate (🛰️) — TickFeedService caught an ignition START on
   // the Databento per-second tape, typically 30–90s before the Finviz screener
-  // surfaces it (validated: DSY/GLXG/BYAH 15–90s earlier, much lower chg). The
-  // detection rule already qualifies it (rel-vol surge + momentum on a low-float
-  // universe name), so this just fires the fast "look NOW" alert. Mutually
-  // exclusive with the poll-based paths: skip if any already alerted this name
-  // today, and mark all of them so the slower ≥65 / fresh-burst / new-ignition
-  // alerts don't re-ping the same ticker hours later. Once per ticker per ET day.
+  // surfaces it (validated: DSY/GLXG/BYAH 15–90s earlier, much lower chg). Records
+  // the catch for the dashboard 🛰️ section (15-min display TTL) and pushes a
+  // Telegram ping for every new catch (once per ticker per ET day) so it reaches
+  // the phone when away from the screen — the slower ≥65/dual/swing paths may
+  // still fire later for the same name with more context.
   onTickCandidate(c: TickCandidate): void {
     if (this.tickCatches.has(c.ticker)) return;   // once per ticker per ET day
     const nowMs = Date.now();
@@ -1855,15 +1859,17 @@ class PollerService {
       caught_at: new Date(nowMs).toISOString(),
       caught_ms: nowMs,
     });
-    // Dashboard-only — the operator's call (2026-06-17): a high-frequency
-    // "catch it early" signal belongs on a glanceable surface (the 🛰️ section
-    // of the Ignition sidebar), not as a Telegram push. Telegram is reserved
-    // for the rare high-conviction alerts (≥65 ignition, premium catalyst,
-    // dual-signal, swing). We still log every catch for observability.
     console.log(
       `[tickfeed] 🛰️ candidate ${c.ticker} $${c.price.toFixed(2)} ` +
       `${c.change_pct >= 0 ? '+' : ''}${c.change_pct.toFixed(1)}% · ${c.rel_vol}x rv · +${c.mom_pct.toFixed(0)}%/60s`,
     );
+    // Push every new tick catch to Telegram (operator's call 2026-06-23) so it
+    // reaches the phone when away from the dashboard — the missed-RDGT case.
+    // Once per ticker per ET day; the dashboard 🛰️ section still shows all catches.
+    if (telegramEnabled() && !this.alertsMuted && !this.alertedTickCatch.has(c.ticker)) {
+      this.alertedTickCatch.add(c.ticker);
+      void sendTelegram(formatTickCatchAlert(c));
+    }
   }
 
   // Fresh-burst alert — see the FRESH_BURST block for the evidence and tuning.
@@ -2042,8 +2048,22 @@ function formatNewIgnitionAlert(r: IgnitionRow, ageSec: number): string {
   return lines.filter(Boolean).join('\n');
 }
 
-// (formatTickAlert removed 2026-06-17 — tick catches are dashboard-only now,
-// surfaced via payload.tick_catches, not Telegram. See onTickCandidate.)
+// Render a live tick-feed catch (🛰️) — the per-second-tape early-ignition ping.
+// Light on context by design: the value is speed (open the chart NOW). Carries
+// the detection evidence (rel-vol surge + 60s momentum) + chart links.
+function formatTickCatchAlert(c: TickCandidate): string {
+  const price = `$${c.price.toFixed(2)}`;
+  const chg = `${c.change_pct >= 0 ? '+' : ''}${c.change_pct.toFixed(1)}%`;
+  const finviz = `https://finviz.com/quote.ashx?t=${encodeURIComponent(c.ticker)}`;
+  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(c.ticker)}`;
+  const lines = [
+    `🛰️ <b>${escapeHtml(c.ticker)}</b>  ${price}  ${chg}`,
+    `<b>LIVE TICK</b> — early ignition on the per-second tape`,
+    `RVol ${c.rel_vol.toFixed(1)}x · +${c.mom_pct.toFixed(0)}%/60s`,
+    `<a href="${finviz}">Finviz</a> · <a href="${tv}">TradingView</a>`,
+  ];
+  return lines.join('\n');
+}
 
 // Render a fresh-burst alert — a just-appeared nano-float with a violent
 // early volume read (see FRESH_BURST). Deliberately light on score context:

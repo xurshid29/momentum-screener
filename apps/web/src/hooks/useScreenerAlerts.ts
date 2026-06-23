@@ -1,10 +1,12 @@
 import { useEffect, useRef } from 'react';
 import type { CyclePayload } from '../api/types';
 
-// Browser equivalent of the bash script's audio + voice alerts. Priority:
-// 1) NEW + catalyst — distinct double-tone (highest, fires even on first poll)
-// 2) FRESH news (Benzinga delta) — single chime (suppressed on first cached payload)
-// We dedupe per cycle_id to survive accidental SSE re-deliveries.
+// Browser equivalent of the bash script's audio + voice alerts. Events:
+// • Live tick catch (🛰️) — radar ping, fires on each newly-appeared tick_catch
+// • NEW + catalyst — distinct double-tone (fires even on first poll)
+// • FRESH news (Benzinga delta) — single chime (suppressed on first cached payload)
+// We dedupe per cycle_id to survive accidental SSE re-deliveries, and track
+// already-seen tick tickers so a catch (which persists ~15 min) pings only once.
 
 let audioCtx: AudioContext | null = null;
 function ctx(): AudioContext {
@@ -61,6 +63,13 @@ function chime() {
   beep(880, 240, 0.24);    // A5
 }
 
+function radarPing() {
+  // Distinctive 2-tone "satellite" ping for a live tick catch (🛰️) — sits
+  // above the catalyst/news tones so it's recognisable as the early signal.
+  beep(1245, 150, 0, 0.5);     // D#6
+  beep(1660, 200, 0.15, 0.5);  // G#6
+}
+
 export function requestNotificationPermission() {
   if ('Notification' in window && Notification.permission === 'default') {
     void Notification.requestPermission();
@@ -83,15 +92,34 @@ export function useScreenerAlerts(payload: CyclePayload | null) {
   // Skip the very first payload (which is the cached snapshot the server pushes
   // immediately on subscribe — not a real new cycle).
   const seenFirst = useRef(false);
+  // Tick catches persist ~15 min (many payloads); track tickers we've already
+  // pinged so each catch alerts once, not every cycle.
+  const seenTicks = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!payload) return;
     if (handled.current.has(payload.cycle_id)) return;
     handled.current.add(payload.cycle_id);
 
+    const tickTickers = (payload.tick_catches ?? []).map((t) => t.ticker);
+
     if (!seenFirst.current) {
       seenFirst.current = true;
+      // Seed seen ticks so catches already on screen at load don't all ping.
+      tickTickers.forEach((t) => seenTicks.current.add(t));
       return;
+    }
+
+    // Live tick catches — ping each newly-appeared one, independent of the
+    // catalyst/news events below (a tick catch is its own signal).
+    const newTicks = tickTickers.filter((t) => !seenTicks.current.has(t));
+    newTicks.forEach((t) => seenTicks.current.add(t));
+    if (newTicks.length > 0) {
+      try { radarPing(); } catch { /* audio context not unlocked */ }
+      notify(
+        '🛰️ Live tick catch',
+        newTicks.length <= 3 ? newTicks.join(', ') : `${newTicks.length} new live ticks`,
+      );
     }
 
     const { new_with_catalyst, fresh_news } = payload.banners;
