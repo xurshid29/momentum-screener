@@ -88,6 +88,16 @@ const IGNITION = {
   // second-leg alert.
   alert_entry_chg_max: 100,
   new_window_ms: 120_000,  // a ticker stays flagged "new" for 2 min after first entering the set
+  // After-hours only: Finviz freezes relative volume at the 4pm close, so
+  // toAfterHoursFilter() (finviz.ts) drops the sh_relvol_o2 gate and the
+  // volume-led screen pulls in flat, low-volume names (LNKS +4%/0.2×, SCNI
+  // 0%/0.2×…). Re-impose the discriminator with OUR after-hours-aware RVol
+  // (rel_vol_5min/1min, computed from the AH volume deltas): an *established*
+  // AH ignition (past the new_window_ms cold-start) must show ≥ this much
+  // relative volume (percent; 100 = 1×). 100 = the lowest runner-score volume
+  // tier — junk reads ~0, real AH movers read 100s–10000s+. AH-only; regular/PM
+  // keep Finviz's live relvol gate.
+  ah_rvol_min: 100,
   // A transient empty Ignition fetch (the Finviz screener export occasionally
   // fails or returns an empty 200) shouldn't blank the sidebar or reset every
   // "new" flag. Reuse the last good list for up to this long before accepting
@@ -1302,7 +1312,17 @@ class PollerService {
       // 5-min RVol not yet measurable) must never be buried. Top rows are the
       // established names, ranked and capped. The payload carries both.
       const newIgnition = candidates.filter((r) => r.is_new);
-      const topIgnition = candidates.filter((r) => !r.is_new).slice(0, IGNITION.broadcast_n);
+      let established = candidates.filter((r) => !r.is_new);
+      // After-hours: the Finviz relvol gate is dropped (frozen at the 4pm close),
+      // so re-impose the volume discriminator on ESTABLISHED rows using our own
+      // AH-aware RVol. New rows are exempt — cold-start, their RVol isn't
+      // measurable in the first ~75s, comfortably inside the 2-min new window.
+      if (session === 'afterhours') {
+        established = established.filter(
+          (r) => Math.max(r.rel_vol_5min ?? 0, r.rel_vol_1min ?? 0) >= IGNITION.ah_rvol_min,
+        );
+      }
+      const topIgnition = established.slice(0, IGNITION.broadcast_n);
       ignition = [...newIgnition, ...topIgnition];
       this.lastIgnition = ignition;
       this.lastIgnitionAt = nowMs;
