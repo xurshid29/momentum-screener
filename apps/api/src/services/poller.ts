@@ -47,6 +47,15 @@ const DEFAULTS: ScreenerFilterSnapshot = {
   interval_sec: 20,
 };
 
+// After-hours momentum volume gate. In AH, Finviz freezes relative volume at the
+// 4pm close, so toAfterHoursFilter() drops the sh_relvol gate and the
+// change-gated momentum screen lets through names that "moved" >5% on a handful
+// of AH shares (BLIV +6.8% on 5 shares, GRAN +8.4% on 90). Re-impose a floor on
+// our own AH-aware RVol (rel_vol_5min/1min, from AH volume deltas; percent,
+// 100 = 1×). Freshly-appeared names are exempt (cold-start: RVol not measurable
+// for ~75s). Mirrors IGNITION.ah_rvol_min. AH-only — regular/PM are untouched.
+const AH_MOMENTUM = { rvol_min: 100, cold_start_ms: 120_000 };
+
 const DELTA_LOOKBACK_SEC = 1800;
 
 // Ignition screener — a second, volume-led screen run each cycle alongside the
@@ -1431,12 +1440,25 @@ class PollerService {
     }
     tickCatchList.sort((a, b) => b.caught_at.localeCompare(a.caught_at));
 
+    // After-hours: re-impose a volume gate on the momentum list. Finviz drops
+    // its relvol filter at the close, so names that ticked >5% on a few AH
+    // shares (BLIV on 5, GRAN on 90) otherwise flood it. Keep a row only if it
+    // shows real AH volume by our own metric, or it just appeared (cold-start,
+    // RVol not yet measurable). Regular/PM keep Finviz's live relvol gate.
+    const momentumRows = session === 'afterhours'
+      ? enriched.filter((r) => {
+          const firstSeenMs = Date.parse(r.first_seen_at);
+          const fresh = Number.isFinite(firstSeenMs) && nowMs - firstSeenMs <= AH_MOMENTUM.cold_start_ms;
+          return fresh || Math.max(r.rel_vol_5min ?? 0, r.rel_vol_1min ?? 0) >= AH_MOMENTUM.rvol_min;
+        })
+      : enriched;
+
     const payload: CyclePayload = {
       cycle_id: cycleId,
       polled_at: new Date().toISOString(),
       session,
       config: this.config,
-      rows: enriched,
+      rows: momentumRows,
       ignition,
       swing: scoredSwing,
       continuation: this.lastContinuation,
