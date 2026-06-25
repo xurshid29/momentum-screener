@@ -23,9 +23,6 @@ interface FormValues {
 
 const CHANGE_BUCKETS = [5, 10, 15, 20];                    // ta_change_<x>to
 const RELVOL_BUCKETS = [1, 1.5, 2, 3, 5, 10];               // sh_relvol_o<x>
-// Finviz only exposes these float buckets; we pick the smallest one >= floatMaxM
-// and post-filter to the exact value in the poller.
-const FLOAT_FINVIZ_BUCKETS = [1, 5, 10, 20, 50, 100];
 
 const DEFAULTS: FormValues = {
   stocksOnly: true,
@@ -62,14 +59,14 @@ function snapToBucket(value: number, buckets: number[]): number {
   return buckets.reduce((closest, b) => (Math.abs(b - value) < Math.abs(closest - value) ? b : closest), buckets[0]);
 }
 
-function floatBucket(maxM: number): number {
-  return FLOAT_FINVIZ_BUCKETS.find((b) => maxM <= b) ?? FLOAT_FINVIZ_BUCKETS[FLOAT_FINVIZ_BUCKETS.length - 1];
-}
-
 function buildFilter(v: FormValues): string {
+  // Deliberately NO sh_float token. Finviz's float "under" presets cap at 100M
+  // (so a 150–200M name like ILLR was silently excluded), and setting sh_float
+  // also makes Finviz drop null-float rows (legit nano-caps). The float ceiling
+  // is enforced in code via float_max_m (finviz.ts post-filter), which can
+  // express any value. See CLAUDE.md "Finviz avg_volume scale gotcha" §Float.
   const parts: string[] = [];
   if (v.stocksOnly) parts.push('ind_stocksonly');
-  parts.push(`sh_float_u${floatBucket(v.floatMaxM)}`);
   parts.push(`sh_price_${v.priceMin}to${v.priceMax}`);
   parts.push(`sh_relvol_o${v.relVolMin}`);
   parts.push(`ta_change_${v.changeMin}to`);
@@ -151,7 +148,12 @@ export function FiltersDialog({ open, onClose, config }: FiltersDialogProps) {
             />
           </Form.Item>
 
-          <Form.Item label="Max float (M)" name="floatMaxM" rules={[{ required: true }]}>
+          <Form.Item
+            label="Max float (M)"
+            name="floatMaxM"
+            rules={[{ required: true }]}
+            extra="Enforced server-side — any value works (incl. >100M)."
+          >
             <InputNumber min={0.1} step={1} style={{ width: '100%' }} />
           </Form.Item>
           <Form.Item label="Top N rows" name="topN" rules={[{ required: true }]}>
