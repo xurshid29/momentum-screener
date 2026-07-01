@@ -1,9 +1,20 @@
-# Session Handover — updated 2026-06-21
+# Session Handover — updated 2026-07-01
 
 A running handover so a fresh session can continue without re-deriving context.
 **Read `docs/web-dashboard.md` first** (the canonical status doc); this file is
 the "where we are right now + what's open" layer on top of it. Memory files
 under `…/memory/` also carry the durable facts.
+
+**CURRENT FOCUS (2026-07-01): EMA/MACD confluence signal — investigated + MEASURED,
+no standalone edge; ONE conditional test still open.** The operator noticed many
+ignition/momentum names "jump every few days," built a TradingView indicator
+(EMA 6/20 bull cross + MACD 12/26/9 confluence, testing 30m vs 1h) that *seemed*
+to fire before our ignition system, and wired ~all momentum-history tickers as
+1h alerts. We backtested it on free Yahoo intraday bars. **Verdict: it fires
+early (high recall) but has NO predictive edge — forward hit rate ≈ base rate
+(base-rate illusion + chart survivorship).** Full spec, numbers, and the one
+open follow-up (conditional-on-fresh-catalyst test) in the top research entry
+(EMAMACD) below. Prior focuses (Trade Journal, tick feed) remain live/valid.
 
 **CURRENT FOCUS (2026-06-21): Trade Journal — IBKR import + P&L calendar 📅,
 the first piece of the trade-journal/report system. LIVE on prod + validated.**
@@ -58,6 +69,14 @@ but was committed (`3903b9e`) — **trust the commits/origin, not the tree.**
 ---
 
 ## What shipped this session (newest first, all on prod unless noted)
+
+EMAMACD. **RESEARCH (not shipped) — EMA/MACD confluence has no standalone edge (2026-07-01).** Operator's manual TV strategy, investigated because many of our names "jump every few days" and his indicator seemed to lead our ignition. **Exact signal (locked from the TV MACD source):** on 30m or 1h — `crossover(EMA6, EMA20)` AND `hist>=0 AND hist>hist[1]` (the dark-green `#26a69a` histogram = above signal + expanding) AND `macd>macd[1]` (MACD line rising). Zero-line NOT required.
+   - **Method (free, reproducible — scripts were in the session scratchpad, now gone; re-derive from this):** Yahoo chart API `query1.finance.yahoo.com/v8/finance/chart/{TICKER}?interval=30m|1h&range=60d&includePrePost=true` (works locally, no auth). Universe = our ignition-history tickers (`ignition_results`, last 40d, one row/(ticker,ET-day) with `min(polled_at)` = our first detection, `max(change_pct)` = peak). **v1 lead-time** on 120 known movers (peak≥20%): does the signal fire in the 48h before our detection, and how early. **v2 precision** on all 472: from every fire, forward peak over 24h/72h vs a random-bar baseline (every 15th bar), right-censoring dropped.
+   - **v1 (lead):** 30m confluence fired before **68%** of ignitions, **median ~15h early** (30m EMA-only 73%/14h; 1h ~52–57%/~16h). Looks great in isolation — but that's the trap.
+   - **v2 (precision) — the verdict:** P(≥50% peak in 72h | fire) = **7.4–7.7%** (all TF/variants) vs **random-bar baseline 8.1–8.4%**. i.e. **~0.9× baseline — at or slightly BELOW chance.** Same at ≥20/≥30%, 24h/72h. The signal fires ~0.5–0.6×/ticker/day, so there's almost always a recent cross before any move (that's the "leads 68%"), but it does NOT concentrate moves better than random. The clean LGO/DXF/BTCT charts are **survivorship bias**. Slightly-below-baseline fits the operator's own "chasing/continuation is weak" thesis — an EMA cross means the first leg already happened.
+   - **On the two sub-questions:** MACD confluence vs EMA-only cuts alert *volume* ~20% (0.49 vs 0.61 fires/tk/day) with **identical** hit rate — filters quantity, not quality. 30m fires ~2× as often as 1h (0.61 vs 0.27) for the **same** edge.
+   - **Conclusion:** do NOT ship as a standalone signal/alert (firehose at base-rate accuracy — the "too many alerts" the operator already felt). "Measure first" saved building noise.
+   - **OPEN (the one salvage path, operator asked before closing the book):** **conditional test** — EMA/MACD-cross precision *restricted to detections that had a fresh bullish catalyst* (does entering at the cross beat entering at our detection, on catalyst names only?). Aligns with the catalyst-is-#1 thesis. Not yet run.
 
 FLT. **Float filter bug — momentum silently capped at 100M (found + FIXED 2026-06-23).** Operator: "ILLR didn't appear; I raised Max float to 200M but still nothing." There are TWO float controls: the Finviz `sh_float_u<bucket>` token in the filter *string* and the code-side `float_max_m` post-filter (finviz.ts). `FiltersDialog.floatBucket()` mapped Max-float to Finviz's "under" presets which **cap at 100M** (`[1,5,10,20,50,100]`) and on no-match fell back to 100 — so Max-float=200 emitted `sh_float_u100`, and Finviz dropped ILLR (float **177.5M**) before `float_max_m=200` ever applied. Also violated CLAUDE.md ("never put Float in the Finviz filter string" — it drops null-float nano-caps; the code DEFAULTS correctly omit it). **Fix:** (1) live config PATCHed to drop `sh_float_u100` → ILLR shows now (verified #1 in a Finviz probe; it was +296% today, passed price/relvol/change — only the 100M cap excluded it). (2) `buildFilter()` no longer emits any `sh_float` token — float ceiling is solely `float_max_m` (expresses any value); removed the unused `floatBucket`/`FLOAT_FINVIZ_BUCKETS`; added a "enforced server-side — any value works" hint on the Max-float field. **Note:** the dialog rebuilds the whole filter string on submit, so a future Max-float edit will no longer re-introduce the cap.
 
