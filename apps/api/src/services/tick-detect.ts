@@ -59,6 +59,12 @@ export const TICK_DETECT = {
   confirm_hold_sec: 120,   // min watch age before a sustain-confirm
   confirm_ext_pts: 3,      // chg% must extend ≥ this beyond the watch flag
   confirm_notional_min: 25000, // $ traded since the flag (feed-visible)
+  // Express lane — a vertical move that extends far beyond the flag on real
+  // notional IS sustained participation; don't sit out the full hold while
+  // the name doubles (CETX 2026-07-02: flagged +39%, +106% ninety seconds
+  // later, still "pending").
+  confirm_fast_hold_sec: 30,
+  confirm_fast_ext_pts: 20,
 
   // FADE — watch expired or the move gave itself back.
   fade_giveback: 0.6,      // fraction of the watch-flag move given back
@@ -265,9 +271,13 @@ export class TickDetector {
     // 3) Sustain-confirm / fade — only while watching.
     if (st.phase === 'watching' && st.watch) {
       const age = bar.ts_sec - st.watch.ts_sec;
+      const ext = cum - st.watch.change_pct;
+      const heldLongEnough =
+        age >= TICK_DETECT.confirm_hold_sec ||
+        (age >= TICK_DETECT.confirm_fast_hold_sec && ext >= TICK_DETECT.confirm_fast_ext_pts);
       if (
-        age >= TICK_DETECT.confirm_hold_sec &&
-        cum >= st.watch.change_pct + TICK_DETECT.confirm_ext_pts &&
+        heldLongEnough &&
+        ext >= TICK_DETECT.confirm_ext_pts &&
         bar.close >= st.watch.price &&
         st.watch.notionalSince >= TICK_DETECT.confirm_notional_min &&
         pos >= TICK_DETECT.near_high

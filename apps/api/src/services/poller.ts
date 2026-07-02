@@ -1455,29 +1455,33 @@ class PollerService {
     for (const r of enriched) screenRowByTicker.set(r.ticker, r);
     const tickCatchList: TickCatch[] = [];
     for (const [t, tc] of this.tickCatches) {
+      const row = screenRowByTicker.get(t);
       // A screen returning the name only counts as volume confirmation when
       // the screen did NOT already hold it at watch time — otherwise it's
       // pre-existing state, and the watch waits for surge/sustain instead.
-      if (tc.status === 'watch' && !tc.screened_at_watch) {
-        const row = screenRowByTicker.get(t);
-        if (row) {
-          tc.status = 'confirmed';
-          tc.confirmed_at = new Date(nowMsTick).toISOString();
-          tc.last_event_ms = nowMsTick;
-          if (row.price != null) tc.price = row.price;
-          if (row.change_pct != null) tc.change_pct = row.change_pct;
-          console.log(
-            `[tickfeed] 🛰️ confirm(screen) ${t} ` +
-            `${tc.change_pct >= 0 ? '+' : ''}${tc.change_pct.toFixed(1)}%` +
-            (tc.watch_change_pct != null ? ` (watched at +${tc.watch_change_pct.toFixed(1)}%)` : ''),
-          );
-          if (telegramEnabled() && !this.alertsMuted && !this.alertedTickCatch.has(t)) {
-            this.alertedTickCatch.add(t);
-            void sendTelegram(formatTickConfirmAlert(
-              t, tc.price, tc.change_pct, tc.rel_vol, tc.mom_pct, tc.watch_change_pct, 'screen',
-            ));
-          }
+      if (tc.status === 'watch' && !tc.screened_at_watch && row) {
+        tc.status = 'confirmed';
+        tc.confirmed_at = new Date(nowMsTick).toISOString();
+        tc.last_event_ms = nowMsTick;
+        console.log(
+          `[tickfeed] 🛰️ confirm(screen) ${t} ` +
+          `${(row.change_pct ?? tc.change_pct) >= 0 ? '+' : ''}${(row.change_pct ?? tc.change_pct).toFixed(1)}%` +
+          (tc.watch_change_pct != null ? ` (watched at +${tc.watch_change_pct.toFixed(1)}%)` : ''),
+        );
+        if (telegramEnabled() && !this.alertsMuted && !this.alertedTickCatch.has(t)) {
+          this.alertedTickCatch.add(t);
+          void sendTelegram(formatTickConfirmAlert(
+            t, row.price ?? tc.price, row.change_pct ?? tc.change_pct, tc.rel_vol, tc.mom_pct, tc.watch_change_pct, 'screen',
+          ));
         }
+      }
+      // Keep displayed price/chg live for names the screens also carry — a
+      // watch row frozen at its flag values reads as broken next to an
+      // Ignition row showing +106% (the CETX case). The flag point itself
+      // stays in watch_change_pct (the ⚑ marker).
+      if (row && tc.status !== 'faded') {
+        if (row.price != null) tc.price = row.price;
+        if (row.change_pct != null) tc.change_pct = row.change_pct;
       }
       const ttl = tc.status === 'faded' ? TICK_FADE_LINGER_MS : TICK_CATCH_TTL_MS;
       if (nowMsTick - tc.last_event_ms > ttl) {

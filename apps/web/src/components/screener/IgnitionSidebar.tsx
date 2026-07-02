@@ -250,8 +250,11 @@ function TickItem({ tc, selected, onSelect }: { tc: TickCatch; selected: boolean
   if (status === 'watch') meta.push('👀 pending');
   if (status === 'faded') meta.push('faded');
   if (tc.rel_vol > 0) meta.push(`${Math.round(tc.rel_vol)}× rv`);
-  // Confirmed after an early flag — show where the flag was planted (the lead).
-  if (status === 'confirmed' && tc.watch_change_pct != null && tc.confirmed_at !== tc.caught_at) {
+  // Where the flag was planted (the lead) — shown whenever it's known and the
+  // name has moved since. Rows refresh price/chg live from the screens, so a
+  // watch row can read +106% with a ⚑ +39% flag (CETX) and a direct confirm
+  // still carries its detector-side flag (CLRO).
+  if (tc.watch_change_pct != null && Math.round(tc.watch_change_pct) !== Math.round(num(tc.change_pct) ?? tc.watch_change_pct)) {
     meta.push(`⚑ +${Math.round(tc.watch_change_pct)}%`);
   }
   meta.push(`${ago} ago`);
