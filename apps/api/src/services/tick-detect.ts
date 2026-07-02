@@ -90,6 +90,12 @@ export interface TickEvent {
   via?: 'surge' | 'sustain';
   // feed-visible $ traded since the watch flag — calibration telemetry.
   notional?: number;
+  // watch events: true when we OBSERVED the cross — the symbol traded below
+  // watch_cum_min in our own bar history before crossing it. False = first
+  // sight was already above the line (gapper, mid-move subscribe, or a
+  // restart re-seeing an old move). Lets the poller tell a live development
+  // from stale state (the AUID case, 2026-07-02).
+  fresh_cross?: boolean;
 }
 
 type Phase = 'idle' | 'watching' | 'confirmed' | 'faded';
@@ -106,6 +112,7 @@ interface SymbolState {
   quietVols: number[];      // rolling trailing-60s share-vols sampled while quiet
   phase: Phase;
   watch: WatchAnchor | null;
+  seenBelowWatch: boolean;  // ever traded below watch_cum_min in our history
   diagnosed: boolean;       // logged a near-miss reason once (see drainDiagnostics)
 }
 
@@ -158,7 +165,7 @@ export class TickDetector {
 
     let st = this.state.get(ticker);
     if (!st) {
-      st = { bars: [], quietVols: [], phase: 'idle', watch: null, diagnosed: false };
+      st = { bars: [], quietVols: [], phase: 'idle', watch: null, seenBelowWatch: false, diagnosed: false };
       this.state.set(ticker, st);
     }
     st.bars.push(bar);
@@ -190,6 +197,8 @@ export class TickDetector {
     const cum = (bar.close / prior - 1) * 100;
     const mom = basePrice > 0 ? (bar.close / basePrice - 1) * 100 : 0;
     const pos = whi > wlo ? (bar.close - wlo) / (whi - wlo) : 1;
+
+    if (cum < TICK_DETECT.watch_cum_min) st.seenBelowWatch = true;
 
     // While the name is still quiet, record its trailing-60s volume as a
     // baseline sample (rolling). Once it's moving (cum >= mom_min) we stop, so
@@ -250,7 +259,7 @@ export class TickDetector {
     ) {
       st.phase = 'watching';
       st.watch = { ts_sec: bar.ts_sec, price: bar.close, change_pct: +cum.toFixed(2), notionalSince: 0 };
-      return ev('watch');
+      return { ...ev('watch'), fresh_cross: st.seenBelowWatch };
     }
 
     // 3) Sustain-confirm / fade — only while watching.

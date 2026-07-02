@@ -440,8 +440,11 @@ class PollerService {
   private alertedTickWatch = new Set<string>();
   // Live tick-feed catches today, keyed by ticker. Surfaced in the dashboard's
   // 🛰️ section; pruned by status-aware TTLs in the payload build. last_event_ms
-  // tracks the latest transition (watch/confirm/fade) for those TTLs.
-  private tickCatches = new Map<string, TickCatch & { last_event_ms: number }>();
+  // tracks the latest transition (watch/confirm/fade) for those TTLs;
+  // screened_at_watch records whether a screen ALREADY held the name when the
+  // watch was flagged — if so, screen presence is not fresh volume evidence
+  // and must not promote the watch (only surge/sustain can).
+  private tickCatches = new Map<string, TickCatch & { last_event_ms: number; screened_at_watch?: boolean }>();
   // Tickers that have traded in an Ignition pre-market cycle today. Feeds the
   // runner-score's pre-market-exhaustion penalty (a name that already ran in PM
   // gives back into the close). ET-day concept — cleared at midnight.
@@ -1452,7 +1455,10 @@ class PollerService {
     for (const r of enriched) screenRowByTicker.set(r.ticker, r);
     const tickCatchList: TickCatch[] = [];
     for (const [t, tc] of this.tickCatches) {
-      if (tc.status === 'watch') {
+      // A screen returning the name only counts as volume confirmation when
+      // the screen did NOT already hold it at watch time — otherwise it's
+      // pre-existing state, and the watch waits for surge/sustain instead.
+      if (tc.status === 'watch' && !tc.screened_at_watch) {
         const row = screenRowByTicker.get(t);
         if (row) {
           tc.status = 'confirmed';
@@ -1947,12 +1953,16 @@ class PollerService {
     const existing = this.tickCatches.get(e.ticker);
     if (e.type === 'watch') {
       if (existing) return; // shouldn't happen (detector watches once/day) — keep idempotent
-      // A name ALREADY on a screen needs no early flag — it's visible below
-      // with score/catalyst context, and the watch would self-confirm via the
-      // screen on the next cycle (double ping for zero information). The tick
-      // watch tier exists for names the screens haven't returned yet.
-      if (this.isCurrentlyScreened(e.ticker)) {
-        console.log(`[tickfeed] 👀 watch ${e.ticker} suppressed — already on a screen`);
+      // Suppress only STALE watches on already-screened names: first sight was
+      // already above the watch line (restart re-seeing an old move, mid-move
+      // subscribe) AND the screens already show it — a 👀 there is old news.
+      // A FRESH cross (we observed the name trade below the line, then cross
+      // it) alerts even when the name is on a screen: a non-catalyst screen
+      // row generates no push of its own, so the watch ping IS the operator's
+      // early warning (the missed-AUID case, 2026-07-02).
+      const onScreen = this.isCurrentlyScreened(e.ticker);
+      if (onScreen && !e.fresh_cross) {
+        console.log(`[tickfeed] 👀 watch ${e.ticker} suppressed — stale (first sight already +${e.change_pct.toFixed(0)}%), on a screen`);
         return;
       }
       this.tickCatches.set(e.ticker, {
@@ -1966,10 +1976,12 @@ class PollerService {
         confirmed_at: null,
         watch_change_pct: e.change_pct,
         last_event_ms: nowMs,
+        screened_at_watch: onScreen,
       });
       console.log(
         `[tickfeed] 👀 watch ${e.ticker} $${e.price.toFixed(2)} ` +
-        `${e.change_pct >= 0 ? '+' : ''}${e.change_pct.toFixed(1)}% · ${e.rel_vol}x rv · +${e.mom_pct.toFixed(0)}%/60s`,
+        `${e.change_pct >= 0 ? '+' : ''}${e.change_pct.toFixed(1)}% · ${e.rel_vol}x rv · +${e.mom_pct.toFixed(0)}%/60s` +
+        ` · ${e.fresh_cross ? 'fresh cross' : 'seen mid-move'}${onScreen ? ', on screen' : ''}`,
       );
       if (telegramEnabled() && !this.alertsMuted && !this.alertedTickWatch.has(e.ticker)) {
         this.alertedTickWatch.add(e.ticker);
