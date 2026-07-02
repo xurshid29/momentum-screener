@@ -58,6 +58,8 @@ class TickFeedService {
   // Screener-row symbols subscribed OUTSIDE the structural universe (fast-sync
   // path). Re-SUBbed alongside the universe so sidecar respawns keep them.
   private extraSubs = new Set<string>();
+  // AH rows with a daily-close lookup in flight — dedupes the 30s sync ticks.
+  private pendingPrior = new Set<string>();
 
   status() {
     return {
@@ -179,6 +181,27 @@ class TickFeedService {
         this.detector.setPriorClose(tk, r.price / (1 + r.change_pct / 100));
         this.extraSubs.add(tk);
         fresh.push(tk);
+      }
+    } else {
+      // After-hours: row change/price are the AH overlay (anchored to TODAY's
+      // close), so deriving a prior from them is wrong. Anchor on the latest
+      // stored daily close instead — same as news-radar arming. Without this,
+      // an AH runner outside the structural universe (whose membership is
+      // frozen after 4pm) stays invisible to the detector for its entire run
+      // (UPC 2026-07-02: on Momentum at 16:03 ET, first tick bar 16:33).
+      for (const r of [...payload.rows, ...payload.ignition]) {
+        const tk = r.ticker.toUpperCase();
+        if (this.detector.hasPriorClose(tk) || this.extraSubs.has(tk) || this.pendingPrior.has(tk)) continue;
+        this.pendingPrior.add(tk);
+        void poller.lookupPriorClose(tk).then((pc) => {
+          this.pendingPrior.delete(tk);
+          if (pc == null || pc <= 0) return;
+          if (this.detector.hasPriorClose(tk) || this.extraSubs.has(tk)) return;
+          this.detector.setPriorClose(tk, pc);
+          this.extraSubs.add(tk);
+          this.subscribe([tk]);
+          console.log(`[tickfeed] screen-sync (AH) — subscribed ${tk} (daily close $${pc})`);
+        });
       }
     }
     for (const n of payload.news_radar ?? []) {

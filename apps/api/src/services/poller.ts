@@ -686,8 +686,9 @@ class PollerService {
 
   // Latest stored daily close for a ticker — the prior-session close the tick
   // detector measures change% against. Names in our 30d history almost always
-  // have daily_bars coverage (outcome tracking backfills them).
-  private async lookupPriorClose(ticker: string): Promise<number | null> {
+  // have daily_bars coverage (outcome tracking backfills them). Public: the
+  // tick feed uses it to anchor after-hours screen-row subscriptions too.
+  async lookupPriorClose(ticker: string): Promise<number | null> {
     try {
       const row = await getDb()
         .selectFrom('daily_bars')
@@ -1666,25 +1667,32 @@ class PollerService {
         tc.status = 'confirmed';
         tc.confirmed_at = new Date(nowMsTick).toISOString();
         tc.last_event_ms = nowMsTick;
+        // Same anchor rule as the refresh below: AH row change is today-close
+        // anchored — don't mix it with the prior-day-anchored ⚑ flag.
+        const chg = (session !== 'afterhours' ? row.change_pct : null) ?? tc.change_pct;
         console.log(
           `[tickfeed] 🛰️ confirm(screen) ${t} ` +
-          `${(row.change_pct ?? tc.change_pct) >= 0 ? '+' : ''}${(row.change_pct ?? tc.change_pct).toFixed(1)}%` +
+          `${chg >= 0 ? '+' : ''}${chg.toFixed(1)}%` +
           (tc.watch_change_pct != null ? ` (watched at +${tc.watch_change_pct.toFixed(1)}%)` : ''),
         );
         if (telegramEnabled() && !this.alertsMuted && !this.alertedTickCatch.has(t)) {
           this.alertedTickCatch.add(t);
           void sendTelegram(formatTickConfirmAlert(
-            t, row.price ?? tc.price, row.change_pct ?? tc.change_pct, tc.rel_vol, tc.mom_pct, tc.watch_change_pct, 'screen',
+            t, row.price ?? tc.price, chg, tc.rel_vol, tc.mom_pct, tc.watch_change_pct, 'screen',
           ));
         }
       }
       // Keep displayed price/chg live for names the screens also carry — a
       // watch row frozen at its flag values reads as broken next to an
       // Ignition row showing +106% (the CETX case). The flag point itself
-      // stays in watch_change_pct (the ⚑ marker).
+      // stays in watch_change_pct (the ⚑ marker). In AFTER-HOURS the row's
+      // change is the AH overlay (anchored to today's close) while the
+      // detector's ⚑ is prior-day-anchored — mixing them read as a pullback
+      // that never happened (UPC: "⚑ +56%" beside "+29.11%"), so only the
+      // anchor-free price refreshes there.
       if (row && tc.status !== 'faded') {
         if (row.price != null) tc.price = row.price;
-        if (row.change_pct != null) tc.change_pct = row.change_pct;
+        if (row.change_pct != null && session !== 'afterhours') tc.change_pct = row.change_pct;
       }
       const ttl = tc.status === 'faded' ? TICK_FADE_LINGER_MS : TICK_CATCH_TTL_MS;
       if (nowMsTick - tc.last_event_ms > ttl) {
