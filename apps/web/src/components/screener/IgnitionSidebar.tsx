@@ -181,7 +181,7 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
             borderBottom: '2px solid #1765ad',
           }}
         >
-          <SectionHeader label="🛰️ LIVE TICKS" count={tickCatches.length} color="#40a9ff" />
+          <SectionHeader label="🛰️ LIVE TICKS" count={tickCatches.filter((t) => t.status !== 'faded').length} color="#40a9ff" />
           {tickCatches.map((tc) => (
             <TickItem key={tc.ticker} tc={tc} selected={tc.ticker === selected} onSelect={setSelected} />
           ))}
@@ -231,19 +231,39 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
 }
 
 // A live tick-feed catch row — lighter than an ignition row (no score yet; the
-// screens haven't returned it). Shows the surge read + how long ago, clickable
-// to chart it. The 🛰️ blue palette distinguishes it from scored ignitions.
+// screens haven't returned it). Two-tier styling: 👀 watch = amber (price-led
+// flag, confirmation pending), 🛰️ confirmed = blue (volume-confirmed), faded =
+// grey and dimmed (expired watch, lingers briefly). Clickable to chart it.
+const TICK_STYLES = {
+  watch:     { border: '#d48806', ticker: '#ffd666', row: '#3a2e10' },
+  confirmed: { border: '#1890ff', ticker: '#69c0ff', row: '#14304a' },
+  faded:     { border: '#595959', ticker: '#8c8c8c', row: '#262626' },
+} as const;
+
 function TickItem({ tc, selected, onSelect }: { tc: TickCatch; selected: boolean; onSelect: (t: string) => void }) {
-  const agoMs = Date.now() - new Date(tc.caught_at).getTime();
+  const status = tc.status ?? 'confirmed';
+  const s = TICK_STYLES[status];
+  const anchor = (status === 'confirmed' && tc.confirmed_at) ? tc.confirmed_at : tc.caught_at;
+  const agoMs = Date.now() - new Date(anchor).getTime();
   const ago = agoMs < 60_000 ? `${Math.round(agoMs / 1000)}s` : `${Math.round(agoMs / 60_000)}m`;
+  const meta: string[] = [];
+  if (status === 'watch') meta.push('👀 pending');
+  if (status === 'faded') meta.push('faded');
+  if (tc.rel_vol > 0) meta.push(`${Math.round(tc.rel_vol)}× rv`);
+  // Confirmed after an early flag — show where the flag was planted (the lead).
+  if (status === 'confirmed' && tc.watch_change_pct != null && tc.confirmed_at !== tc.caught_at) {
+    meta.push(`⚑ +${Math.round(tc.watch_change_pct)}%`);
+  }
+  meta.push(`${ago} ago`);
   return (
     <div
       onClick={() => onSelect(tc.ticker)}
       style={{
         display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
-        padding: '5px 8px', borderBottom: '1px solid #14304a', cursor: 'pointer',
-        borderLeft: '3px solid #1890ff',
+        padding: '5px 8px', borderBottom: `1px solid ${s.row}`, cursor: 'pointer',
+        borderLeft: `3px solid ${s.border}`,
         background: selected ? '#15395b' : undefined,
+        opacity: status === 'faded' ? 0.55 : 1,
       }}
     >
       <span style={{ minWidth: 0 }}>
@@ -254,10 +274,10 @@ function TickItem({ tc, selected, onSelect }: { tc: TickCatch; selected: boolean
           ticker={tc.ticker}
           onSelect={onSelect}
           stopPropagation
-          style={{ color: '#69c0ff', fontWeight: 600, fontSize: 13 }}
+          style={{ color: s.ticker, fontWeight: 600, fontSize: 13 }}
         />
         <span style={{ marginLeft: 6, fontSize: 10, color: '#8c8c8c' }}>
-          {Math.round(tc.rel_vol)}× rv · {ago} ago
+          {meta.join(' · ')}
         </span>
       </span>
       <span style={{ flex: '0 0 auto' }}>

@@ -2,11 +2,13 @@ import { useEffect, useRef } from 'react';
 import type { CyclePayload } from '../api/types';
 
 // Browser equivalent of the bash script's audio + voice alerts. Events:
-// • Live tick catch (🛰️) — radar ping, fires on each newly-appeared tick_catch
+// • Tick WATCH (👀) — soft single ping, price-led early flag from the tick feed
+// • Tick CONFIRMED (🛰️) — radar ping, the volume-confirmed tier
 // • NEW + catalyst — distinct double-tone (fires even on first poll)
 // • FRESH news (Benzinga delta) — single chime (suppressed on first cached payload)
 // We dedupe per cycle_id to survive accidental SSE re-deliveries, and track
-// already-seen tick tickers so a catch (which persists ~15 min) pings only once.
+// already-seen (ticker, tier) pairs so a catch (which persists ~15 min) pings
+// once per tier — a real runner gives exactly two pings: flag, then confirm.
 
 let audioCtx: AudioContext | null = null;
 function ctx(): AudioContext {
@@ -64,10 +66,16 @@ function chime() {
 }
 
 function radarPing() {
-  // Distinctive 2-tone "satellite" ping for a live tick catch (🛰️) — sits
+  // Distinctive 2-tone "satellite" ping for a CONFIRMED tick catch (🛰️) — sits
   // above the catalyst/news tones so it's recognisable as the early signal.
   beep(1245, 150, 0, 0.5);     // D#6
   beep(1660, 200, 0.15, 0.5);  // G#6
+}
+
+function watchPing() {
+  // Single soft tone for a tick WATCH (👀) — the price-led early flag. Quieter
+  // and lower than the confirm radar ping: a heads-up, not a conviction call.
+  beep(990, 180, 0, 0.35);     // B5
 }
 
 export function requestNotificationPermission() {
@@ -92,8 +100,8 @@ export function useScreenerAlerts(payload: CyclePayload | null) {
   // Skip the very first payload (which is the cached snapshot the server pushes
   // immediately on subscribe — not a real new cycle).
   const seenFirst = useRef(false);
-  // Tick catches persist ~15 min (many payloads); track tickers we've already
-  // pinged so each catch alerts once, not every cycle.
+  // Tick catches persist ~15 min (many payloads); track (ticker, tier) keys
+  // we've already pinged so each catch alerts once per tier, not every cycle.
   const seenTicks = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -101,24 +109,35 @@ export function useScreenerAlerts(payload: CyclePayload | null) {
     if (handled.current.has(payload.cycle_id)) return;
     handled.current.add(payload.cycle_id);
 
-    const tickTickers = (payload.tick_catches ?? []).map((t) => t.ticker);
+    const tickKeys = (payload.tick_catches ?? [])
+      .filter((t) => t.status !== 'faded')
+      .map((t) => ({ key: `${t.ticker}:${t.status ?? 'confirmed'}`, ticker: t.ticker, status: t.status ?? 'confirmed' }));
 
     if (!seenFirst.current) {
       seenFirst.current = true;
       // Seed seen ticks so catches already on screen at load don't all ping.
-      tickTickers.forEach((t) => seenTicks.current.add(t));
+      tickKeys.forEach((t) => seenTicks.current.add(t.key));
       return;
     }
 
-    // Live tick catches — ping each newly-appeared one, independent of the
-    // catalyst/news events below (a tick catch is its own signal).
-    const newTicks = tickTickers.filter((t) => !seenTicks.current.has(t));
-    newTicks.forEach((t) => seenTicks.current.add(t));
-    if (newTicks.length > 0) {
+    // Live tick events — ping each new (ticker, tier) once, independent of the
+    // catalyst/news events below (a tick catch is its own signal). A watch that
+    // gets confirmed pings again with the stronger tone.
+    const newTicks = tickKeys.filter((t) => !seenTicks.current.has(t.key));
+    newTicks.forEach((t) => seenTicks.current.add(t.key));
+    const newConfirmed = newTicks.filter((t) => t.status === 'confirmed').map((t) => t.ticker);
+    const newWatches = newTicks.filter((t) => t.status === 'watch').map((t) => t.ticker);
+    if (newConfirmed.length > 0) {
       try { radarPing(); } catch { /* audio context not unlocked */ }
       notify(
-        '🛰️ Live tick catch',
-        newTicks.length <= 3 ? newTicks.join(', ') : `${newTicks.length} new live ticks`,
+        '🛰️ Live tick confirmed',
+        newConfirmed.length <= 3 ? newConfirmed.join(', ') : `${newConfirmed.length} confirmed live ticks`,
+      );
+    } else if (newWatches.length > 0) {
+      try { watchPing(); } catch { /* audio context not unlocked */ }
+      notify(
+        '👀 Tick watch — confirmation pending',
+        newWatches.length <= 3 ? newWatches.join(', ') : `${newWatches.length} new tick watches`,
       );
     }
 

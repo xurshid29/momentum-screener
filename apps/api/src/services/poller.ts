@@ -21,7 +21,7 @@ import { fetchHalts, type TradeHalt } from './halts.js';
 import { broadcast } from './sse.js';
 import { sendTelegram, telegramEnabled, escapeHtml } from './telegram.js';
 import { scoreRunner, type RunnerScoreBreakdown } from './runner-score.js';
-import type { TickCandidate } from './tick-detect.js';
+import type { TickEvent } from './tick-detect.js';
 import {
   scoreSwing,
   type SwingScoreBreakdown,
@@ -209,16 +209,24 @@ const DUAL_SIGNAL = {
 };
 
 // A live tick-feed catch surfaced in the dashboard (the 🛰️ section of the
-// Ignition sidebar) — a name the per-second detector caught surging BEFORE the
-// Finviz screens returned it. Drops out once the screens catch up (it becomes a
-// normal row) or after a TTL if it faded. Dashboard-only — see onTickCandidate.
+// Ignition sidebar) — a name the per-second detector flagged BEFORE the Finviz
+// screens returned it. Two-tier (2026-07-02): 'watch' = price-led early flag
+// (👀 amber, confirmation pending), 'confirmed' = volume-confirmed ignition
+// (🛰️ blue — the surge rule, the baseline-free sustain read, or a screen
+// picking the name up), 'faded' = watch expired/gave back (grey, lingers
+// briefly, then pruned). See onTickEvent.
+export type TickCatchStatus = 'watch' | 'confirmed' | 'faded';
+
 export interface TickCatch {
   ticker: string;
   price: number;
   change_pct: number;
   rel_vol: number;
   mom_pct: number;
-  caught_at: string;   // ISO of first detection
+  status: TickCatchStatus;
+  caught_at: string;               // ISO of the first flag (the watch, when there was one)
+  confirmed_at: string | null;     // ISO of promotion to confirmed
+  watch_change_pct: number | null; // chg% at the watch flag — shows the lead on confirm
 }
 
 export interface CyclePayload {
@@ -423,14 +431,17 @@ class PollerService {
   private alertedFreshBurst = new Set<string>();
   // Tickers already Telegram-alerted as a new ignition today. See NEW_IGNITION.
   private alertedNewIgnition = new Set<string>();
-  // Tickers already Telegram-alerted as a live tick catch today (🛰️). Separate
-  // from `tickCatches` (15-min display TTL) so a re-catch after the dashboard
-  // row ages out doesn't re-ping — once per ticker per ET day.
+  // Tickers already Telegram-alerted as a CONFIRMED tick catch today (🛰️).
+  // Separate from `tickCatches` (15-min display TTL) so a re-catch after the
+  // dashboard row ages out doesn't re-ping — once per ticker per ET day.
   private alertedTickCatch = new Set<string>();
-  // Live tick-feed catches today, keyed by ticker (once per ticker per ET day).
-  // Surfaced in the dashboard's 🛰️ section, NOT Telegram. Pruned each cycle
-  // once the screens catch up or after TICK_CATCH_TTL_MS. See onTickCandidate.
-  private tickCatches = new Map<string, TickCatch & { caught_ms: number }>();
+  // Tickers already Telegram-alerted as a tick WATCH today (👀). Independent of
+  // the confirm dedup — a real runner gets exactly two pings: flag + confirm.
+  private alertedTickWatch = new Set<string>();
+  // Live tick-feed catches today, keyed by ticker. Surfaced in the dashboard's
+  // 🛰️ section; pruned by status-aware TTLs in the payload build. last_event_ms
+  // tracks the latest transition (watch/confirm/fade) for those TTLs.
+  private tickCatches = new Map<string, TickCatch & { last_event_ms: number }>();
   // Tickers that have traded in an Ignition pre-market cycle today. Feeds the
   // runner-score's pre-market-exhaustion penalty (a name that already ran in PM
   // gives back into the close). ET-day concept — cleared at midnight.
@@ -528,6 +539,14 @@ class PollerService {
 
   getLastPayload(): CyclePayload | null {
     return this.lastPayload;
+  }
+
+  // Is the ticker in the latest broadcast's Momentum or Ignition lists? Used
+  // to suppress redundant tick-feed WATCH flags (see onTickEvent).
+  private isCurrentlyScreened(ticker: string): boolean {
+    const p = this.lastPayload;
+    if (!p) return false;
+    return p.rows.some((r) => r.ticker === ticker) || p.ignition.some((r) => r.ticker === ticker);
   }
 
   areAlertsMuted(): boolean {
@@ -718,6 +737,7 @@ class PollerService {
       this.alertedFreshBurst.clear();
       this.alertedNewIgnition.clear();
       this.alertedTickCatch.clear();
+      this.alertedTickWatch.clear();
       this.tickCatches.clear();
       this.seenInPremarketToday.clear();
       this.lastForcedSwingPostCloseDate = '';
@@ -1416,29 +1436,61 @@ class PollerService {
     const freshList = enriched.filter((r) => r.is_fresh_news).map((r) => r.ticker);
 
     // Tick-feed catches for the dashboard 🛰️ section — kept as a rolling
-    // "recent catches" feed for the TTL window so they're actually VISIBLE.
-    // We deliberately do NOT drop a catch the moment a screen picks the name
-    // up: the volume-led Ignition screen catches the same surge within a cycle
-    // or two, and pruning on that made every catch flash for only seconds →
-    // the section looked permanently empty (operator "never saw it work",
-    // 2026-06-23). A catch now shows its early metrics + "Xm ago" even once the
-    // name is also an Ignition row below — that's the point: it proves the tick
-    // feed flagged it first. Only the TTL prunes (surged-then-faded, or simply
-    // aged out of the recent window).
-    const TICK_CATCH_TTL_MS = 15 * 60 * 1000;
+    // "recent catches" feed so they're actually VISIBLE. We deliberately do
+    // NOT drop a catch the moment a screen picks the name up: the volume-led
+    // Ignition screen catches the same surge within a cycle or two, and
+    // pruning on that made every catch flash for only seconds → the section
+    // looked permanently empty (operator "never saw it work", 2026-06-23).
+    // A screen picking up a WATCH-state name is instead treated as its volume
+    // CONFIRMATION — the Finviz relvol gates are exactly the evidence the
+    // watch was waiting for — so the entry promotes rather than prunes.
+    const TICK_CATCH_TTL_MS = 15 * 60 * 1000;   // watch/confirmed display TTL
+    const TICK_FADE_LINGER_MS = 3 * 60 * 1000;  // faded rows linger briefly, then prune
     const nowMsTick = Date.now();
+    const screenRowByTicker = new Map<string, EnrichedRow>();
+    for (const r of ignition) screenRowByTicker.set(r.ticker, r);
+    for (const r of enriched) screenRowByTicker.set(r.ticker, r);
     const tickCatchList: TickCatch[] = [];
     for (const [t, tc] of this.tickCatches) {
-      if (nowMsTick - tc.caught_ms > TICK_CATCH_TTL_MS) {
+      if (tc.status === 'watch') {
+        const row = screenRowByTicker.get(t);
+        if (row) {
+          tc.status = 'confirmed';
+          tc.confirmed_at = new Date(nowMsTick).toISOString();
+          tc.last_event_ms = nowMsTick;
+          if (row.price != null) tc.price = row.price;
+          if (row.change_pct != null) tc.change_pct = row.change_pct;
+          console.log(
+            `[tickfeed] 🛰️ confirm(screen) ${t} ` +
+            `${tc.change_pct >= 0 ? '+' : ''}${tc.change_pct.toFixed(1)}%` +
+            (tc.watch_change_pct != null ? ` (watched at +${tc.watch_change_pct.toFixed(1)}%)` : ''),
+          );
+          if (telegramEnabled() && !this.alertsMuted && !this.alertedTickCatch.has(t)) {
+            this.alertedTickCatch.add(t);
+            void sendTelegram(formatTickConfirmAlert(
+              t, tc.price, tc.change_pct, tc.rel_vol, tc.mom_pct, tc.watch_change_pct, 'screen',
+            ));
+          }
+        }
+      }
+      const ttl = tc.status === 'faded' ? TICK_FADE_LINGER_MS : TICK_CATCH_TTL_MS;
+      if (nowMsTick - tc.last_event_ms > ttl) {
         this.tickCatches.delete(t);
         continue;
       }
       tickCatchList.push({
         ticker: tc.ticker, price: tc.price, change_pct: tc.change_pct,
-        rel_vol: tc.rel_vol, mom_pct: tc.mom_pct, caught_at: tc.caught_at,
+        rel_vol: tc.rel_vol, mom_pct: tc.mom_pct, status: tc.status,
+        caught_at: tc.caught_at, confirmed_at: tc.confirmed_at,
+        watch_change_pct: tc.watch_change_pct,
       });
     }
-    tickCatchList.sort((a, b) => b.caught_at.localeCompare(a.caught_at));
+    // Confirmed on top, then watches, faded last; newest transition first
+    // within each group.
+    const tickStatusRank: Record<TickCatchStatus, number> = { confirmed: 0, watch: 1, faded: 2 };
+    tickCatchList.sort((a, b) =>
+      tickStatusRank[a.status] - tickStatusRank[b.status]
+      || (b.confirmed_at ?? b.caught_at).localeCompare(a.confirmed_at ?? a.caught_at));
 
     // After-hours: re-impose a volume gate on the momentum list. Finviz drops
     // its relvol filter at the close, so names that ticked >5% on a few AH
@@ -1882,35 +1934,86 @@ class PollerService {
     }
   }
 
-  // Live tick-feed candidate (🛰️) — TickFeedService caught an ignition START on
-  // the Databento per-second tape, typically 30–90s before the Finviz screener
-  // surfaces it (validated: DSY/GLXG/BYAH 15–90s earlier, much lower chg). Records
-  // the catch for the dashboard 🛰️ section (15-min display TTL) and pushes a
-  // Telegram ping for every new catch (once per ticker per ET day) so it reaches
-  // the phone when away from the screen — the slower ≥65/dual/swing paths may
-  // still fire later for the same name with more context.
-  onTickCandidate(c: TickCandidate): void {
-    if (this.tickCatches.has(c.ticker)) return;   // once per ticker per ET day
+  // Live tick-feed state-machine event (👀/🛰️) — TickFeedService's detector
+  // flagged, confirmed, or faded a name on the Databento per-second tape.
+  // WATCH (price-led, baseline-free) typically lands 20–40 chg-points before
+  // the old volume-confirmed rule; CONFIRM is the conviction ping (the
+  // validated surge rule, the baseline-free sustain read, or — handled in the
+  // payload build — a Finviz screen picking the name up). Both tiers push to
+  // Telegram + dashboard, deduped once per ticker per ET day PER TIER, so a
+  // real runner gives exactly two pings: early flag, then confirmation.
+  onTickEvent(e: TickEvent): void {
     const nowMs = Date.now();
-    this.tickCatches.set(c.ticker, {
-      ticker: c.ticker,
-      price: c.price,
-      change_pct: c.change_pct,
-      rel_vol: c.rel_vol,
-      mom_pct: c.mom_pct,
-      caught_at: new Date(nowMs).toISOString(),
-      caught_ms: nowMs,
-    });
-    console.log(
-      `[tickfeed] 🛰️ candidate ${c.ticker} $${c.price.toFixed(2)} ` +
-      `${c.change_pct >= 0 ? '+' : ''}${c.change_pct.toFixed(1)}% · ${c.rel_vol}x rv · +${c.mom_pct.toFixed(0)}%/60s`,
-    );
-    // Push every new tick catch to Telegram (operator's call 2026-06-23) so it
-    // reaches the phone when away from the dashboard — the missed-RDGT case.
-    // Once per ticker per ET day; the dashboard 🛰️ section still shows all catches.
-    if (telegramEnabled() && !this.alertsMuted && !this.alertedTickCatch.has(c.ticker)) {
-      this.alertedTickCatch.add(c.ticker);
-      void sendTelegram(formatTickCatchAlert(c));
+    const existing = this.tickCatches.get(e.ticker);
+    if (e.type === 'watch') {
+      if (existing) return; // shouldn't happen (detector watches once/day) — keep idempotent
+      // A name ALREADY on a screen needs no early flag — it's visible below
+      // with score/catalyst context, and the watch would self-confirm via the
+      // screen on the next cycle (double ping for zero information). The tick
+      // watch tier exists for names the screens haven't returned yet.
+      if (this.isCurrentlyScreened(e.ticker)) {
+        console.log(`[tickfeed] 👀 watch ${e.ticker} suppressed — already on a screen`);
+        return;
+      }
+      this.tickCatches.set(e.ticker, {
+        ticker: e.ticker,
+        price: e.price,
+        change_pct: e.change_pct,
+        rel_vol: e.rel_vol,
+        mom_pct: e.mom_pct,
+        status: 'watch',
+        caught_at: new Date(nowMs).toISOString(),
+        confirmed_at: null,
+        watch_change_pct: e.change_pct,
+        last_event_ms: nowMs,
+      });
+      console.log(
+        `[tickfeed] 👀 watch ${e.ticker} $${e.price.toFixed(2)} ` +
+        `${e.change_pct >= 0 ? '+' : ''}${e.change_pct.toFixed(1)}% · ${e.rel_vol}x rv · +${e.mom_pct.toFixed(0)}%/60s`,
+      );
+      if (telegramEnabled() && !this.alertsMuted && !this.alertedTickWatch.has(e.ticker)) {
+        this.alertedTickWatch.add(e.ticker);
+        void sendTelegram(formatTickWatchAlert(e));
+      }
+      return;
+    }
+    if (e.type === 'confirm') {
+      const watchChg = e.watch_change_pct ?? existing?.watch_change_pct ?? null;
+      this.tickCatches.set(e.ticker, {
+        ticker: e.ticker,
+        price: e.price,
+        change_pct: e.change_pct,
+        rel_vol: e.rel_vol,
+        mom_pct: e.mom_pct,
+        status: 'confirmed',
+        caught_at: existing?.caught_at ?? new Date(nowMs).toISOString(),
+        confirmed_at: new Date(nowMs).toISOString(),
+        watch_change_pct: watchChg,
+        last_event_ms: nowMs,
+      });
+      console.log(
+        `[tickfeed] 🛰️ confirm(${e.via ?? 'surge'}) ${e.ticker} $${e.price.toFixed(2)} ` +
+        `${e.change_pct >= 0 ? '+' : ''}${e.change_pct.toFixed(1)}%` +
+        (watchChg != null ? ` (watched at +${watchChg.toFixed(1)}%)` : '') +
+        ` · ${e.rel_vol}x rv · +${e.mom_pct.toFixed(0)}%/60s` +
+        (e.notional != null ? ` · $${Math.round(e.notional / 1000)}k since flag` : ''),
+      );
+      if (telegramEnabled() && !this.alertsMuted && !this.alertedTickCatch.has(e.ticker)) {
+        this.alertedTickCatch.add(e.ticker);
+        void sendTelegram(formatTickConfirmAlert(e.ticker, e.price, e.change_pct, e.rel_vol, e.mom_pct, watchChg, e.via ?? 'surge'));
+      }
+      return;
+    }
+    // fade — mark for the grey linger; the payload build prunes it shortly.
+    if (existing && existing.status === 'watch') {
+      existing.status = 'faded';
+      existing.price = e.price;
+      existing.change_pct = e.change_pct;
+      existing.last_event_ms = nowMs;
+      console.log(
+        `[tickfeed] 💤 fade ${e.ticker} ${e.change_pct >= 0 ? '+' : ''}${e.change_pct.toFixed(1)}%` +
+        (e.watch_change_pct != null ? ` (watched at +${e.watch_change_pct.toFixed(1)}%)` : ''),
+      );
     }
   }
 
@@ -2090,18 +2193,46 @@ function formatNewIgnitionAlert(r: IgnitionRow, ageSec: number): string {
   return lines.filter(Boolean).join('\n');
 }
 
-// Render a live tick-feed catch (🛰️) — the per-second-tape early-ignition ping.
-// Light on context by design: the value is speed (open the chart NOW). Carries
-// the detection evidence (rel-vol surge + 60s momentum) + chart links.
-function formatTickCatchAlert(c: TickCandidate): string {
-  const price = `$${c.price.toFixed(2)}`;
-  const chg = `${c.change_pct >= 0 ? '+' : ''}${c.change_pct.toFixed(1)}%`;
-  const finviz = `https://finviz.com/quote.ashx?t=${encodeURIComponent(c.ticker)}`;
-  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(c.ticker)}`;
+// Render a tick-feed WATCH flag (👀) — the price-led early tier: the name just
+// crossed the watch line on the per-second tape, volume confirmation pending.
+// Deliberately minimal: the value is getting eyes on the chart 20–40 chg-points
+// before the volume-confirmed ping.
+function formatTickWatchAlert(e: TickEvent): string {
+  const price = `$${e.price.toFixed(2)}`;
+  const chg = `${e.change_pct >= 0 ? '+' : ''}${e.change_pct.toFixed(1)}%`;
+  const finviz = `https://finviz.com/quote.ashx?t=${encodeURIComponent(e.ticker)}`;
+  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(e.ticker)}`;
+  const evidence = [`+${e.mom_pct.toFixed(0)}%/60s`];
+  if (e.rel_vol > 0) evidence.unshift(`RVol ${e.rel_vol.toFixed(1)}x`);
   const lines = [
-    `🛰️ <b>${escapeHtml(c.ticker)}</b>  ${price}  ${chg}`,
-    `<b>LIVE TICK</b> — early ignition on the per-second tape`,
-    `RVol ${c.rel_vol.toFixed(1)}x · +${c.mom_pct.toFixed(0)}%/60s`,
+    `👀 <b>${escapeHtml(e.ticker)}</b>  ${price}  ${chg}`,
+    `<b>TICK WATCH</b> — price-led early flag, confirmation pending`,
+    evidence.join(' · '),
+    `<a href="${finviz}">Finviz</a> · <a href="${tv}">TradingView</a>`,
+  ];
+  return lines.join('\n');
+}
+
+// Render a CONFIRMED tick catch (🛰️) — the conviction tier. `via` says what
+// confirmed it: the validated relvol surge rule, the baseline-free sustain
+// read, or a Finviz screen returning the name. Shows the watch-flag chg% so
+// the lead the early tier bought is visible in the alert itself.
+function formatTickConfirmAlert(
+  ticker: string, price: number, changePct: number, relVol: number, momPct: number,
+  watchChangePct: number | null, via: 'surge' | 'sustain' | 'screen',
+): string {
+  const chg = `${changePct >= 0 ? '+' : ''}${changePct.toFixed(1)}%`;
+  const finviz = `https://finviz.com/quote.ashx?t=${encodeURIComponent(ticker)}`;
+  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(ticker)}`;
+  const viaLabel = via === 'surge' ? 'volume surge' : via === 'sustain' ? 'sustained tape' : 'hit the screens';
+  const evidence: string[] = [];
+  if (relVol > 0) evidence.push(`RVol ${relVol.toFixed(1)}x`);
+  evidence.push(`+${momPct.toFixed(0)}%/60s`);
+  if (watchChangePct != null) evidence.push(`flagged at +${watchChangePct.toFixed(0)}%`);
+  const lines = [
+    `🛰️ <b>${escapeHtml(ticker)}</b>  $${price.toFixed(2)}  ${chg}`,
+    `<b>LIVE TICK CONFIRMED</b> — ${viaLabel}`,
+    evidence.join(' · '),
     `<a href="${finviz}">Finviz</a> · <a href="${tv}">TradingView</a>`,
   ];
   return lines.join('\n');

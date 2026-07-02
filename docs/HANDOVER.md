@@ -1,11 +1,22 @@
-# Session Handover — updated 2026-07-01
+# Session Handover — updated 2026-07-02
 
 A running handover so a fresh session can continue without re-deriving context.
 **Read `docs/web-dashboard.md` first** (the canonical status doc); this file is
 the "where we are right now + what's open" layer on top of it. Memory files
 under `…/memory/` also carry the durable facts.
 
-**CURRENT FOCUS (2026-07-01): EMA/MACD confluence signal — investigated + MEASURED,
+**CURRENT FOCUS (2026-07-02): Tick feed two-tier WATCH→CONFIRM — built, shipped.**
+The operator's complaint: tick catches (and the relvol-gated screens) fire when
+names are already +30–50% — on nano-caps volume confirmation is structurally
+late, and prod near-miss logs proved it (three mechanisms). The detector is now
+a state machine: price-led 👀 WATCH flag (baseline-free, tiny junk floor) →
+🛰️ CONFIRM (unchanged surge rule / baseline-free sustain read / a screen
+returning the name) → fade. Tiered alerts (👀 + soft ping on watch, 🛰️ + radar
+on confirm, once/day per tier). See the top "What shipped" entry (TICKW) for
+the watch items + calibration knobs. Prior focuses (EMA/MACD conditional test,
+Trade Journal attribution join) remain open below.
+
+**PRIOR FOCUS (2026-07-01): EMA/MACD confluence signal — investigated + MEASURED,
 no standalone edge; ONE conditional test still open.** The operator noticed many
 ignition/momentum names "jump every few days," built a TradingView indicator
 (EMA 6/20 bull cross + MACD 12/26/9 confluence, testing 30m vs 1h) that *seemed*
@@ -69,6 +80,12 @@ but was committed (`3903b9e`) — **trust the commits/origin, not the tree.**
 ---
 
 ## What shipped this session (newest first, all on prod unless noted)
+
+TICKW. **Tick feed two-tier: 👀 WATCH → 🛰️ CONFIRMED (2026-07-02).** Operator: "when I get the tick catch they're already 30–50% up — RelVol on nano-caps arrives too late; flag by change% first, confirm/remove when volume shows." Prod near-miss logs (last 7d) confirmed three lateness mechanisms: **no-baseline gappers can NEVER fire** (LHAI +238%, EHGO +120%, USDE +168% — quiet sampling stops at cum≥8%, so 0-quiet names are invisible all session), **relvol≥5× clears 20–30 pts after price** (DSY +23% @1.8× → fired +56.7%; SDEV +19% → +47.6%), **slow grinders never trip mom≥8%/60s**. Catches fired at +23–63% (median ~+40).
+   - **Built:** `tick-detect.ts` is now a per-symbol state machine (idle→watching→confirmed|faded; full detail in web-dashboard.md). WATCH = cum ≥10% (≤100) + near-high + junk floor (≥5 prints & ≥$2k notional/2min — kills the "+15% on 5 shares" prints). CONFIRM = old surge rule (unchanged — strict superset) | baseline-free sustain (≥2min + ext ≥3pts + ≥flag price + ≥$25k since flag) | screen pickup (poller payload build promotes watch entries that appear in momentum/ignition). FADE = 15min or 60% giveback; surge rule can resurrect a faded name. Watches suppressed for already-screened names (redundant + would self-confirm). Also `syncScreenRows()` in tickfeed.ts (30s) — subscribes current screen rows instantly w/ row-derived prior closes (not in AH — anchor shifts), closing the 10-min universe-lag "0 quiet" hole.
+   - **Alerts tiered (operator asked for a watch alert too):** 👀 Telegram + soft dashboard ping on watch; 🛰️ Telegram + radar ping on confirm; each once/ticker/ET-day. UI: LIVE TICKS rows amber (watch, "👀 pending") / blue (confirmed, `⚑ +N%` shows the flag point) / grey faded (3-min linger). `/health.tickfeed` now reports watches/candidates/fades/extra_subs.
+   - **Regression (data/dbpull, `npx tsx scripts/verify-tick-detect.ts`):** previously-uncatchable gappers INHD/SUNE/CIIT/PPCB now confirm via sustain; watch flags 17–114s pre-Finviz at lower chg; false-confirms on the 38-fizzler control 1/38 (3%, was ~5%); 3/4 fizzler watches faded on their own. Synthetic edge tests (junk floor, giveback fade, faded→surge resurrect, cum_max cap) all pass.
+   - **WATCH / OPEN:** (a) **live alert volume** — expect ~10–20 👀/day; if spammy raise `watch_cum_min` 10→12 or the junk floor, or drop the 👀 Telegram (keep dashboard) — `TICK_DETECT` consts + `formatTickWatchAlert` call site. (b) **$ knobs are EQUS.MINI feed-visible dollars** (fraction of consolidated tape) — first guesses; recalibrate `watch_floor_notional`/`confirm_notional_min` from a few days of `[tickfeed]` watch/confirm/fade logs. (c) watch→confirm→fade **transition telemetry is log-only** — the outcome-tracking open item (000000.a) now matters more: grade watches AND confirms vs forward returns. (d) tick catches still display-only (no float/catalyst enrichment, no DB persistence).
 
 EMAMACD. **RESEARCH (not shipped) — EMA/MACD confluence has no standalone edge (2026-07-01).** Operator's manual TV strategy, investigated because many of our names "jump every few days" and his indicator seemed to lead our ignition. **Exact signal (locked from the TV MACD source):** on 30m or 1h — `crossover(EMA6, EMA20)` AND `hist>=0 AND hist>hist[1]` (the dark-green `#26a69a` histogram = above signal + expanding) AND `macd>macd[1]` (MACD line rising). Zero-line NOT required.
    - **Method (free, reproducible — scripts were in the session scratchpad, now gone; re-derive from this):** Yahoo chart API `query1.finance.yahoo.com/v8/finance/chart/{TICKER}?interval=30m|1h&range=60d&includePrePost=true` (works locally, no auth). Universe = our ignition-history tickers (`ignition_results`, last 40d, one row/(ticker,ET-day) with `min(polled_at)` = our first detection, `max(change_pct)` = peak). **v1 lead-time** on 120 known movers (peak≥20%): does the signal fire in the 48h before our detection, and how early. **v2 precision** on all 472: from every fire, forward peak over 24h/72h vs a random-bar baseline (every 15th bar), right-censoring dropped.

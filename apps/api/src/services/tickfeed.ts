@@ -26,6 +26,11 @@ export const TICKFEED = {
   // src/services, so resolve up to the api root either way.
   sidecar: resolve(__dirname, '..', '..', 'sidecar', 'tickfeed.py'),
   sync_interval_ms: 10 * 60 * 1000, // re-send universe symbols + reseed prior closes
+  // Fast additive sync of the CURRENT screener rows (momentum + ignition). The
+  // structural universe refreshes only every 10 min, so a name that starts
+  // running before it's in the universe used to wait up to 10 min just to get
+  // subscribed — by which point it had no quiet baseline ("0 quiet" gapper).
+  screen_sync_interval_ms: 30_000,
   initial_delay_ms: 30_000,         // let the universe populate before first SUB
   restart_delay_ms: 5_000,
 };
@@ -41,12 +46,18 @@ class TickFeedService {
   private child: ChildProcessWithoutNullStreams | null = null;
   private rl: Interface | null = null;
   private syncTimer: NodeJS.Timeout | null = null;
+  private screenSyncTimer: NodeJS.Timeout | null = null;
   private running = false;
   private etDate = etDate();
   private lastBarAt = 0;
   private barsSeen = 0;
-  private candidates = 0;
+  private watches = 0;
+  private candidates = 0;   // confirms (kept as `candidates` for /health continuity)
+  private fades = 0;
   private lastError: string | null = null;
+  // Screener-row symbols subscribed OUTSIDE the structural universe (fast-sync
+  // path). Re-SUBbed alongside the universe so sidecar respawns keep them.
+  private extraSubs = new Set<string>();
 
   status() {
     return {
@@ -54,7 +65,10 @@ class TickFeedService {
       running: this.running,
       symbols_tracked: this.detector.symbolsTracked(),
       bars_seen: this.barsSeen,
+      watches: this.watches,
       candidates: this.candidates,
+      fades: this.fades,
+      extra_subs: this.extraSubs.size,
       last_bar_age_s: this.lastBarAt ? Math.round((Date.now() - this.lastBarAt) / 1000) : null,
       last_error: this.lastError,
     };
@@ -71,12 +85,15 @@ class TickFeedService {
     this.spawnSidecar();
     setTimeout(() => this.sync(), TICKFEED.initial_delay_ms);
     this.syncTimer = setInterval(() => this.sync(), TICKFEED.sync_interval_ms);
+    this.screenSyncTimer = setInterval(() => this.syncScreenRows(), TICKFEED.screen_sync_interval_ms);
   }
 
   stop(): void {
     this.running = false;
     if (this.syncTimer) clearInterval(this.syncTimer);
     this.syncTimer = null;
+    if (this.screenSyncTimer) clearInterval(this.screenSyncTimer);
+    this.screenSyncTimer = null;
     this.rl?.close();
     this.child?.kill();
     this.child = null;
@@ -126,22 +143,52 @@ class TickFeedService {
     if (today !== this.etDate) {
       this.etDate = today;
       this.detector.reset();
+      this.extraSubs.clear();
       // Fresh Databento session for the new day.
       this.child?.kill();
       console.log('[tickfeed] midnight ET — detector reset, sidecar will respawn');
     }
     const priors = universe.getPriorCloses();
     for (const [t, c] of priors) this.detector.setPriorClose(t, c);
-    const syms = Array.from(universe.getUniverse());
+    const syms = Array.from(new Set([...universe.getUniverse(), ...this.extraSubs]));
     if (syms.length > 0 && this.child?.stdin.writable) {
-      // Chunk into modest SUB lines — a single 3000+-symbol line risked being
-      // split across the sidecar's stdin reads ("unknown command: …"). Each
-      // line is a complete, newline-terminated SUB it can parse independently.
-      const CHUNK = 400;
-      for (let i = 0; i < syms.length; i += CHUNK) {
-        this.child.stdin.write(`SUB ${syms.slice(i, i + CHUNK).join(',')}\n`);
-      }
-      console.log(`[tickfeed] synced ${syms.length} symbols (${Math.ceil(syms.length / CHUNK)} SUB lines), ${priors.size} prior closes`);
+      this.subscribe(syms);
+      console.log(`[tickfeed] synced ${syms.length} symbols (${this.extraSubs.size} extra), ${priors.size} prior closes`);
+    }
+  }
+
+  // Fast additive sync: subscribe the CURRENT screener rows (momentum +
+  // ignition) the moment they appear, instead of waiting for the 10-min
+  // universe refresh. Prior close is derived from the row itself
+  // (price / (1 + change%/100)) — skipped in after-hours, where row
+  // change/price are the AH overlay (anchored to today's close, not the prior
+  // one) and would corrupt the detector's cum% measurement.
+  private syncScreenRows(): void {
+    const payload = poller.getLastPayload();
+    if (!payload || payload.session === 'afterhours' || payload.session === 'closed') return;
+    const fresh: string[] = [];
+    for (const r of [...payload.rows, ...payload.ignition]) {
+      const tk = r.ticker.toUpperCase();
+      if (this.detector.hasPriorClose(tk) || this.extraSubs.has(tk)) continue;
+      if (r.price == null || r.change_pct == null || r.price <= 0 || r.change_pct <= -100) continue;
+      this.detector.setPriorClose(tk, r.price / (1 + r.change_pct / 100));
+      this.extraSubs.add(tk);
+      fresh.push(tk);
+    }
+    if (fresh.length > 0 && this.child?.stdin.writable) {
+      this.subscribe(fresh);
+      console.log(`[tickfeed] screen-sync — subscribed ${fresh.length} screener names: ${fresh.join(',')}`);
+    }
+  }
+
+  private subscribe(syms: string[]): void {
+    if (!this.child?.stdin.writable) return;
+    // Chunk into modest SUB lines — a single 3000+-symbol line risked being
+    // split across the sidecar's stdin reads ("unknown command: …"). Each
+    // line is a complete, newline-terminated SUB it can parse independently.
+    const CHUNK = 400;
+    for (let i = 0; i < syms.length; i += CHUNK) {
+      this.child.stdin.write(`SUB ${syms.slice(i, i + CHUNK).join(',')}\n`);
     }
   }
 
@@ -157,10 +204,12 @@ class TickFeedService {
     this.lastBarAt = Date.now();
     if (this.lastError) this.lastError = null; // bars flowing again — clear the stale error
     const bar: TickBar = { ts_sec: m.t, close: m.c, high: m.h, low: m.l, volume: m.v };
-    const cand = this.detector.addBar(m.s, bar);
-    if (cand) {
-      this.candidates++;
-      poller.onTickCandidate(cand);
+    const ev = this.detector.addBar(m.s, bar);
+    if (ev) {
+      if (ev.type === 'watch') this.watches++;
+      else if (ev.type === 'confirm') this.candidates++;
+      else this.fades++;
+      poller.onTickEvent(ev);
     }
     // Surface near-miss reasons (gapped vs which gate) so the rollout is
     // debuggable — why a moving name didn't fire.

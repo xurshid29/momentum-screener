@@ -54,7 +54,7 @@ function parseRows(csv: string): { ts: number; bar: TickBar; symbol?: string }[]
   return out;
 }
 
-console.log('=== RUNNERS — does the detector fire EARLY (before Finviz)? ===\n');
+console.log('=== RUNNERS — watch (👀 price-led) + confirm (🛰️) vs Finviz ===\n');
 for (const [name, [prior, futc, fchg]] of Object.entries(RUNNERS)) {
   const path = `${DIR}/${name}.csv`;
   let rows;
@@ -62,32 +62,44 @@ for (const [name, [prior, futc, fchg]] of Object.entries(RUNNERS)) {
   const det = new TickDetector();
   det.setPriorClose(name.split('_')[0], prior);
   const fts = tsSec(futc);
-  let fire = null;
+  let watch = null, confirm = null;
   for (const r of rows) {
-    const c = det.addBar(name.split('_')[0], r.bar);
-    if (c) { fire = c; break; }
+    const ev = det.addBar(name.split('_')[0], r.bar);
+    if (!ev) continue;
+    if (ev.type === 'watch' && !watch) watch = ev;
+    if (ev.type === 'confirm') { confirm = ev; break; }
   }
-  if (!fire) { console.log(`${name.padEnd(16)} finviz ${('+'+fchg+'%').padStart(7)} | no fire`); continue; }
-  const lead = fts - fire.ts_sec;
-  const tag = lead > 0 ? `${lead}s EARLIER` : `${-lead}s later`;
-  console.log(`${name.padEnd(16)} finviz ${('+'+fchg+'%').padStart(7)} | fire ${hms(fire.ts_sec)} ` +
-    `at +${fire.change_pct.toFixed(0)}% (rv ${fire.rel_vol}x) — ${tag}`);
+  const leadTag = (sec: number) => sec > 0 ? `${sec}s EARLIER` : `${-sec}s later`;
+  const wpart = watch
+    ? `watch ${hms(watch.ts_sec)} at +${watch.change_pct.toFixed(0)}% (${leadTag(fts - watch.ts_sec)})`
+    : 'no watch';
+  const cpart = confirm
+    ? `confirm ${hms(confirm.ts_sec)} at +${confirm.change_pct.toFixed(0)}% via ${confirm.via} (rv ${confirm.rel_vol}x, ${leadTag(fts - confirm.ts_sec)})`
+    : 'no confirm';
+  console.log(`${name.padEnd(16)} finviz ${('+'+fchg+'%').padStart(7)} | ${wpart} | ${cpart}`);
 }
 
-console.log('\n=== CONTROL — false-fire rate on 38 fizzlers (peak <25%) ===\n');
+console.log('\n=== CONTROL — false rates on 38 fizzlers (peak <25%) ===\n');
 const cfile = readdirSync(DIR).find((f) => f.startsWith('control_'));
 if (cfile) {
   const rows = parseRows(readFileSync(`${DIR}/${cfile}`, 'utf8'));
   const det = new TickDetector();
   for (const [t, p] of Object.entries(CONTROL_PRIOR)) det.setPriorClose(t, p);
-  const fired: string[] = [];
+  const confirms: string[] = [];
+  const watches: string[] = [];
+  const fades: string[] = [];
   const seen = new Set<string>();
   for (const r of rows) {
     if (!r.symbol) continue;
     seen.add(r.symbol);
-    const c = det.addBar(r.symbol, r.bar);
-    if (c) fired.push(`${c.ticker} @ +${c.change_pct.toFixed(0)}% (rv ${c.rel_vol}x)`);
+    const ev = det.addBar(r.symbol, r.bar);
+    if (!ev) continue;
+    if (ev.type === 'confirm') confirms.push(`${ev.ticker} @ +${ev.change_pct.toFixed(0)}% via ${ev.via} (rv ${ev.rel_vol}x)`);
+    else if (ev.type === 'watch') watches.push(`${ev.ticker} @ +${ev.change_pct.toFixed(0)}%`);
+    else fades.push(ev.ticker);
   }
-  console.log(`false fires: ${fired.length} / ${seen.size}  (${(fired.length / seen.size * 100).toFixed(0)}%)`);
-  fired.forEach((f) => console.log('  ' + f));
+  console.log(`false CONFIRMS (the regression metric): ${confirms.length} / ${seen.size}  (${(confirms.length / seen.size * 100).toFixed(0)}%)`);
+  confirms.forEach((f) => console.log('  ' + f));
+  console.log(`watches (allowed on fizzlers — they should fade): ${watches.length} / ${seen.size}, of which faded: ${fades.length}`);
+  watches.forEach((f) => console.log('  👀 ' + f));
 }
