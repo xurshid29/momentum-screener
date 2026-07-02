@@ -27,25 +27,37 @@ export async function fetchBenzingaDelta(
   if (!tk) return null;
 
   const since = Math.max(0, prevWatermark - 5);
-  const url = `${ENDPOINT}?pageSize=100&updatedSince=${since}&displayOutput=headline&token=${tk}`;
-  let json: unknown;
-  try {
-    const res = await fetch(url, {
-      headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0' },
-    });
-    if (!res.ok) return null;
-    json = await res.json();
-  } catch {
-    return null;
+  // Paginate: a market-wide news burst (8:30/9:30 ET) can exceed one page per
+  // 20s cycle, and articles past the page silently vanish behind the advanced
+  // watermark. Verified live: `page` is 0-based with no overlap between pages.
+  const PAGE_SIZE = 100;
+  const MAX_PAGES = 3;
+  const items: unknown[] = [];
+  for (let page = 0; page < MAX_PAGES; page++) {
+    let json: unknown;
+    try {
+      const url = `${ENDPOINT}?pageSize=${PAGE_SIZE}&page=${page}&updatedSince=${since}&displayOutput=headline&token=${tk}`;
+      const res = await fetch(url, {
+        headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0' },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      json = await res.json();
+    } catch {
+      // First page failed → no delta this cycle (watermark unmoved, retried
+      // next cycle). A later page failing → process the pages we did get.
+      if (page === 0) return null;
+      break;
+    }
+    if (!Array.isArray(json)) break;
+    items.push(...json);
+    if (json.length < PAGE_SIZE) break;
   }
-
-  if (!Array.isArray(json)) return { articles: [], freshTickers: new Set(), newWatermark: prevWatermark };
 
   let newWatermark = prevWatermark;
   const fresh = new Set<string>();
   const articles: BenzingaArticle[] = [];
 
-  for (const it of json as Array<Record<string, unknown>>) {
+  for (const it of items as Array<Record<string, unknown>>) {
     const updated = typeof it.updated === 'string' ? it.updated : '';
     const dt = new Date(updated);
     if (Number.isNaN(dt.getTime())) continue;

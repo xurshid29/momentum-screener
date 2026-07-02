@@ -229,6 +229,41 @@ export interface TickCatch {
   watch_change_pct: number | null; // chg% at the watch flag — shows the lead on confirm
 }
 
+// News radar — a fresh catalyst landing on a KNOWN runner (a ticker from our
+// momentum/ignition history) that is NOT currently on any screen. Measured on
+// 30 days of detections: when a headline precedes an ignition, the move
+// typically starts minutes after the wire (median news→detection lag 7.9 min,
+// p75 91 min). The radar surfaces the name inside that window, arms the tick
+// feed (TickFeedService subscribes payload.news_radar tickers), and escalates
+// to "moving" the moment the tick detector or a screen picks the name up.
+// Display-first; Telegram only for strong/major non-bearish catalysts.
+const NEWS_RADAR = {
+  history_days: 30,   // "known runner" = seen on momentum/ignition within this window
+  ttl_min: 90,        // entry lifetime (p75 of the news→detection lag ≈ 91 min)
+  max_display: 12,    // sidebar cap — keep the section glanceable
+};
+
+export interface NewsRadarItem {
+  ticker: string;
+  source: NewsSource;
+  title: string;
+  url: string;
+  published_at: string | null;
+  first_seen_at: string;          // when the radar picked it up
+  impact: number;
+  hype: number;
+  direction: CatalystDirection;
+  urgency: CatalystUrgency;
+  catalyst_type: string;
+  classifier: Classifier;
+  status: 'news' | 'moving';
+  escalated_at: string | null;
+  escalated_via: 'tick' | 'screen' | null;
+  // Prior-session close (daily_bars) — lets TickFeedService arm the detector
+  // for names outside the structural universe. Plumbing; the UI ignores it.
+  prior_close: number | null;
+}
+
 export interface CyclePayload {
   cycle_id: string;
   polled_at: string;
@@ -244,6 +279,7 @@ export interface CyclePayload {
   swing: SwingRow[];
   continuation: ContinuationCandidate[];
   tick_catches: TickCatch[];
+  news_radar: NewsRadarItem[];
 }
 
 export interface EnrichedRow extends ScreenerRow {
@@ -449,6 +485,14 @@ class PollerService {
   // runner-score's pre-market-exhaustion penalty (a name that already ran in PM
   // gives back into the close). ET-day concept — cleared at midnight.
   private seenInPremarketToday = new Set<string>();
+  // News radar (📰) — see NEWS_RADAR. Active entries keyed by ticker; article
+  // URLs already radar'd today; tickers already Telegram-alerted today; and
+  // the "known runner" set (DB-seeded from 30d of momentum/ignition history,
+  // grown live as names screen).
+  private newsRadar = new Map<string, NewsRadarItem & { first_seen_ms: number }>();
+  private radarSeenUrls = new Set<string>();
+  private alertedNewsRadar = new Set<string>();
+  private radarHistory = new Set<string>();
   // Continuation list cache. The SQL aggregation over 5 days of ignition_results
   // costs ~1.5 s on the prod-sized dataset — too much for every 20 s cycle.
   // Refresh every CONTINUATION_REFRESH_CYCLES cycles (~10 min) and re-broadcast
@@ -550,6 +594,112 @@ class PollerService {
     const p = this.lastPayload;
     if (!p) return false;
     return p.rows.some((r) => r.ticker === ticker) || p.ignition.some((r) => r.ticker === ticker);
+  }
+
+  // News radar matching — fresh articles/halts against the known-runner set,
+  // excluding names already on a screen (those flow through the existing
+  // fresh-news paths). See NEWS_RADAR for the why + the measured lag numbers.
+  private updateNewsRadar(
+    candidates: Array<{ source: NewsSource; ticker: string; title: string; url: string; published_at: Date | null; haltReason?: string }>,
+    onScreen: Set<string>,
+  ): void {
+    const nowMs = Date.now();
+    for (const c of candidates) {
+      const tk = c.ticker.toUpperCase();
+      if (onScreen.has(tk)) continue;
+      if (!this.radarHistory.has(tk)) continue;
+      if (this.radarSeenUrls.has(c.url)) continue;
+      this.radarSeenUrls.add(c.url);
+      if (this.newsRadar.has(tk)) {
+        console.log(`[news-radar] extra article for active entry ${tk} (kept first): "${c.title.slice(0, 80)}"`);
+        continue;
+      }
+      // Classify via the same cache-or-rules path as screen rows. No market
+      // context (the name isn't screening — no live float/mcap), which skews
+      // hype slightly low; the async LLM refinement upgrades scores in place.
+      let cached = this.classificationCache.get(c.url);
+      if (!cached) {
+        const input: ClassifierInput = {
+          ticker: tk,
+          title: c.title,
+          source: c.source,
+          haltReason: c.haltReason ?? null,
+          marketContext: null,
+        };
+        const cls = classifyByRules(input);
+        cached = {
+          classification: cls,
+          classifier: 'rules',
+          needsLLM: !!process.env.ANTHROPIC_API_KEY && c.source !== 'sec' && c.source !== 'halt',
+          input,
+        };
+        this.classificationCache.set(c.url, cached);
+      }
+      const cls = cached.classification;
+      // Bearish catalysts (offerings, probes) are why a stock FALLS — not a
+      // pre-move opportunity. Neutral (e.g. T1 halt) and bullish both radar.
+      if (cls.direction === 'bearish') {
+        console.log(`[news-radar] skip ${tk} — bearish (${cls.catalyst_type}): "${c.title.slice(0, 80)}"`);
+        continue;
+      }
+      const item: NewsRadarItem & { first_seen_ms: number } = {
+        ticker: tk,
+        source: c.source,
+        title: c.title,
+        url: c.url,
+        published_at: c.published_at?.toISOString() ?? null,
+        first_seen_at: new Date(nowMs).toISOString(),
+        first_seen_ms: nowMs,
+        impact: cls.impact_score,
+        hype: cls.hype_score,
+        direction: cls.direction,
+        urgency: cls.urgency,
+        catalyst_type: cls.catalyst_type,
+        classifier: cached.classifier,
+        status: 'news',
+        escalated_at: null,
+        escalated_via: null,
+        prior_close: null,
+      };
+      this.newsRadar.set(tk, item);
+      console.log(
+        `[news-radar] 📰 hit ${tk} — impact ${cls.impact_score} · hype ${cls.hype_score} · ${cls.catalyst_type} (${c.source}): "${c.title.slice(0, 100)}"`,
+      );
+      // Prior close for tick-feed arming (best-effort, async — TickFeedService
+      // picks it up from the payload on its next 30s sync).
+      void this.lookupPriorClose(tk).then((pc) => {
+        const e = this.newsRadar.get(tk);
+        if (e && e.url === c.url && pc != null) e.prior_close = pc;
+      });
+      // Telegram — same conviction gate as the fresh-news path: strong/major,
+      // non-bearish (already ensured), once per ticker per ET day.
+      if (
+        telegramEnabled() && !this.alertsMuted &&
+        (cls.urgency === 'strong' || cls.urgency === 'major') &&
+        !this.alertedNewsRadar.has(tk)
+      ) {
+        this.alertedNewsRadar.add(tk);
+        void sendTelegram(formatNewsRadarAlert(item));
+      }
+    }
+  }
+
+  // Latest stored daily close for a ticker — the prior-session close the tick
+  // detector measures change% against. Names in our 30d history almost always
+  // have daily_bars coverage (outcome tracking backfills them).
+  private async lookupPriorClose(ticker: string): Promise<number | null> {
+    try {
+      const row = await getDb()
+        .selectFrom('daily_bars')
+        .select('close')
+        .where('ticker', '=', ticker)
+        .orderBy('date', 'desc')
+        .limit(1)
+        .executeTakeFirst();
+      return row?.close != null && Number(row.close) > 0 ? Number(row.close) : null;
+    } catch {
+      return null;
+    }
   }
 
   areAlertsMuted(): boolean {
@@ -689,6 +839,31 @@ class PollerService {
     }
   }
 
+  // Seed the news-radar "known runner" set — every ticker seen on the momentum
+  // or ignition screens in the last NEWS_RADAR.history_days. Grown live each
+  // cycle as new names screen; also re-radar'd names that already alerted
+  // today are seeded so a deploy doesn't re-ping them (mirrors the other
+  // restart-safe seeds).
+  private async seedRadarHistory() {
+    try {
+      const rows = await sql<{ ticker: string }>`
+        select distinct ticker from (
+          select r.ticker from screener_results r
+            join screener_cycles c on c.id = r.cycle_id
+            where c.polled_at > now() - make_interval(days => ${NEWS_RADAR.history_days}::int)
+          union all
+          select i.ticker from ignition_results i
+            join screener_cycles c on c.id = i.cycle_id
+            where c.polled_at > now() - make_interval(days => ${NEWS_RADAR.history_days}::int)
+        ) t
+      `.execute(getDb());
+      for (const r of rows.rows) this.radarHistory.add(r.ticker);
+      console.log(`[news-radar] seeded ${this.radarHistory.size} known runners (last ${NEWS_RADAR.history_days}d)`);
+    } catch (err) {
+      console.error('[news-radar] could not seed history (continuing):', err);
+    }
+  }
+
   async start() {
     if (this.running) return;
     this.running = true;
@@ -703,6 +878,7 @@ class PollerService {
     await this.seedFirstSeen();
     await this.seedVwapState();
     await this.seedIgnitionState();
+    await this.seedRadarHistory();
     console.log(`[poller] starting (every ${this.config.interval_sec}s)`);
     void this.tick();
     this.timer = setInterval(() => void this.tick(), this.config.interval_sec * 1000);
@@ -742,6 +918,9 @@ class PollerService {
       this.alertedTickCatch.clear();
       this.alertedTickWatch.clear();
       this.tickCatches.clear();
+      this.newsRadar.clear();
+      this.radarSeenUrls.clear();
+      this.alertedNewsRadar.clear();
       this.seenInPremarketToday.clear();
       this.lastForcedSwingPostCloseDate = '';
       this.lastOutcomesDate = '';
@@ -923,6 +1102,7 @@ class PollerService {
     }
 
     // Benzinga: persist articles + update cumulative cache + freshness set.
+    const bzPrevWatermark = this.bzWatermark; // pre-cycle mark — article-level freshness for the news radar
     if (bzDelta) {
       this.bzWatermark = bzDelta.newWatermark;
       for (const a of bzDelta.articles) {
@@ -991,6 +1171,29 @@ class PollerService {
       ...(edgarDelta?.freshTickers ?? []),
       ...(haltDelta?.freshTickers ?? []),
     ]);
+
+    // News radar — fresh catalysts on known runners that are NOT on any screen
+    // yet. The Benzinga delta is market-wide, so this is pure matching, no
+    // extra fetches. Halts ride along (a halt on a known runner is the loudest
+    // possible pre-move signal). Skipped while the market is closed — an
+    // overnight radar entry would expire before anyone could act on it.
+    // History grows from momentum + ignition only (matches the DB seed).
+    for (const r of rows) this.radarHistory.add(r.ticker);
+    for (const r of ignitionRows) this.radarHistory.add(r.ticker);
+    if (session !== 'closed') {
+      const radarCandidates: Array<{ source: NewsSource; ticker: string; title: string; url: string; published_at: Date | null; haltReason?: string }> = [];
+      for (const a of bzDelta?.articles ?? []) {
+        if (a.updated_ts <= bzPrevWatermark) continue;
+        for (const tk of a.tickers) {
+          radarCandidates.push({ source: 'benzinga', ticker: tk, title: a.title, url: a.url, published_at: a.published_at });
+        }
+      }
+      for (const h of haltDelta?.halts ?? []) {
+        if (!haltDelta?.freshTickers.has(h.ticker)) continue;
+        radarCandidates.push({ source: 'halt', ticker: h.ticker, title: h.title, url: h.url, published_at: h.haltedAt, haltReason: h.reasonCode });
+      }
+      this.updateNewsRadar(radarCandidates, new Set(tickers));
+    }
 
     // 3) classify rows + compute 5-min relative volume + build payload
     const nowSec = Math.floor(Date.now() / 1000);
@@ -1502,6 +1705,51 @@ class PollerService {
       tickStatusRank[a.status] - tickStatusRank[b.status]
       || (b.confirmed_at ?? b.caught_at).localeCompare(a.confirmed_at ?? a.caught_at));
 
+    // News radar — escalate entries whose ticker started moving (tick catch or
+    // a screen returned it), refresh scores from the classification cache (the
+    // async LLM pass may have upgraded the rule verdict), prune expired ones.
+    // Every transition is logged — the precision study reads these logs.
+    const radarList: NewsRadarItem[] = [];
+    for (const [tk, item] of this.newsRadar) {
+      const ageMin = Math.round((nowMsTick - item.first_seen_ms) / 60000);
+      if (ageMin > NEWS_RADAR.ttl_min) {
+        console.log(`[news-radar] ${item.status === 'moving' ? '✅ expired (moved)' : '💤 expired (no move)'} ${tk} after ${ageMin}min`);
+        this.newsRadar.delete(tk);
+        continue;
+      }
+      const cached = this.classificationCache.get(item.url);
+      if (cached) {
+        if (cached.classification.direction === 'bearish') {
+          // The LLM refinement flipped the rule verdict bearish — not an
+          // opportunity after all; drop the entry.
+          console.log(`[news-radar] dropped ${tk} — LLM reclassified bearish (${cached.classification.catalyst_type})`);
+          this.newsRadar.delete(tk);
+          continue;
+        }
+        item.impact = cached.classification.impact_score;
+        item.hype = cached.classification.hype_score;
+        item.direction = cached.classification.direction;
+        item.urgency = cached.classification.urgency;
+        item.catalyst_type = cached.classification.catalyst_type;
+        item.classifier = cached.classifier;
+      }
+      if (item.status === 'news') {
+        const via = screenRowByTicker.has(tk) ? 'screen' : this.tickCatches.has(tk) ? 'tick' : null;
+        if (via) {
+          item.status = 'moving';
+          item.escalated_at = new Date(nowMsTick).toISOString();
+          item.escalated_via = via;
+          console.log(`[news-radar] ↗ moving ${tk} via ${via} — ${ageMin}min after the news`);
+        }
+      }
+      radarList.push({ ...item });
+    }
+    // Moving first (actionable NOW), then newest news first; capped for the UI.
+    radarList.sort((a, b) =>
+      (a.status === 'moving' ? 0 : 1) - (b.status === 'moving' ? 0 : 1)
+      || b.first_seen_at.localeCompare(a.first_seen_at));
+    const radarDisplay = radarList.slice(0, NEWS_RADAR.max_display);
+
     // After-hours: re-impose a volume gate on the momentum list. Finviz drops
     // its relvol filter at the close, so names that ticked >5% on a few AH
     // shares (BLIV on 5, GRAN on 90) otherwise flood it. Keep a row only if it
@@ -1525,6 +1773,7 @@ class PollerService {
       swing: scoredSwing,
       continuation: this.lastContinuation,
       tick_catches: tickCatchList,
+      news_radar: radarDisplay,
       banners: { new_with_catalyst: newWithCatalyst, fresh_news: freshList },
       fresh_news: enriched
         .filter((r) => r.is_fresh_news && r.news_title)
@@ -2214,6 +2463,24 @@ function formatNewIgnitionAlert(r: IgnitionRow, ageSec: number): string {
     `<a href="${escapeHtml(r.finviz_url)}">Finviz</a> · <a href="${tv}">TradingView</a>`,
   ];
   return lines.filter(Boolean).join('\n');
+}
+
+// Render a news-radar hit (📰) — a strong/major catalyst just landed on a
+// known runner that is NOT moving yet. The measured edge: moves typically
+// start minutes after the wire, so this is the "get eyes on the chart before
+// the crowd" ping. Deliberately headline-forward.
+function formatNewsRadarAlert(item: NewsRadarItem): string {
+  const finviz = `https://finviz.com/quote.ashx?t=${encodeURIComponent(item.ticker)}`;
+  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(item.ticker)}`;
+  const meta = [`impact ${item.impact}`, `hype ${item.hype}`, item.catalyst_type];
+  const lines = [
+    `📰 <b>${escapeHtml(item.ticker)}</b>  fresh catalyst, not moving yet`,
+    `<b>NEWS RADAR</b> — known runner; moves often start minutes after the wire`,
+    meta.join(' · '),
+    `“${escapeHtml(item.title)}”`,
+    `<a href="${finviz}">Finviz</a> · <a href="${tv}">TradingView</a>`,
+  ];
+  return lines.join('\n');
 }
 
 // Render a tick-feed WATCH flag (👀) — the price-led early tier: the name just

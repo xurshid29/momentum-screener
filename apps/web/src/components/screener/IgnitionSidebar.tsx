@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Typography, Tooltip, Empty, Button, Popover, List } from 'antd';
 import { CloseOutlined, EyeInvisibleOutlined } from '@ant-design/icons';
-import type { CatalystInfo, CyclePayload, IgnitionRow, TickCatch } from '../../api/types';
+import type { CatalystInfo, CyclePayload, IgnitionRow, NewsRadarItem, TickCatch } from '../../api/types';
 import { useSelection } from '../../context/SelectionContext';
 import { useLayout } from '../../context/LayoutContext';
 import { useHiddenTickers } from '../../hooks/useHiddenTickers';
@@ -101,6 +101,8 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
   // Live tick-feed catches — surged on the per-second feed before the screens
   // returned them. Pinned at the very top; drop out once a screen catches up.
   const tickCatches = (payload?.tick_catches ?? []).filter((t) => !hidden.has(t.ticker));
+  // News radar — fresh catalysts on known runners that aren't moving yet.
+  const newsRadar = (payload?.news_radar ?? []).filter((n) => !hidden.has(n.ticker));
   const hiddenList = [...hidden].sort();
 
   const renderRow = (r: IgnitionRow) => (
@@ -188,7 +190,31 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
         </div>
       )}
 
-      {all.length === 0 && tickCatches.length === 0 ? (
+      {/* News radar — fresh catalyst on a known runner, not moving yet */}
+      {newsRadar.length > 0 && (
+        <div
+          style={{
+            flex: '0 0 auto',
+            maxHeight: '30%',
+            overflow: 'auto',
+            background: '#170f26',
+            borderBottom: '2px solid #722ed1',
+          }}
+        >
+          <SectionHeader label="📰 NEWS RADAR" count={newsRadar.length} color="#b37feb" />
+          {newsRadar.map((n) => (
+            <RadarItem
+              key={n.ticker}
+              item={n}
+              selected={n.ticker === selected}
+              onSelect={setSelected}
+              warned={isWarned(n.ticker)}
+            />
+          ))}
+        </div>
+      )}
+
+      {all.length === 0 && tickCatches.length === 0 && newsRadar.length === 0 ? (
         <div style={{ flex: '1 1 auto', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}
@@ -289,6 +315,70 @@ function TickItem({ tc, selected, onSelect }: { tc: TickCatch; selected: boolean
           {fmtPct(tc.change_pct)}
         </Text>
       </span>
+    </div>
+  );
+}
+
+// A news-radar row — a fresh catalyst on a known runner that isn't moving yet
+// (📰 purple). Two lines: ticker + classification meta, then the headline.
+// Escalates to a green "moving ↗" marker once the tick feed or a screen picks
+// the name up. Click to chart it — the whole point is eyes-on-chart early.
+function RadarItem({ item, selected, onSelect, warned }: {
+  item: NewsRadarItem;
+  selected: boolean;
+  onSelect: (t: string) => void;
+  warned: boolean;
+}) {
+  const agoMs = Date.now() - new Date(item.first_seen_at).getTime();
+  const ago = agoMs < 60_000 ? `${Math.round(agoMs / 1000)}s` : `${Math.round(agoMs / 60_000)}m`;
+  const moving = item.status === 'moving';
+  const meta: string[] = [`imp ${item.impact}`];
+  if (item.hype >= 60) meta.push(`🚀 ${item.hype}`);
+  if (item.catalyst_type && item.catalyst_type !== 'other') meta.push(item.catalyst_type);
+  meta.push(`${ago} ago`);
+  return (
+    <div
+      onClick={() => onSelect(item.ticker)}
+      style={{
+        padding: '5px 8px',
+        borderBottom: '1px solid #241633',
+        cursor: 'pointer',
+        borderLeft: `3px solid ${moving ? '#52c41a' : '#722ed1'}`,
+        background: selected ? '#2a1a45' : undefined,
+        opacity: warned ? 0.55 : 1,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+        <span style={{ minWidth: 0 }}>
+          <span style={{ marginRight: 6, display: 'inline-flex', verticalAlign: 'middle' }}>
+            <TickerLinks ticker={item.ticker} />
+          </span>
+          <TickerLink
+            ticker={item.ticker}
+            onSelect={onSelect}
+            stopPropagation
+            style={{ color: '#b37feb', fontWeight: 600, fontSize: 13 }}
+          />
+          {warned && <span style={{ marginLeft: 4 }}>⛔</span>}
+          <span style={{ marginLeft: 6, fontSize: 10, color: '#8c8c8c' }}>{meta.join(' · ')}</span>
+        </span>
+        <span style={{ flex: '0 0 auto', fontSize: 11, fontWeight: 600, color: moving ? '#73d13d' : '#b37feb' }}>
+          {moving ? 'moving ↗' : '📰 news'}
+        </span>
+      </div>
+      <div
+        title={item.title}
+        style={{
+          fontSize: 10,
+          color: '#a89bc0',
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          marginTop: 1,
+        }}
+      >
+        {item.title}
+      </div>
     </div>
   );
 }

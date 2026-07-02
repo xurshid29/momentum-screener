@@ -315,6 +315,27 @@ export interface TickCatch {
   watch_change_pct: number | null;
 }
 
+// A news-radar hit — a fresh catalyst on a known runner (momentum/ignition
+// history) that is NOT on any screen yet. Moves typically start minutes after
+// the wire; 'moving' = the tick feed or a screen has since picked the name up.
+export interface NewsRadarItem {
+  ticker: string;
+  source: NewsSource;
+  title: string;
+  url: string;
+  published_at: string | null;
+  first_seen_at: string;
+  impact: number;
+  hype: number;
+  direction: CatalystDirection;
+  urgency: CatalystUrgency;
+  catalyst_type: string;
+  classifier: Classifier;
+  status: 'news' | 'moving';
+  escalated_at: string | null;
+  escalated_via: 'tick' | 'screen' | null;
+}
+
 export interface CyclePayload {
   cycle_id: string;
   polled_at: string | null;
@@ -327,6 +348,7 @@ export interface CyclePayload {
   banners: { new_with_catalyst: string[]; fresh_news: string[] };
   fresh_news: NewsHeadline[];
   tick_catches: TickCatch[];
+  news_radar: NewsRadarItem[];
 }
 
 export interface HistoryRow {

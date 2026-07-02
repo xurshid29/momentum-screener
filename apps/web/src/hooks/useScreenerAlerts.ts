@@ -78,6 +78,14 @@ function watchPing() {
   beep(990, 180, 0, 0.35);     // B5
 }
 
+function newsRadarPing() {
+  // Two soft low tones for a NEWS RADAR hit (📰) — a fresh catalyst on a known
+  // runner that isn't moving yet. Lower than everything else: informational,
+  // "glance when you can", not "look NOW".
+  beep(587, 160, 0, 0.32);     // D5
+  beep(740, 200, 0.18, 0.32);  // F#5
+}
+
 export function requestNotificationPermission() {
   if ('Notification' in window && Notification.permission === 'default') {
     void Notification.requestPermission();
@@ -103,6 +111,8 @@ export function useScreenerAlerts(payload: CyclePayload | null) {
   // Tick catches persist ~15 min (many payloads); track (ticker, tier) keys
   // we've already pinged so each catch alerts once per tier, not every cycle.
   const seenTicks = useRef<Set<string>>(new Set());
+  // News-radar entries persist ~90 min; ping each article once.
+  const seenRadar = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!payload) return;
@@ -112,12 +122,28 @@ export function useScreenerAlerts(payload: CyclePayload | null) {
     const tickKeys = (payload.tick_catches ?? [])
       .filter((t) => t.status !== 'faded')
       .map((t) => ({ key: `${t.ticker}:${t.status ?? 'confirmed'}`, ticker: t.ticker, status: t.status ?? 'confirmed' }));
+    const radarKeys = (payload.news_radar ?? [])
+      .map((n) => ({ key: `${n.ticker}:${n.url}`, ticker: n.ticker }));
 
     if (!seenFirst.current) {
       seenFirst.current = true;
       // Seed seen ticks so catches already on screen at load don't all ping.
       tickKeys.forEach((t) => seenTicks.current.add(t.key));
+      radarKeys.forEach((n) => seenRadar.current.add(n.key));
       return;
+    }
+
+    // News radar — soft ping for each new entry (a fresh catalyst on a known
+    // runner). Escalations don't ping here: the tick/screen paths that caused
+    // them fire their own, stronger alerts.
+    const newRadar = radarKeys.filter((n) => !seenRadar.current.has(n.key));
+    newRadar.forEach((n) => seenRadar.current.add(n.key));
+    if (newRadar.length > 0) {
+      try { newsRadarPing(); } catch { /* audio context not unlocked */ }
+      notify(
+        '📰 News radar — fresh catalyst, not moving yet',
+        newRadar.length <= 3 ? newRadar.map((n) => n.ticker).join(', ') : `${newRadar.length} known runners with news`,
+      );
     }
 
     // Live tick events — ping each new (ticker, tier) once, independent of the

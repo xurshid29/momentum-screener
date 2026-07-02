@@ -1,11 +1,23 @@
-# Session Handover — updated 2026-07-02
+# Session Handover — updated 2026-07-03
 
 A running handover so a fresh session can continue without re-deriving context.
 **Read `docs/web-dashboard.md` first** (the canonical status doc); this file is
 the "where we are right now + what's open" layer on top of it. Memory files
 under `…/memory/` also carry the durable facts.
 
-**CURRENT FOCUS (2026-07-02): Tick feed two-tier WATCH→CONFIRM — built, shipped.**
+**CURRENT FOCUS (2026-07-03): 📰 NEWS RADAR — catalyst-first detection, shipped.**
+Operator's observation ("ticker starts moving 10–15 min after its news")
+validated on our own data (median news→detection lag 7.9 min, p75 91) and
+built: the market-wide Benzinga delta (+ fresh halts) matched against the
+known-runner set (30d momentum/ignition history) for names not yet on any
+screen → purple sidebar section + soft ping (Telegram only strong/major),
+arms the tick feed, escalates to "moving ↗" when the tick detector or a
+screen picks the name up, expires at 90 min with a logged outcome. See the
+top "What shipped" entry (NR) for the watch items — especially the live
+precision numbers to collect from logs. Prior focus (tick-feed two-tier,
+2026-07-02) shipped + operator-reviewed the same day.
+
+**PRIOR FOCUS (2026-07-02): Tick feed two-tier WATCH→CONFIRM — built, shipped.**
 The operator's complaint: tick catches (and the relvol-gated screens) fire when
 names are already +30–50% — on nano-caps volume confirmation is structurally
 late, and prod near-miss logs proved it (three mechanisms). The detector is now
@@ -80,6 +92,10 @@ but was committed (`3903b9e`) — **trust the commits/origin, not the tree.**
 ---
 
 ## What shipped this session (newest first, all on prod unless noted)
+
+NR. **📰 NEWS RADAR — catalyst-first detection (2026-07-03).** Full spec in web-dashboard.md (top entry). The chain is now: news radar (pre-move) → tick watch (+10% cross) → tick confirm / screens. Zero new API calls — the Benzinga delta was already market-wide; we were discarding the non-screening matches. Benzinga fetch now paginates (≤3×100/cycle; bursts used to drop articles silently past the watermark — verified `page` param live).
+   - **Key mechanics:** known-runner set = 30d of momentum/ignition tickers (`seedRadarHistory` boot seed + live growth); dedup by article URL/day; classify via the shared URL cache (LLM refinement upgrades in place, bearish flip drops the entry); radar entries carry a `daily_bars` prior close so `TickFeedService.syncScreenRows` (30s) arms the detector for non-universe names; escalation check runs in the payload build (`screenRowByTicker` / `tickCatches`); session='closed' skipped.
+   - **WATCH / OPEN:** (a) **precision unknown until live** — the DB couldn't measure how many headlines lead nowhere; after ~1 week: `docker compose logs api | grep news-radar` → hit rate = `↗ moving` / (`↗ moving` + `💤 expired (no move)`), per catalyst type/impact band; then tune display gates (currently ALL non-bearish shown) + the Telegram gate (strong/major). (b) expect **premarket 8:00–9:30 ET burst** — if the section floods, add a `min_impact` display gate (`NEWS_RADAR` const). (c) radar entries are in-memory (deploy loses them; `radarSeenUrls` dedup also resets → a deploy can re-radar an active article — same known residual as tick catches). (d) marketContext is null at classify time (no live float/mcap for non-screening names) → hype skews low until the LLM pass lands.
 
 TICKW. **Tick feed two-tier: 👀 WATCH → 🛰️ CONFIRMED (2026-07-02).** Operator: "when I get the tick catch they're already 30–50% up — RelVol on nano-caps arrives too late; flag by change% first, confirm/remove when volume shows." Prod near-miss logs (last 7d) confirmed three lateness mechanisms: **no-baseline gappers can NEVER fire** (LHAI +238%, EHGO +120%, USDE +168% — quiet sampling stops at cum≥8%, so 0-quiet names are invisible all session), **relvol≥5× clears 20–30 pts after price** (DSY +23% @1.8× → fired +56.7%; SDEV +19% → +47.6%), **slow grinders never trip mom≥8%/60s**. Catches fired at +23–63% (median ~+40).
    - **Built:** `tick-detect.ts` is now a per-symbol state machine (idle→watching→confirmed|faded; full detail in web-dashboard.md). WATCH = cum ≥10% (≤100) + near-high + junk floor (≥5 prints & ≥$2k notional/2min — kills the "+15% on 5 shares" prints). CONFIRM = old surge rule (unchanged — strict superset) | baseline-free sustain (≥2min + ext ≥3pts + ≥flag price + ≥$25k since flag) | screen pickup (poller payload build promotes watch entries that appear in momentum/ignition). FADE = 15min or 60% giveback; surge rule can resurrect a faded name. Watches suppressed for already-screened names (redundant + would self-confirm). Also `syncScreenRows()` in tickfeed.ts (30s) — subscribes current screen rows instantly w/ row-derived prior closes (not in AH — anchor shifts), closing the 10-min universe-lag "0 quiet" hole.

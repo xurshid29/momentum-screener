@@ -163,21 +163,35 @@ class TickFeedService {
   // (price / (1 + change%/100)) — skipped in after-hours, where row
   // change/price are the AH overlay (anchored to today's close, not the prior
   // one) and would corrupt the detector's cum% measurement.
+  // Also arms NEWS RADAR names (payload.news_radar): a fresh catalyst on a
+  // known runner that isn't moving yet — subscribing NOW means the watch/
+  // confirm machine is already listening when the move starts. Radar entries
+  // carry a daily_bars prior close, which is session-independent.
   private syncScreenRows(): void {
     const payload = poller.getLastPayload();
-    if (!payload || payload.session === 'afterhours' || payload.session === 'closed') return;
+    if (!payload || payload.session === 'closed') return;
     const fresh: string[] = [];
-    for (const r of [...payload.rows, ...payload.ignition]) {
-      const tk = r.ticker.toUpperCase();
+    if (payload.session !== 'afterhours') {
+      for (const r of [...payload.rows, ...payload.ignition]) {
+        const tk = r.ticker.toUpperCase();
+        if (this.detector.hasPriorClose(tk) || this.extraSubs.has(tk)) continue;
+        if (r.price == null || r.change_pct == null || r.price <= 0 || r.change_pct <= -100) continue;
+        this.detector.setPriorClose(tk, r.price / (1 + r.change_pct / 100));
+        this.extraSubs.add(tk);
+        fresh.push(tk);
+      }
+    }
+    for (const n of payload.news_radar ?? []) {
+      const tk = n.ticker.toUpperCase();
       if (this.detector.hasPriorClose(tk) || this.extraSubs.has(tk)) continue;
-      if (r.price == null || r.change_pct == null || r.price <= 0 || r.change_pct <= -100) continue;
-      this.detector.setPriorClose(tk, r.price / (1 + r.change_pct / 100));
+      if (n.prior_close == null || n.prior_close <= 0) continue;
+      this.detector.setPriorClose(tk, n.prior_close);
       this.extraSubs.add(tk);
       fresh.push(tk);
     }
     if (fresh.length > 0 && this.child?.stdin.writable) {
       this.subscribe(fresh);
-      console.log(`[tickfeed] screen-sync — subscribed ${fresh.length} screener names: ${fresh.join(',')}`);
+      console.log(`[tickfeed] screen-sync — subscribed ${fresh.length} names: ${fresh.join(',')}`);
     }
   }
 
