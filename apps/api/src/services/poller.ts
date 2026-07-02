@@ -1960,9 +1960,16 @@ class PollerService {
       // it) alerts even when the name is on a screen: a non-catalyst screen
       // row generates no push of its own, so the watch ping IS the operator's
       // early warning (the missed-AUID case, 2026-07-02).
+      // Before the first poll cycle broadcasts, screen state is UNKNOWN
+      // (lastPayload null) — treat that as screened for stale watches, else
+      // every deploy re-pings the names already running (CWD +87% at boot).
+      const payloadReady = this.lastPayload !== null;
       const onScreen = this.isCurrentlyScreened(e.ticker);
-      if (onScreen && !e.fresh_cross) {
-        console.log(`[tickfeed] 👀 watch ${e.ticker} suppressed — stale (first sight already +${e.change_pct.toFixed(0)}%), on a screen`);
+      if (!e.fresh_cross && (onScreen || !payloadReady)) {
+        console.log(
+          `[tickfeed] 👀 watch ${e.ticker} suppressed — stale (first sight already +${e.change_pct.toFixed(0)}%), ` +
+          (payloadReady ? 'on a screen' : 'boot, screens unknown'),
+        );
         return;
       }
       this.tickCatches.set(e.ticker, {
