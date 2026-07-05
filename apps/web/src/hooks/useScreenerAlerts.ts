@@ -86,6 +86,12 @@ function newsRadarPing() {
   beep(740, 200, 0.18, 0.32);  // F#5
 }
 
+function accumPing() {
+  // Single hushed tone for quiet accumulation (🤫) — volume arriving while
+  // price is still flat. The quietest ping in the set, by design.
+  beep(523, 200, 0, 0.28);     // C5
+}
+
 export function requestNotificationPermission() {
   if ('Notification' in window && Notification.permission === 'default') {
     void Notification.requestPermission();
@@ -153,6 +159,7 @@ export function useScreenerAlerts(payload: CyclePayload | null) {
     newTicks.forEach((t) => seenTicks.current.add(t.key));
     const newConfirmed = newTicks.filter((t) => t.status === 'confirmed').map((t) => t.ticker);
     const newWatches = newTicks.filter((t) => t.status === 'watch').map((t) => t.ticker);
+    const newAccums = newTicks.filter((t) => t.status === 'accum').map((t) => t.ticker);
     if (newConfirmed.length > 0) {
       try { radarPing(); } catch { /* audio context not unlocked */ }
       notify(
@@ -164,6 +171,12 @@ export function useScreenerAlerts(payload: CyclePayload | null) {
       notify(
         '👀 Tick watch — confirmation pending',
         newWatches.length <= 3 ? newWatches.join(', ') : `${newWatches.length} new tick watches`,
+      );
+    } else if (newAccums.length > 0) {
+      try { accumPing(); } catch { /* audio context not unlocked */ }
+      notify(
+        '🤫 Quiet accumulation — volume before price',
+        newAccums.length <= 3 ? newAccums.join(', ') : `${newAccums.length} names accumulating`,
       );
     }
 

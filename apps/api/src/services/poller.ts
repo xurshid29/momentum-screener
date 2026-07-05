@@ -209,13 +209,14 @@ const DUAL_SIGNAL = {
 };
 
 // A live tick-feed catch surfaced in the dashboard (the 🛰️ section of the
-// Ignition sidebar) — a name the per-second detector flagged BEFORE the Finviz
-// screens returned it. Two-tier (2026-07-02): 'watch' = price-led early flag
-// (👀 amber, confirmation pending), 'confirmed' = volume-confirmed ignition
-// (🛰️ blue — the surge rule, the baseline-free sustain read, or a screen
-// picking the name up), 'faded' = watch expired/gave back (grey, lingers
-// briefly, then pruned). See onTickEvent.
-export type TickCatchStatus = 'watch' | 'confirmed' | 'faded';
+// Ignition sidebar) — a name flagged BEFORE (or as) the move develops. The
+// ladder (2026-07-02, +accum 2026-07-05): 'accum' = 🤫 quiet accumulation
+// (volume arriving, price still <10% — see ACCUM), 'watch' = 👀 price-led
+// early flag (+10% cross, confirmation pending), 'confirmed' = 🛰️
+// volume-confirmed ignition (surge rule / sustain read / screen pickup),
+// 'faded' = watch expired/gave back (grey, lingers briefly, then pruned).
+// See onTickEvent and scanAccumulation.
+export type TickCatchStatus = 'accum' | 'watch' | 'confirmed' | 'faded';
 
 export interface TickCatch {
   ticker: string;
@@ -241,6 +242,28 @@ const NEWS_RADAR = {
   history_days: 30,   // "known runner" = seen on momentum/ignition within this window
   ttl_min: 90,        // entry lifetime (p75 of the news→detection lag ≈ 91 min)
   max_display: 12,    // sidebar cap — keep the section glanceable
+};
+
+// Quiet-accumulation tier (🤫) — the earliest state in the LIVE TICKS ladder
+// (accum → 👀 watch → 🛰️ confirmed). Measured 2026-07-05 (55d cohort study, see
+// HANDOVER entry QVOL): a name arriving on a screen still QUIET on price
+// (chg 0..10%) but with strong early volume (fast RVol ≥ 10× within its first
+// minutes) is ~3–7× likelier to put in a ≥+20pt move than quiet names without
+// the volume (AH: 20–25% vs 3%; PM/REG: 12–14% vs 3–12%), and the state
+// precedes the +10% tick-watch line by minutes-to-hours (USDE 2026-07-01:
+// flagged +6.97% / 21× day-RVol at 16:04 ET, launched 17:48). This is the
+// operator's "EMA cross + rising MACD on flat candles" observation reduced to
+// the measurable thing that carries it: volume before price.
+const ACCUM = {
+  chg_min: 0,           // % — non-negative...
+  chg_max: 10,          // ...but still under the tick-watch line
+  fast_rv_min: 1000,    // % — max(rv1m, rv5m) ≥ 10× (the measured cohort cut)
+  window_min: 10,       // only within the first N min after first sight today
+                        // (the cohort was measured at first appearance — a
+                        // pulled-back spike at +8% later in the day is NOT
+                        // quiet accumulation)
+  ttl_min: 120,         // display TTL; expiry is logged for outcome grading
+  telegram_rv_min: 3000, // % — Telegram only for the violent tail (or bullish news)
 };
 
 export interface NewsRadarItem {
@@ -479,8 +502,19 @@ class PollerService {
   // tracks the latest transition (watch/confirm/fade) for those TTLs;
   // screened_at_watch records whether a screen ALREADY held the name when the
   // watch was flagged — if so, screen presence is not fresh volume evidence
-  // and must not promote the watch (only surge/sustain can).
-  private tickCatches = new Map<string, TickCatch & { last_event_ms: number; screened_at_watch?: boolean }>();
+  // and must not promote the watch (only surge/sustain can). accum_entry_chg /
+  // accum_peak carry the 🤫 tier's grading telemetry (entry vs peak while
+  // flagged) for the expiry/promotion logs.
+  private tickCatches = new Map<string, TickCatch & {
+    last_event_ms: number;
+    screened_at_watch?: boolean;
+    accum_entry_chg?: number;
+    accum_peak?: number;
+  }>();
+  // Quiet-accumulation dedup — once per ticker per ET day (see ACCUM), plus
+  // the Telegram-side dedup for the tight-gate 🤫 push.
+  private accumSeen = new Set<string>();
+  private alertedAccum = new Set<string>();
   // Tickers that have traded in an Ignition pre-market cycle today. Feeds the
   // runner-score's pre-market-exhaustion penalty (a name that already ran in PM
   // gives back into the close). ET-day concept — cleared at midnight.
@@ -919,6 +953,8 @@ class PollerService {
       this.alertedTickCatch.clear();
       this.alertedTickWatch.clear();
       this.tickCatches.clear();
+      this.accumSeen.clear();
+      this.alertedAccum.clear();
       this.newsRadar.clear();
       this.radarSeenUrls.clear();
       this.alertedNewsRadar.clear();
@@ -1642,6 +1678,11 @@ class PollerService {
       .map((r) => r.ticker);
     const freshList = enriched.filter((r) => r.is_fresh_news).map((r) => r.ticker);
 
+    // Quiet-accumulation scan (🤫) — flag screened names still quiet on price
+    // with strong early volume. Must run BEFORE the tick-catch payload block
+    // so a fresh flag shows this cycle, not next.
+    this.scanAccumulation([...enriched, ...ignition], session, this.firstPoll);
+
     // Tick-feed catches for the dashboard 🛰️ section — kept as a rolling
     // "recent catches" feed so they're actually VISIBLE. We deliberately do
     // NOT drop a catch the moment a screen picks the name up: the volume-led
@@ -1682,6 +1723,20 @@ class PollerService {
           ));
         }
       }
+      // Accum backstop: if the row itself crosses the +10% line while the
+      // tick detector stayed silent (not subscribed / no prior close), the
+      // ladder still advances — dashboard-only, no extra push (the detector
+      // path is the alerting one when it's live).
+      if (tc.status === 'accum' && row?.change_pct != null && row.change_pct >= ACCUM.chg_max) {
+        const mins = Math.round((nowMsTick - Date.parse(tc.caught_at)) / 60000);
+        tc.status = 'watch';
+        tc.watch_change_pct = row.change_pct;
+        tc.last_event_ms = nowMsTick;
+        console.log(
+          `[accum] ↗ 👀 watch(screen) ${t} +${row.change_pct.toFixed(1)}% — ${mins}min after the 🤫 flag` +
+          (tc.accum_entry_chg != null ? ` (+${(row.change_pct - tc.accum_entry_chg).toFixed(1)}pts)` : ''),
+        );
+      }
       // Keep displayed price/chg live for names the screens also carry — a
       // watch row frozen at its flag values reads as broken next to an
       // Ignition row showing +106% (the CETX case). The flag point itself
@@ -1689,13 +1744,27 @@ class PollerService {
       // change is the AH overlay (anchored to today's close) while the
       // detector's ⚑ is prior-day-anchored — mixing them read as a pullback
       // that never happened (UPC: "⚑ +56%" beside "+29.11%"), so only the
-      // anchor-free price refreshes there.
+      // anchor-free price refreshes there. Accum entries are row-anchored by
+      // birth, so their change refreshes in any session — and tracks the
+      // grading peak.
       if (row && tc.status !== 'faded') {
         if (row.price != null) tc.price = row.price;
-        if (row.change_pct != null && session !== 'afterhours') tc.change_pct = row.change_pct;
+        if (row.change_pct != null && (session !== 'afterhours' || tc.status === 'accum')) {
+          tc.change_pct = row.change_pct;
+        }
+        if (tc.status === 'accum' && row.change_pct != null) {
+          tc.accum_peak = Math.max(tc.accum_peak ?? row.change_pct, row.change_pct);
+        }
       }
-      const ttl = tc.status === 'faded' ? TICK_FADE_LINGER_MS : TICK_CATCH_TTL_MS;
+      const ttl = tc.status === 'faded' ? TICK_FADE_LINGER_MS
+        : tc.status === 'accum' ? ACCUM.ttl_min * 60_000
+        : TICK_CATCH_TTL_MS;
       if (nowMsTick - tc.last_event_ms > ttl) {
+        if (tc.status === 'accum') {
+          const pts = tc.accum_entry_chg != null && tc.accum_peak != null
+            ? (tc.accum_peak - tc.accum_entry_chg).toFixed(1) : '?';
+          console.log(`[accum] 💤 expired ${t} after ${ACCUM.ttl_min}min (peak +${pts}pts from flag)`);
+        }
         this.tickCatches.delete(t);
         continue;
       }
@@ -1706,9 +1775,9 @@ class PollerService {
         watch_change_pct: tc.watch_change_pct,
       });
     }
-    // Confirmed on top, then watches, faded last; newest transition first
-    // within each group.
-    const tickStatusRank: Record<TickCatchStatus, number> = { confirmed: 0, watch: 1, faded: 2 };
+    // Confirmed on top, then watches, then quiet accumulation, faded last;
+    // newest transition first within each group.
+    const tickStatusRank: Record<TickCatchStatus, number> = { confirmed: 0, watch: 1, accum: 2, faded: 3 };
     tickCatchList.sort((a, b) =>
       tickStatusRank[a.status] - tickStatusRank[b.status]
       || (b.confirmed_at ?? b.caught_at).localeCompare(a.confirmed_at ?? a.caught_at));
@@ -2201,6 +2270,57 @@ class PollerService {
     }
   }
 
+  // Quiet-accumulation scan (🤫) — see ACCUM for the measured evidence. Flags
+  // a screened name within its first minutes on screen when price is still
+  // quiet (chg 0..10%) but our fast RVol shows strong participation. The flag
+  // is an entry in the LIVE TICKS ladder (status 'accum'); it promotes to 👀
+  // via the tick detector's watch event (or the screen backstop when the row
+  // itself crosses +10%), and confirms via the normal surge/sustain paths.
+  // Dashboard + soft ping for every flag; Telegram only for the violent tail
+  // (fast RVol ≥ telegram_rv_min) or when a bullish catalyst rides along.
+  private scanAccumulation(rows: Iterable<EnrichedRow>, session: TradingSession, firstPoll: boolean): void {
+    const nowMs = Date.now();
+    for (const r of rows) {
+      if (this.accumSeen.has(r.ticker) || this.tickCatches.has(r.ticker)) continue;
+      if (r.change_pct == null || r.change_pct < ACCUM.chg_min || r.change_pct >= ACCUM.chg_max) continue;
+      const fast = Math.max(r.rel_vol_1min ?? 0, r.rel_vol_5min ?? 0);
+      if (fast < ACCUM.fast_rv_min) continue;
+      // The cohort was measured at FIRST appearance — a name that spiked and
+      // pulled back under 10% later in the day is not quiet accumulation.
+      const firstMs = Date.parse(r.first_seen_at);
+      if (!Number.isFinite(firstMs) || nowMs - firstMs > ACCUM.window_min * 60_000) continue;
+      this.accumSeen.add(r.ticker);
+      this.tickCatches.set(r.ticker, {
+        ticker: r.ticker,
+        price: r.price ?? 0,
+        change_pct: r.change_pct,
+        rel_vol: +(fast / 100).toFixed(1),   // display in ×, like detector rel-vol
+        mom_pct: 0,
+        status: 'accum',
+        caught_at: new Date(nowMs).toISOString(),
+        confirmed_at: null,
+        watch_change_pct: null,
+        last_event_ms: nowMs,
+        screened_at_watch: true,             // born from a screen — screen presence ≠ confirmation
+        accum_entry_chg: r.change_pct,
+        accum_peak: r.change_pct,
+      });
+      console.log(
+        `[accum] 🤫 ${r.ticker} $${(r.price ?? 0).toFixed(2)} +${r.change_pct.toFixed(1)}% · ` +
+        `fastRV ${Math.round(fast)}% · dayRV ${r.rel_volume?.toFixed(1) ?? '?'}x · ${session}`,
+      );
+      const bullishNews = !!r.has_today_news && r.catalyst?.direction === 'bullish';
+      if (
+        !firstPoll && telegramEnabled() && !this.alertsMuted &&
+        !this.alertedAccum.has(r.ticker) &&
+        (fast >= ACCUM.telegram_rv_min || bullishNews)
+      ) {
+        this.alertedAccum.add(r.ticker);
+        void sendTelegram(formatAccumAlert(r, fast, bullishNews));
+      }
+    }
+  }
+
   // Live tick-feed state-machine event (👀/🛰️) — TickFeedService's detector
   // flagged, confirmed, or faded a name on the Databento per-second tape.
   // WATCH (price-led, baseline-free) typically lands 20–40 chg-points before
@@ -2213,6 +2333,29 @@ class PollerService {
     const nowMs = Date.now();
     const existing = this.tickCatches.get(e.ticker);
     if (e.type === 'watch') {
+      // An accumulation flag graduating to a price watch — the ladder's first
+      // promotion. The accum tier already vetted the name (quiet + volume on
+      // a screen), so the stale/on-screen suppression below doesn't apply.
+      if (existing?.status === 'accum') {
+        const mins = Math.round((nowMs - Date.parse(existing.caught_at)) / 60000);
+        const pts = existing.accum_entry_chg != null ? e.change_pct - existing.accum_entry_chg : null;
+        existing.status = 'watch';
+        existing.price = e.price;
+        existing.change_pct = e.change_pct;
+        existing.rel_vol = e.rel_vol;
+        existing.mom_pct = e.mom_pct;
+        existing.watch_change_pct = e.change_pct;
+        existing.last_event_ms = nowMs;
+        console.log(
+          `[accum] ↗ 👀 watch ${e.ticker} +${e.change_pct.toFixed(1)}% — ` +
+          `${mins}min after the 🤫 flag${pts != null ? ` (+${pts.toFixed(1)}pts)` : ''}`,
+        );
+        if (telegramEnabled() && !this.alertsMuted && !this.alertedTickWatch.has(e.ticker)) {
+          this.alertedTickWatch.add(e.ticker);
+          void sendTelegram(formatTickWatchAlert(e));
+        }
+        return;
+      }
       if (existing) return; // shouldn't happen (detector watches once/day) — keep idempotent
       // Suppress only STALE watches on already-screened names: first sight was
       // already above the watch line (restart re-seeing an old move, mid-move
@@ -2489,6 +2632,27 @@ function formatNewsRadarAlert(item: NewsRadarItem): string {
     `<a href="${finviz}">Finviz</a> · <a href="${tv}">TradingView</a>`,
   ];
   return lines.join('\n');
+}
+
+// Render a quiet-accumulation flag (🤫) — the earliest tier: volume arriving
+// while price is still flat. Only the violent tail (or accumulation with a
+// bullish catalyst riding along) reaches Telegram; the dashboard shows all.
+function formatAccumAlert(r: EnrichedRow, fastRv: number, bullishNews: boolean): string {
+  const price = r.price == null ? '' : `$${r.price.toFixed(2)}`;
+  const chg = r.change_pct == null ? '' : `+${r.change_pct.toFixed(1)}%`;
+  const finviz = `https://finviz.com/quote.ashx?t=${encodeURIComponent(r.ticker)}`;
+  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}`;
+  const meta: string[] = [`fastRV ${Math.round(fastRv / 100)}×`];
+  if (r.rel_volume != null) meta.push(`dayRV ${r.rel_volume.toFixed(1)}×`);
+  if (r.float_m != null) meta.push(`float ${r.float_m.toFixed(1)}M`);
+  const lines = [
+    `🤫 <b>${escapeHtml(r.ticker)}</b>  ${price}  ${chg}`.trimEnd(),
+    `<b>QUIET ACCUMULATION</b> — volume arriving, price still flat`,
+    meta.join(' · '),
+    bullishNews && r.news_title ? `“${escapeHtml(r.news_title)}”` : '',
+    `<a href="${finviz}">Finviz</a> · <a href="${tv}">TradingView</a>`,
+  ];
+  return lines.filter(Boolean).join('\n');
 }
 
 // Render a tick-feed WATCH flag (👀) — the price-led early tier: the name just

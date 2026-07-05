@@ -261,6 +261,7 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
 // flag, confirmation pending), 🛰️ confirmed = blue (volume-confirmed), faded =
 // grey and dimmed (expired watch, lingers briefly). Clickable to chart it.
 const TICK_STYLES = {
+  accum:     { border: '#08979c', ticker: '#5cdbd3', row: '#112b2b' },
   watch:     { border: '#d48806', ticker: '#ffd666', row: '#3a2e10' },
   confirmed: { border: '#1890ff', ticker: '#69c0ff', row: '#14304a' },
   faded:     { border: '#595959', ticker: '#8c8c8c', row: '#262626' },
@@ -273,6 +274,7 @@ function TickItem({ tc, selected, onSelect }: { tc: TickCatch; selected: boolean
   const agoMs = Date.now() - new Date(anchor).getTime();
   const ago = agoMs < 60_000 ? `${Math.round(agoMs / 1000)}s` : `${Math.round(agoMs / 60_000)}m`;
   const meta: string[] = [];
+  if (status === 'accum') meta.push('🤫 accum');
   if (status === 'watch') meta.push('👀 pending');
   if (status === 'faded') meta.push('faded');
   if (tc.rel_vol > 0) meta.push(`${Math.round(tc.rel_vol)}× rv`);

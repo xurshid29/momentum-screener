@@ -296,12 +296,13 @@ export interface NewsHeadline {
 // change_pct/price/volume reflect after-hours figures, not the regular close.
 export type TradingSession = 'premarket' | 'regular' | 'afterhours' | 'closed';
 
-// A live tick-feed catch — flagged on the per-second feed before the Finviz
-// screens returned it. Two-tier: 'watch' = price-led early flag (amber,
-// confirmation pending), 'confirmed' = volume-confirmed (blue), 'faded' =
-// expired/gave back (grey, lingers briefly). Shown in the 🛰️ section of the
-// Ignition sidebar. See poller.ts onTickEvent.
-export type TickCatchStatus = 'watch' | 'confirmed' | 'faded';
+// A live tick-feed catch — flagged before (or as) the move develops. The
+// ladder: 'accum' = 🤫 quiet accumulation (volume arriving, price still <10%,
+// teal), 'watch' = 👀 price-led early flag (amber, confirmation pending),
+// 'confirmed' = volume-confirmed (blue), 'faded' = expired/gave back (grey,
+// lingers briefly). Shown in the 🛰️ section of the Ignition sidebar. See
+// poller.ts onTickEvent / scanAccumulation.
+export type TickCatchStatus = 'accum' | 'watch' | 'confirmed' | 'faded';
 
 export interface TickCatch {
   ticker: string;

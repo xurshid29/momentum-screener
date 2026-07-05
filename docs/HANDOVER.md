@@ -5,7 +5,14 @@ A running handover so a fresh session can continue without re-deriving context.
 the "where we are right now + what's open" layer on top of it. Memory files
 under `…/memory/` also carry the durable facts.
 
-**CURRENT FOCUS (2026-07-03): 📰 NEWS RADAR — catalyst-first detection, shipped.**
+**CURRENT FOCUS (2026-07-05): 🤫 quiet-accumulation tier — measured + shipped.**
+The operator's recurring EMA/MACD instinct finally decomposed into its real
+carrier: volume-before-price. Conditional EMA/MACD entry test = negative (book
+closed, entry EMAMACD2); the quiet+strong-fastRV cohort = real 3–7× lift
+(entry QVOL) and now ships as the earliest LIVE TICKS ladder state
+(accum → 👀 → 🛰️), with graded logs to tune from after a week.
+
+**PRIOR FOCUS (2026-07-03): 📰 NEWS RADAR — catalyst-first detection, shipped.**
 Operator's observation ("ticker starts moving 10–15 min after its news")
 validated on our own data (median news→detection lag 7.9 min, p75 91) and
 built: the market-wide Benzinga delta (+ fresh halts) matched against the
@@ -93,6 +100,11 @@ but was committed (`3903b9e`) — **trust the commits/origin, not the tree.**
 ---
 
 ## What shipped this session (newest first, all on prod unless noted)
+
+QVOL. **🤫 Quiet-accumulation tier — measured, then shipped (2026-07-05).** The operator kept seeing "EMA cross + rising MACD on flat candles" before moves (USDE: cross ~16:00–16:30 ET Jul 1, launch 17:48, NO news until next morning — so the radar couldn't see it, and the EMAMACD2 study anchored on news couldn't either). Decomposed the observation: the carrier is **volume before price**, not the indicator. Verified USDE in our own rows: momentum NEW at 16:04 ET, +6.97%, day-RVol 21×, rv5m 3,119% → every alert path silent for 104 min (all gate on chg≥10 / catalyst / score).
+   - **Cohort study (55d, first appearance per ticker/ET-day, `scripts/research/quiet-accum-cohort-v2-fastrv.sql`):** quiet entries (chg<10) split by fast RVol (max rv1m/rv5m in first 5 min — session-independent; ⚠️ v1 with day-RVol was distorted, Finviz day-RV reads ~0 in PM). **Quiet + fastRV≥10× → ≥+20pt continuation 20–25% (AH, n=507) / 12–14% (PM-REG, n=315) vs 3% for quiet-no-vol** — a 3–7× lift. `seen_recently=true` slightly OUTPERFORMS within the cohort (known runner quietly re-loading). Hot (chg≥10) still has higher absolute rates but enters extended — the accum tier's value is the early cheap entry + lead time to the +10% line (USDE 104 min).
+   - **Shipped:** `scanAccumulation` in poller (union rows, chg 0–10, fastRV≥1000%, within first 10 min of first sight — the measured entry semantics; once/ticker/day) → LIVE TICKS ladder entry `status='accum'` (🤫 teal). Promotes to 👀 via the detector's watch event (accum entries skip the stale/on-screen suppression) or a screen backstop at chg≥10 (display-only); confirms via normal surge/sustain; `screened_at_watch=true` blocks bogus screen-confirms. TTL 120 min with graded expiry logs. Alerts: soft dashboard ping (quietest tone) for every flag; **Telegram 🤫 only for fastRV≥3000% or accumulation+bullish-news** — once/ticker/day.
+   - **WATCH / OPEN:** (a) grade live precision from `grep accum` logs (`↗ 👀 watch` / `🛰️` vs `💤 expired (peak +Xpts)`), tune `ACCUM.fast_rv_min`/`telegram_rv_min` after ~a week; expect ~15 flags/day at 10×. (b) sub-5% ignition-side entries (chg 0–5) are included but were NOT in the measured cohort (momentum's chg≥5 gate) — check their share in the logs. (c) same in-memory restart residual as the rest of the ladder. (d) Phase 2 idea if the tier earns it: detector-side accumulation (volume surge vs quiet baseline while cum<10) for names below the momentum screen's chg≥5 gate — the only truly invisible zone left.
 
 EMAMACD2. **RESEARCH — the conditional EMA/MACD test is now RUN; the book is CLOSED (2026-07-05).** The one salvage path left open by the 07-01 study ("does entering at the cross beat entering at our detection, on catalyst names only?") — measured. **Design:** 1,115 usable detections (momentum ∪ ignition first-per-ticker/ET-day, 55d) that had a bullish-classified article ≤24h before detection; three entries raced per event to a SHARED finish line (news+24h / news+72h peak, right-censored dropped): news-bar entry (radar-style), first EMA6/20×MACD cross after the news (15m + 30m, EMA-only and full confluence), our detection. Yahoo 15m×60d prepost bars; scripts durable this time in `apps/api/scripts/research/` (`ema-macd-conditional-*`).
    - **Verdict — no conditional edge:** paired on the same events, **cross−detection = +0.0 pts median in EVERY subset** (all / impact≥60 / strong-major / premium types, both horizons) and **cross−news = −1.5 to −2.5 pts**. The cross fires ≤24h post-news in only 70% of events, so "wait for the cross" also forfeits 30% of moves entirely — mean capture roughly HALVES vs acting on the news (+16.1% vs +32.7% @24h). Conditioning on catalyst quality does not resurrect the signal anywhere.
