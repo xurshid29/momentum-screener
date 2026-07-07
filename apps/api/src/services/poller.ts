@@ -258,12 +258,21 @@ const ACCUM = {
   chg_min: 0,           // % — non-negative...
   chg_max: 10,          // ...but still under the tick-watch line
   fast_rv_min: 1000,    // % — max(rv1m, rv5m) ≥ 10× (the measured cohort cut)
+  // Persistence gate (2026-07-07 feature study, 55d cohort): requiring the
+  // hot-volume state on ≥3 cycles within the window lifts promotion 53%→65%
+  // and the ≥+20pt rate 17%→24% while cutting flags ~40% — what it cuts is
+  // the one-print blips (35%/7%). Day-1 live agreed: USEA's transient 223×
+  // spike fizzled, BJDX's sustained 12× ran +68pts.
+  min_hot_cycles: 3,
   window_min: 10,       // only within the first N min after first sight today
                         // (the cohort was measured at first appearance — a
                         // pulled-back spike at +8% later in the day is NOT
                         // quiet accumulation)
   ttl_min: 120,         // display TTL; expiry is logged for outcome grading
-  telegram_rv_min: 3000, // % — Telegram only for the violent tail (or bullish news)
+  // Telegram: sustained accumulation WITH a bullish catalyst — the
+  // highest-conviction measurable slice (72% promote / 30% ≥+20pts, ~1.6/day).
+  // The original fastRV≥3000 gate was measured backwards on day 1 (magnitude
+  // beyond the threshold doesn't rank winners) and is retired.
 };
 
 export interface NewsRadarItem {
@@ -512,9 +521,11 @@ class PollerService {
     accum_peak?: number;
   }>();
   // Quiet-accumulation dedup — once per ticker per ET day (see ACCUM), plus
-  // the Telegram-side dedup for the tight-gate 🤫 push.
+  // the Telegram-side dedup for the tight-gate 🤫 push, plus the persistence
+  // counter (cycles observed hot within the first-sight window).
   private accumSeen = new Set<string>();
   private alertedAccum = new Set<string>();
+  private accumHotCycles = new Map<string, number>();
   // Tickers that have traded in an Ignition pre-market cycle today. Feeds the
   // runner-score's pre-market-exhaustion penalty (a name that already ran in PM
   // gives back into the close). ET-day concept — cleared at midnight.
@@ -955,6 +966,7 @@ class PollerService {
       this.tickCatches.clear();
       this.accumSeen.clear();
       this.alertedAccum.clear();
+      this.accumHotCycles.clear();
       this.newsRadar.clear();
       this.radarSeenUrls.clear();
       this.alertedNewsRadar.clear();
@@ -2303,6 +2315,11 @@ class PollerService {
       // pulled back under 10% later in the day is not quiet accumulation.
       const firstMs = Date.parse(r.first_seen_at);
       if (!Number.isFinite(firstMs) || nowMs - firstMs > ACCUM.window_min * 60_000) continue;
+      // Persistence: flag only once the hot-volume state has held across
+      // min_hot_cycles polls (~1 min) — kills the one-print blips.
+      const hotCount = (this.accumHotCycles.get(r.ticker) ?? 0) + 1;
+      this.accumHotCycles.set(r.ticker, hotCount);
+      if (hotCount < ACCUM.min_hot_cycles) continue;
       this.accumSeen.add(r.ticker);
       this.tickCatches.set(r.ticker, {
         ticker: r.ticker,
@@ -2326,8 +2343,7 @@ class PollerService {
       const bullishNews = !!r.has_today_news && r.catalyst?.direction === 'bullish';
       if (
         !firstPoll && telegramEnabled() && !this.alertsMuted &&
-        !this.alertedAccum.has(r.ticker) &&
-        (fast >= ACCUM.telegram_rv_min || bullishNews)
+        !this.alertedAccum.has(r.ticker) && bullishNews
       ) {
         this.alertedAccum.add(r.ticker);
         void sendTelegram(formatAccumAlert(r, fast, bullishNews));
