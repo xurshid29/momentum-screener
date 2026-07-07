@@ -93,7 +93,7 @@ export function CatalystNewsModal({ ticker, catalyst, onClose }: Props) {
           <Spin />
         </div>
       ) : (
-        <TickerNewsList news={news ?? []} max={20} />
+        <TickerNewsList news={news ?? []} max={20} ticker={ticker ?? undefined} />
       )}
     </Modal>
   );

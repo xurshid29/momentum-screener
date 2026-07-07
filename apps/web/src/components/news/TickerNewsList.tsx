@@ -32,7 +32,20 @@ function fmtNewsTs(iso: string): string {
   return `${date} · ${time}`;
 }
 
-export function TickerNewsList({ news, max = 8 }: { news: NewsArticle[]; max?: number }) {
+// Benzinga's auto-generated multi-ticker "why is it moving" blurbs carry a
+// quote-page URL for ONE representative ticker (e.g. /quote/SKYQ on an
+// article tagged to 20 oil names) — clicking that from another ticker's news
+// list lands on the wrong symbol. In a single-ticker context, rewrite the
+// quote-page URL to the ticker being viewed; real article URLs pass through.
+function articleHref(url: string, ticker?: string): string {
+  if (!ticker) return url;
+  return url.replace(
+    /^(https?:\/\/(?:www\.)?benzinga\.com\/quote\/)[^/?#]+/i,
+    `$1${encodeURIComponent(ticker)}`,
+  );
+}
+
+export function TickerNewsList({ news, max = 8, ticker }: { news: NewsArticle[]; max?: number; ticker?: string }) {
   if (news.length === 0) {
     return (
       <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
@@ -52,7 +65,7 @@ export function TickerNewsList({ news, max = 8 }: { news: NewsArticle[]; max?: n
                 <CatalystAnalyzeButton articleId={n.id} initial={n.classification} />
               </span>
               <a
-                href={n.url}
+                href={articleHref(n.url, ticker)}
                 target="_blank"
                 rel="noopener noreferrer"
                 style={{ color: '#e6e6e6', fontSize: 13, flex: '1 1 auto' }}

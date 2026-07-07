@@ -318,7 +318,7 @@ function DetailsTab({ ticker, meta, news }: DetailsTabProps) {
           price/structural numbers are immediately visible without scrolling. */}
       <div style={{ marginTop: 20 }}>
         <SectionTitle>Recent News</SectionTitle>
-        <TickerNewsList news={news} />
+        <TickerNewsList news={news} ticker={ticker} />
       </div>
     </div>
   );
