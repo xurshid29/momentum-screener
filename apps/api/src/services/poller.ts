@@ -275,6 +275,21 @@ const ACCUM = {
   // beyond the threshold doesn't rank winners) and is retired.
 };
 
+// Evidence gate for the 👀 watch tier (2026-07-07, operator report + day-1
+// scorecard): a +10% cross reached by an hours-long drift (mid/large caps on
+// a sector day, multi-day grinders — VSTM/ADCT/FBRX/BZFD all crossed at ≤2×
+// rv and ~0%/60s) is not an ignition start; it polluted the LIVE TICKS list
+// and the push channel. A watch must show evidence AT the cross: relative
+// volume vs the name's own quiet baseline, OR the move happening right now.
+// Every watch that mattered on day 1 passed (JLHL 5.3×/+5%, NIVF 63×, LGPS
+// 45×…); the drift class had neither and faded. Gated in the POLLER so the
+// detector's anchor still plants — surge/sustain confirms stay fully live
+// for suppressed names (suppressions are logged for grading the cost).
+const TICK_WATCH_EVIDENCE = {
+  rel_vol_min: 3,   // × quiet baseline at the cross, OR…
+  mom_min: 3,       // …%/60s — the cross is happening NOW
+};
+
 export interface NewsRadarItem {
   ticker: string;
   source: NewsSource;
@@ -2387,6 +2402,16 @@ class PollerService {
         return;
       }
       if (existing) return; // shouldn't happen (detector watches once/day) — keep idempotent
+      // Evidence gate — see TICK_WATCH_EVIDENCE. Drift-crossers (slow grind
+      // to +10% with no volume and no momentum) don't earn a watch; the
+      // detector keeps its anchor, so surge/sustain can still confirm later.
+      if (e.rel_vol < TICK_WATCH_EVIDENCE.rel_vol_min && e.mom_pct < TICK_WATCH_EVIDENCE.mom_min) {
+        console.log(
+          `[tickfeed] 👀 watch ${e.ticker} suppressed — low evidence at cross ` +
+          `(${e.rel_vol}x rv, +${e.mom_pct.toFixed(0)}%/60s); confirm paths stay live`,
+        );
+        return;
+      }
       // Suppress only STALE watches on already-screened names: first sight was
       // already above the watch line (restart re-seeing an old move, mid-move
       // subscribe) AND the screens already show it — a 👀 there is old news.
