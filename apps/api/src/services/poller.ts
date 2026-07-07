@@ -1227,6 +1227,11 @@ class PollerService {
       }
       for (const h of haltDelta?.halts ?? []) {
         if (!haltDelta?.freshTickers.has(h.ticker)) continue;
+        // News-type halts only (T1 news pending / T2 released / T12 info
+        // requested). LULD volatility pauses (LUDP/M) are mid-move mechanics —
+        // often on DOWN moves — not pre-move catalysts: on 2026-07-06 they
+        // were 8 of the radar's 11 hits and all expired as noise.
+        if (!/^T\d/i.test(h.reasonCode)) continue;
         radarCandidates.push({ source: 'halt', ticker: h.ticker, title: h.title, url: h.url, published_at: h.haltedAt, haltReason: h.reasonCode });
       }
       this.updateNewsRadar(radarCandidates, new Set(tickers));
@@ -1764,6 +1769,10 @@ class PollerService {
           const pts = tc.accum_entry_chg != null && tc.accum_peak != null
             ? (tc.accum_peak - tc.accum_entry_chg).toFixed(1) : '?';
           console.log(`[accum] 💤 expired ${t} after ${ACCUM.ttl_min}min (peak +${pts}pts from flag)`);
+        } else if (tc.status === 'watch') {
+          // Grading gap found 2026-07-07: fades log, but watches that simply
+          // age out never did — ~35 of Monday's ~80 watches vanished silently.
+          console.log(`[tickfeed] ⌛ watch expired ${t} — no confirm within TTL (last at ${tc.change_pct >= 0 ? '+' : ''}${tc.change_pct.toFixed(1)}%${tc.watch_change_pct != null ? `, flagged +${tc.watch_change_pct.toFixed(1)}%` : ''})`);
         }
         this.tickCatches.delete(t);
         continue;
@@ -1811,7 +1820,12 @@ class PollerService {
         item.classifier = cached.classifier;
       }
       if (item.status === 'news') {
-        const via = screenRowByTicker.has(tk) ? 'screen' : this.tickCatches.has(tk) ? 'tick' : null;
+        // 'tick' escalation requires actual price movement (watch/confirmed) —
+        // an 🤫 accum entry is volume-only and mislabeled NVVE "moving" on
+        // 2026-07-06 while its price went nowhere.
+        const tickStatus = this.tickCatches.get(tk)?.status;
+        const via = screenRowByTicker.has(tk) ? 'screen'
+          : (tickStatus === 'watch' || tickStatus === 'confirmed') ? 'tick' : null;
         if (via) {
           item.status = 'moving';
           item.escalated_at = new Date(nowMsTick).toISOString();
