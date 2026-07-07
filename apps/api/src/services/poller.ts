@@ -33,6 +33,7 @@ import { dailyBars, getRecentBarsForTickers } from './daily-bars.js';
 import { outcomes } from './outcomes.js';
 import { getContinuationCandidates, type ContinuationCandidate } from './continuation.js';
 import { classifyByRules, type Classification, type ClassifierInput } from './catalyst-rules.js';
+import { recordTierEvent } from './tier-events.js';
 import { classifyByClaude } from './catalyst-claude.js';
 
 const DEFAULTS: ScreenerFilterSnapshot = {
@@ -725,6 +726,10 @@ class PollerService {
       console.log(
         `[news-radar] 📰 hit ${tk} — impact ${cls.impact_score} · hype ${cls.hype_score} · ${cls.catalyst_type} (${c.source}): "${c.title.slice(0, 100)}"`,
       );
+      recordTierEvent('radar', 'hit', tk, {
+        impact: cls.impact_score, hype: cls.hype_score, type: cls.catalyst_type,
+        source: c.source, url: c.url, title: c.title.slice(0, 140),
+      });
       // Prior close for tick-feed arming (best-effort, async — TickFeedService
       // picks it up from the payload on its next 30s sync).
       void this.lookupPriorClose(tk).then((pc) => {
@@ -1748,6 +1753,7 @@ class PollerService {
           `${chg >= 0 ? '+' : ''}${chg.toFixed(1)}%` +
           (tc.watch_change_pct != null ? ` (watched at +${tc.watch_change_pct.toFixed(1)}%)` : ''),
         );
+        recordTierEvent('tick', 'confirm', t, { via: 'screen', chg, watch_chg: tc.watch_change_pct });
         if (telegramEnabled() && !this.alertsMuted && !this.alertedTickCatch.has(t)) {
           this.alertedTickCatch.add(t);
           void sendTelegram(formatTickConfirmAlert(
@@ -1768,6 +1774,10 @@ class PollerService {
           `[accum] ↗ 👀 watch(screen) ${t} +${row.change_pct.toFixed(1)}% — ${mins}min after the 🤫 flag` +
           (tc.accum_entry_chg != null ? ` (+${(row.change_pct - tc.accum_entry_chg).toFixed(1)}pts)` : ''),
         );
+        recordTierEvent('accum', 'promote', t, {
+          via: 'screen', chg: row.change_pct, minutes: mins,
+          pts: tc.accum_entry_chg != null ? +(row.change_pct - tc.accum_entry_chg).toFixed(1) : null,
+        });
       }
       // Keep displayed price/chg live for names the screens also carry — a
       // watch row frozen at its flag values reads as broken next to an
@@ -1796,10 +1806,12 @@ class PollerService {
           const pts = tc.accum_entry_chg != null && tc.accum_peak != null
             ? (tc.accum_peak - tc.accum_entry_chg).toFixed(1) : '?';
           console.log(`[accum] 💤 expired ${t} after ${ACCUM.ttl_min}min (peak +${pts}pts from flag)`);
+          recordTierEvent('accum', 'expire', t, { peak_pts: pts === '?' ? null : +pts, minutes: ACCUM.ttl_min });
         } else if (tc.status === 'watch') {
           // Grading gap found 2026-07-07: fades log, but watches that simply
           // age out never did — ~35 of Monday's ~80 watches vanished silently.
           console.log(`[tickfeed] ⌛ watch expired ${t} — no confirm within TTL (last at ${tc.change_pct >= 0 ? '+' : ''}${tc.change_pct.toFixed(1)}%${tc.watch_change_pct != null ? `, flagged +${tc.watch_change_pct.toFixed(1)}%` : ''})`);
+          recordTierEvent('tick', 'watch_expired', t, { chg: tc.change_pct, watch_chg: tc.watch_change_pct });
         }
         this.tickCatches.delete(t);
         continue;
@@ -1827,6 +1839,10 @@ class PollerService {
       const ageMin = Math.round((nowMsTick - item.first_seen_ms) / 60000);
       if (ageMin > NEWS_RADAR.ttl_min) {
         console.log(`[news-radar] ${item.status === 'moving' ? '✅ expired (moved)' : '💤 expired (no move)'} ${tk} after ${ageMin}min`);
+        recordTierEvent('radar', 'expired', tk, {
+          outcome: item.status === 'moving' ? 'moved' : 'no_move',
+          via: item.escalated_via, minutes: ageMin, impact: item.impact, type: item.catalyst_type,
+        });
         this.newsRadar.delete(tk);
         continue;
       }
@@ -1836,6 +1852,7 @@ class PollerService {
           // The LLM refinement flipped the rule verdict bearish — not an
           // opportunity after all; drop the entry.
           console.log(`[news-radar] dropped ${tk} — LLM reclassified bearish (${cached.classification.catalyst_type})`);
+          recordTierEvent('radar', 'dropped', tk, { reason: 'llm_bearish', type: cached.classification.catalyst_type });
           this.newsRadar.delete(tk);
           continue;
         }
@@ -1858,6 +1875,7 @@ class PollerService {
           item.escalated_at = new Date(nowMsTick).toISOString();
           item.escalated_via = via;
           console.log(`[news-radar] ↗ moving ${tk} via ${via} — ${ageMin}min after the news`);
+          recordTierEvent('radar', 'moving', tk, { via, minutes: ageMin, impact: item.impact, type: item.catalyst_type });
         }
       }
       radarList.push({ ...item });
@@ -2356,6 +2374,10 @@ class PollerService {
         `fastRV ${Math.round(fast)}% · dayRV ${r.rel_volume?.toFixed(1) ?? '?'}x · ${session}`,
       );
       const bullishNews = !!r.has_today_news && r.catalyst?.direction === 'bullish';
+      recordTierEvent('accum', 'flag', r.ticker, {
+        chg: r.change_pct, price: r.price, fast_rv: Math.round(fast),
+        day_rv: r.rel_volume, float_m: r.float_m, session, bullish_news: bullishNews,
+      });
       if (
         !firstPoll && telegramEnabled() && !this.alertsMuted &&
         !this.alertedAccum.has(r.ticker) && bullishNews
@@ -2395,6 +2417,7 @@ class PollerService {
           `[accum] ↗ 👀 watch ${e.ticker} +${e.change_pct.toFixed(1)}% — ` +
           `${mins}min after the 🤫 flag${pts != null ? ` (+${pts.toFixed(1)}pts)` : ''}`,
         );
+        recordTierEvent('accum', 'promote', e.ticker, { via: 'tick', chg: e.change_pct, minutes: mins, pts });
         if (telegramEnabled() && !this.alertsMuted && !this.alertedTickWatch.has(e.ticker)) {
           this.alertedTickWatch.add(e.ticker);
           void sendTelegram(formatTickWatchAlert(e));
@@ -2410,6 +2433,9 @@ class PollerService {
           `[tickfeed] 👀 watch ${e.ticker} suppressed — low evidence at cross ` +
           `(${e.rel_vol}x rv, +${e.mom_pct.toFixed(0)}%/60s); confirm paths stay live`,
         );
+        recordTierEvent('tick', 'watch_suppressed', e.ticker, {
+          reason: 'low_evidence', chg: e.change_pct, rel_vol: e.rel_vol, mom: e.mom_pct,
+        });
         return;
       }
       // Suppress only STALE watches on already-screened names: first sight was
@@ -2429,6 +2455,9 @@ class PollerService {
           `[tickfeed] 👀 watch ${e.ticker} suppressed — stale (first sight already +${e.change_pct.toFixed(0)}%), ` +
           (payloadReady ? 'on a screen' : 'boot, screens unknown'),
         );
+        recordTierEvent('tick', 'watch_suppressed', e.ticker, {
+          reason: payloadReady ? 'stale_on_screen' : 'stale_boot', chg: e.change_pct,
+        });
         return;
       }
       this.tickCatches.set(e.ticker, {
@@ -2449,6 +2478,10 @@ class PollerService {
         `${e.change_pct >= 0 ? '+' : ''}${e.change_pct.toFixed(1)}% · ${e.rel_vol}x rv · +${e.mom_pct.toFixed(0)}%/60s` +
         ` · ${e.fresh_cross ? 'fresh cross' : 'seen mid-move'}${onScreen ? ', on screen' : ''}`,
       );
+      recordTierEvent('tick', 'watch', e.ticker, {
+        chg: e.change_pct, price: e.price, rel_vol: e.rel_vol, mom: e.mom_pct,
+        fresh_cross: !!e.fresh_cross, on_screen: onScreen,
+      });
       if (telegramEnabled() && !this.alertsMuted && !this.alertedTickWatch.has(e.ticker)) {
         this.alertedTickWatch.add(e.ticker);
         void sendTelegram(formatTickWatchAlert(e));
@@ -2476,6 +2509,10 @@ class PollerService {
         ` · ${e.rel_vol}x rv · +${e.mom_pct.toFixed(0)}%/60s` +
         (e.notional != null ? ` · $${Math.round(e.notional / 1000)}k since flag` : ''),
       );
+      recordTierEvent('tick', 'confirm', e.ticker, {
+        via: e.via ?? 'surge', chg: e.change_pct, price: e.price, watch_chg: watchChg,
+        rel_vol: e.rel_vol, mom: e.mom_pct, notional: e.notional ?? null,
+      });
       if (telegramEnabled() && !this.alertsMuted && !this.alertedTickCatch.has(e.ticker)) {
         this.alertedTickCatch.add(e.ticker);
         void sendTelegram(formatTickConfirmAlert(e.ticker, e.price, e.change_pct, e.rel_vol, e.mom_pct, watchChg, e.via ?? 'surge'));
@@ -2492,6 +2529,7 @@ class PollerService {
         `[tickfeed] 💤 fade ${e.ticker} ${e.change_pct >= 0 ? '+' : ''}${e.change_pct.toFixed(1)}%` +
         (e.watch_change_pct != null ? ` (watched at +${e.watch_change_pct.toFixed(1)}%)` : ''),
       );
+      recordTierEvent('tick', 'fade', e.ticker, { chg: e.change_pct, watch_chg: e.watch_change_pct ?? null });
     }
   }
 

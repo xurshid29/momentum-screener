@@ -323,6 +323,18 @@ export interface TradeExecutionsTable {
   created_at: Generated<Date>;
 }
 
+// Durable early-detection tier transitions (🤫 accum / 👀🛰️ tick / 📰 radar) —
+// written fire-and-forget by the poller so grading survives deploys (docker
+// logs reset on every container recreation). See services/tier-events.ts.
+export interface TierEventsTable {
+  id: Generated<string>;
+  tier: string;    // 'accum' | 'tick' | 'radar'
+  event: string;   // per-tier transition name — see the migration header
+  ticker: string;
+  at: Generated<Date>;
+  meta: JSONColumnType<Record<string, unknown>> | null;
+}
+
 export interface Database {
   users: UsersTable;
   screener_settings: ScreenerSettingsTable;
@@ -343,4 +355,5 @@ export interface Database {
   user_flagged_tickers: UserFlaggedTickersTable;
   broker_imports: BrokerImportsTable;
   trade_executions: TradeExecutionsTable;
+  tier_events: TierEventsTable;
 }
