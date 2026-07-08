@@ -62,21 +62,25 @@ for (const [name, [prior, futc, fchg]] of Object.entries(RUNNERS)) {
   const det = new TickDetector();
   det.setPriorClose(name.split('_')[0], prior);
   const fts = tsSec(futc);
-  let watch = null, confirm = null;
+  let accum = null, watch = null, confirm = null;
   for (const r of rows) {
     const ev = det.addBar(name.split('_')[0], r.bar);
     if (!ev) continue;
+    if (ev.type === 'accum' && !accum) accum = ev;
     if (ev.type === 'watch' && !watch) watch = ev;
     if (ev.type === 'confirm') { confirm = ev; break; }
   }
   const leadTag = (sec: number) => sec > 0 ? `${sec}s EARLIER` : `${-sec}s later`;
+  const apart = accum
+    ? `accum ${hms(accum.ts_sec)} at +${accum.change_pct.toFixed(0)}%`
+    : 'no accum';
   const wpart = watch
     ? `watch ${hms(watch.ts_sec)} at +${watch.change_pct.toFixed(0)}% (${leadTag(fts - watch.ts_sec)})`
     : 'no watch';
   const cpart = confirm
     ? `confirm ${hms(confirm.ts_sec)} at +${confirm.change_pct.toFixed(0)}% via ${confirm.via} (rv ${confirm.rel_vol}x, ${leadTag(fts - confirm.ts_sec)})`
     : 'no confirm';
-  console.log(`${name.padEnd(16)} finviz ${('+'+fchg+'%').padStart(7)} | ${wpart} | ${cpart}`);
+  console.log(`${name.padEnd(16)} finviz ${('+'+fchg+'%').padStart(7)} | ${apart} | ${wpart} | ${cpart}`);
 }
 
 console.log('\n=== CONTROL — false rates on 38 fizzlers (peak <25%) ===\n');
@@ -87,6 +91,7 @@ if (cfile) {
   for (const [t, p] of Object.entries(CONTROL_PRIOR)) det.setPriorClose(t, p);
   const confirms: string[] = [];
   const watches: string[] = [];
+  const accums: string[] = [];
   const fades: string[] = [];
   const seen = new Set<string>();
   for (const r of rows) {
@@ -96,10 +101,13 @@ if (cfile) {
     if (!ev) continue;
     if (ev.type === 'confirm') confirms.push(`${ev.ticker} @ +${ev.change_pct.toFixed(0)}% via ${ev.via} (rv ${ev.rel_vol}x)`);
     else if (ev.type === 'watch') watches.push(`${ev.ticker} @ +${ev.change_pct.toFixed(0)}%`);
+    else if (ev.type === 'accum') accums.push(`${ev.ticker} @ +${ev.change_pct.toFixed(0)}% (rv ${ev.rel_vol}x)`);
     else fades.push(ev.ticker);
   }
   console.log(`false CONFIRMS (the regression metric): ${confirms.length} / ${seen.size}  (${(confirms.length / seen.size * 100).toFixed(0)}%)`);
   confirms.forEach((f) => console.log('  ' + f));
   console.log(`watches (allowed on fizzlers — they should fade): ${watches.length} / ${seen.size}, of which faded: ${fades.length}`);
   watches.forEach((f) => console.log('  👀 ' + f));
+  console.log(`accums on fizzlers (dashboard-only tier): ${accums.length} / ${seen.size}`);
+  accums.forEach((f) => console.log('  🤫 ' + f));
 }

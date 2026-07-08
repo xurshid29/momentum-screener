@@ -51,6 +51,7 @@ class TickFeedService {
   private etDate = etDate();
   private lastBarAt = 0;
   private barsSeen = 0;
+  private accums = 0;
   private watches = 0;
   private candidates = 0;   // confirms (kept as `candidates` for /health continuity)
   private fades = 0;
@@ -67,6 +68,7 @@ class TickFeedService {
       running: this.running,
       symbols_tracked: this.detector.symbolsTracked(),
       bars_seen: this.barsSeen,
+      accums: this.accums,
       watches: this.watches,
       candidates: this.candidates,
       fades: this.fades,
@@ -243,7 +245,8 @@ class TickFeedService {
     const bar: TickBar = { ts_sec: m.t, close: m.c, high: m.h, low: m.l, volume: m.v };
     const ev = this.detector.addBar(m.s, bar);
     if (ev) {
-      if (ev.type === 'watch') this.watches++;
+      if (ev.type === 'accum') this.accums++;
+      else if (ev.type === 'watch') this.watches++;
       else if (ev.type === 'confirm') this.candidates++;
       else this.fades++;
       poller.onTickEvent(ev);

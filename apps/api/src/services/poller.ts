@@ -2375,7 +2375,7 @@ class PollerService {
       );
       const bullishNews = !!r.has_today_news && r.catalyst?.direction === 'bullish';
       recordTierEvent('accum', 'flag', r.ticker, {
-        chg: r.change_pct, price: r.price, fast_rv: Math.round(fast),
+        source: 'screen', chg: r.change_pct, price: r.price, fast_rv: Math.round(fast),
         day_rv: r.rel_volume, float_m: r.float_m, session, bullish_news: bullishNews,
       });
       if (
@@ -2399,6 +2399,37 @@ class PollerService {
   onTickEvent(e: TickEvent): void {
     const nowMs = Date.now();
     const existing = this.tickCatches.get(e.ticker);
+    // Detector-side 🤫 (2026-07-08, the SLS case) — sub-10% accumulation on
+    // the per-second tape, screen-independent. Enters the same ladder as the
+    // screen-side accum scan; `accumSeen` is shared so a name flags once per
+    // day regardless of which side saw it first. Dashboard-only (no Telegram)
+    // until tier_events grades this source's precision.
+    if (e.type === 'accum') {
+      if (existing || this.accumSeen.has(e.ticker)) return;
+      this.accumSeen.add(e.ticker);
+      this.tickCatches.set(e.ticker, {
+        ticker: e.ticker,
+        price: e.price,
+        change_pct: e.change_pct,
+        rel_vol: e.rel_vol,
+        mom_pct: e.mom_pct,
+        status: 'accum',
+        caught_at: new Date(nowMs).toISOString(),
+        confirmed_at: null,
+        watch_change_pct: null,
+        last_event_ms: nowMs,
+        screened_at_watch: false,   // not from a screen — a later screen pickup IS fresh evidence
+        accum_entry_chg: e.change_pct,
+      });
+      console.log(
+        `[accum] 🤫 ${e.ticker} $${e.price.toFixed(2)} +${e.change_pct.toFixed(1)}% · ` +
+        `${e.rel_vol}x quiet-baseline · +${e.mom_pct.toFixed(0)}%/60s · tick-detector (sub-screen)`,
+      );
+      recordTierEvent('accum', 'flag', e.ticker, {
+        source: 'tick', chg: e.change_pct, price: e.price, rel_vol: e.rel_vol, mom: e.mom_pct,
+      });
+      return;
+    }
     if (e.type === 'watch') {
       // An accumulation flag graduating to a price watch — the ladder's first
       // promotion. The accum tier already vetted the name (quiet + volume on

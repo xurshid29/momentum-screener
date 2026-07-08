@@ -45,6 +45,17 @@ export const TICK_DETECT = {
   baseline_keep: 40,       // rolling count of quiet 60s-volume samples
   history_sec: 130,        // per-symbol bar retention (> window for trimming)
 
+  // ACCUM tier (🤫, detector-side, 2026-07-08 — the SLS case): volume running
+  // well above the name's own quiet baseline while price is still BELOW the
+  // watch line. Screen-independent — covers names the screens can't see
+  // (SLS: day-RVol never cleared momentum's 5× Finviz gate, so the ladder's
+  // first word came only at the +10% watch, 16 min after the move started).
+  // Sustained by design — the screen-side accum cohort study measured
+  // persistence as THE discriminator (hot ≥3 cycles: 65%/24% vs 35%/7%).
+  accum_cum_min: 3,        // % — drifting with intent, not tape noise
+  accum_relvol_min: 3,     // × quiet baseline — elevated participation
+  accum_hold_sec: 120,     // the condition must hold this long continuously
+
   // WATCH tier — price-led early flag, no baseline required.
   watch_cum_min: 10,       // % from prior close to flag a watch
   watch_cum_max: 100,      // first seen above this = the start is already missed
@@ -79,7 +90,7 @@ export interface TickBar {
   volume: number;
 }
 
-export type TickEventType = 'watch' | 'confirm' | 'fade';
+export type TickEventType = 'accum' | 'watch' | 'confirm' | 'fade';
 
 export interface TickEvent {
   type: TickEventType;
@@ -119,6 +130,10 @@ interface SymbolState {
   phase: Phase;
   watch: WatchAnchor | null;
   seenBelowWatch: boolean;  // ever traded below watch_cum_min in our history
+  // Detector-side 🤫: when the accum condition first became continuously true
+  // (null = not currently true), and whether the once-per-day flag fired.
+  accumSince: number | null;
+  accumFired: boolean;
   diagnosed: boolean;       // logged a near-miss reason once (see drainDiagnostics)
 }
 
@@ -171,7 +186,7 @@ export class TickDetector {
 
     let st = this.state.get(ticker);
     if (!st) {
-      st = { bars: [], quietVols: [], phase: 'idle', watch: null, seenBelowWatch: false, diagnosed: false };
+      st = { bars: [], quietVols: [], phase: 'idle', watch: null, seenBelowWatch: false, accumSince: null, accumFired: false, diagnosed: false };
       this.state.set(ticker, st);
     }
     st.bars.push(bar);
@@ -208,8 +223,19 @@ export class TickDetector {
 
     // While the name is still quiet, record its trailing-60s volume as a
     // baseline sample (rolling). Once it's moving (cum >= mom_min) we stop, so
-    // the baseline stays anchored to the pre-move level.
-    if (cum < TICK_DETECT.mom_min) {
+    // the baseline stays anchored to the pre-move level. A SURGE window is
+    // also excluded even below mom_min (2026-07-08): an accumulation burst at
+    // +4% used to feed its own elevated volume into the "quiet" baseline and
+    // self-dampen — the baseline is supposed to be the pre-move level, so
+    // windows already running ≥ accum_relvol_min× the current median don't
+    // qualify as quiet.
+    const priorBaseline = st.quietVols.length >= TICK_DETECT.baseline_min_samples
+      ? median(st.quietVols)
+      : 0;
+    if (
+      cum < TICK_DETECT.mom_min &&
+      (priorBaseline <= 0 || winVol < priorBaseline * TICK_DETECT.accum_relvol_min)
+    ) {
       st.quietVols.push(winVol);
       if (st.quietVols.length > TICK_DETECT.baseline_keep) st.quietVols.shift();
     }
@@ -250,6 +276,31 @@ export class TickDetector {
     ) {
       st.phase = 'confirmed';
       return ev('confirm', 'surge');
+    }
+
+    // 1b) ACCUM (🤫) — sub-watch quiet accumulation: elevated participation vs
+    // the name's own quiet baseline while price is still under the watch
+    // line, SUSTAINED for accum_hold_sec. Once per symbol per session; the
+    // ladder handles everything downstream (promotion at the +10% cross,
+    // confirm, TTL). Evaluated only from idle — an already-watching or
+    // confirmed name is past this tier.
+    if (st.phase === 'idle' && !st.accumFired) {
+      const accumCond =
+        cum >= TICK_DETECT.accum_cum_min &&
+        cum < TICK_DETECT.watch_cum_min &&
+        baseline >= TICK_DETECT.baseline_min_sh &&
+        relVol >= TICK_DETECT.accum_relvol_min &&
+        pos >= TICK_DETECT.near_high &&
+        prints >= TICK_DETECT.watch_floor_prints &&
+        notional >= TICK_DETECT.watch_floor_notional;
+      if (!accumCond) {
+        st.accumSince = null;
+      } else if (st.accumSince == null) {
+        st.accumSince = bar.ts_sec;
+      } else if (bar.ts_sec - st.accumSince >= TICK_DETECT.accum_hold_sec) {
+        st.accumFired = true;
+        return ev('accum');
+      }
     }
 
     // 2) WATCH — price-led flag, idle only (a faded name doesn't re-watch; the
