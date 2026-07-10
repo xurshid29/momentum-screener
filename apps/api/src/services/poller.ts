@@ -461,6 +461,8 @@ class PollerService {
   private secWatermark = Math.floor(Date.now() / 1000) - DELTA_LOOKBACK_SEC;
   private haltWatermark = Math.floor(Date.now() / 1000) - DELTA_LOOKBACK_SEC;
   private lastEtDate = '';
+  // News-day marker — rolls at 04:00 ET, not midnight (see runCycle).
+  private lastNewsDayEt = '';
   private lastSession: TradingSession | null = null;
   // Per-article-URL classification cache. Lets the LLM classifier
   // overwrite the rule-based score in-place; the next cycle's payload
@@ -972,9 +974,20 @@ class PollerService {
     const now = new Date();
     const todayEt = etDateString(now);
     const session = currentEtSession(now);
-    if (todayEt !== this.lastEtDate) {
+    // The NEWS day rolls at 04:00 ET (premarket start), not midnight. The
+    // closed session (00:00–04:00 ET) belongs to the trading day that just
+    // finished — the board still shows that day's change%, so stripping its
+    // news context at midnight left +100% rows with no 🔥 while the operator
+    // (UTC+5, for whom this is late morning) reviews the day (VRAX,
+    // 2026-07-10: with_catalyst went 174/174 at 23h ET → 0/174 at 00h ET).
+    // Alert dedups and per-day trading state stay midnight-anchored below.
+    const newsDayEt = etDateString(new Date(now.getTime() - 4 * 3600_000));
+    if (newsDayEt !== this.lastNewsDayEt) {
       this.bzHeadlineCache.clear();
       this.classificationCache.clear();
+      this.lastNewsDayEt = newsDayEt;
+    }
+    if (todayEt !== this.lastEtDate) {
       this.alertedUrls.clear();
       this.alertedIgnition.clear();
       this.alertedSwing.clear();
@@ -1141,11 +1154,11 @@ class PollerService {
 
     // 2) news — five sources in parallel
     const [finvizNews, yahooNews, bzDelta, edgarDelta, haltDelta] = await Promise.all([
-      fetchFinvizNews(tickers, todayEt).catch(() => []),
-      fetchYahooNews(tickers, todayEt).catch(() => []),
-      fetchBenzingaDelta(this.bzWatermark, todayEt).catch(() => null),
+      fetchFinvizNews(tickers, newsDayEt).catch(() => []),
+      fetchYahooNews(tickers, newsDayEt).catch(() => []),
+      fetchBenzingaDelta(this.bzWatermark, newsDayEt).catch(() => null),
       fetchEdgarFilings(new Set(tickers), this.secWatermark).catch(() => null),
-      fetchHalts(this.haltWatermark, todayEt).catch(() => null),
+      fetchHalts(this.haltWatermark, newsDayEt).catch(() => null),
     ]);
 
     // Build per-cycle ticker → headline map. Precedence, low → high:
