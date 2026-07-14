@@ -820,7 +820,7 @@ class PollerService {
       );
       recordTierEvent('radar', 'hit', tk, {
         impact: cls.impact_score, hype: cls.hype_score, type: cls.catalyst_type,
-        source: c.source, url: c.url, title: c.title.slice(0, 140),
+        urgency: cls.urgency, source: c.source, url: c.url, title: c.title.slice(0, 140),
       });
       // Prior close for tick-feed arming (best-effort, async — TickFeedService
       // picks it up from the payload on its next 30s sync).
@@ -1022,6 +1022,181 @@ class PollerService {
     }
   }
 
+  // Rebuild the live early-detection state from today's tier_events so a
+  // deploy doesn't blank the LIVE TICKS / NEWS RADAR / EMA CROSS sections or
+  // re-ping names that already alerted (the AUID case). Replays today's
+  // transitions in order, then sweeps expired entries by each tier's TTL —
+  // the dedup sets are seeded regardless of TTL (once per ET day means once,
+  // deploys included). Detector/tracker INTERNALS (quiet baselines, EMA
+  // warmup) are not reconstructable from events and rebuild on their own;
+  // reseeded 'observing' cross rows are dropped rather than shown, because
+  // their tracker-side observation died with the old process — only
+  // confirmed crosses survive.
+  private async seedTierState() {
+    try {
+      const rows = await getDb()
+        .selectFrom('tier_events')
+        .select(['tier', 'event', 'ticker', 'at', 'meta'])
+        .where(sql<boolean>`(at AT TIME ZONE 'America/New_York')::date = (now() AT TIME ZONE 'America/New_York')::date`)
+        .orderBy('at', 'asc')
+        .execute();
+      const iso = (ms: number) => new Date(ms).toISOString();
+      for (const r of rows) {
+        const m = (r.meta ?? {}) as Record<string, unknown>;
+        const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+        const t = r.ticker;
+        const atMs = new Date(r.at).getTime();
+        if (r.tier === 'accum') {
+          if (r.event === 'flag') {
+            this.accumSeen.add(t);
+            if (m.bullish_news === true) this.alertedAccum.add(t);
+            this.tickCatches.set(t, {
+              ticker: t,
+              price: num(m.price) ?? 0,
+              change_pct: num(m.chg) ?? 0,
+              rel_vol: num(m.fast_rv) != null ? +((num(m.fast_rv)! / 100).toFixed(1)) : num(m.rel_vol) ?? 0,
+              mom_pct: num(m.mom) ?? 0,
+              status: 'accum',
+              caught_at: iso(atMs),
+              confirmed_at: null,
+              watch_change_pct: null,
+              last_event_ms: atMs,
+              screened_at_watch: m.source !== 'tick',
+              accum_entry_chg: num(m.chg) ?? undefined,
+              accum_peak: num(m.chg) ?? undefined,
+            });
+          } else if (r.event === 'promote') {
+            const e = this.tickCatches.get(t);
+            if (e) {
+              e.status = 'watch';
+              e.watch_change_pct = num(m.chg) ?? e.change_pct;
+              e.change_pct = num(m.chg) ?? e.change_pct;
+              e.last_event_ms = atMs;
+            }
+            if (m.via === 'tick') this.alertedTickWatch.add(t);
+          } else if (r.event === 'expire') {
+            if (this.tickCatches.get(t)?.status === 'accum') this.tickCatches.delete(t);
+          }
+        } else if (r.tier === 'tick') {
+          if (r.event === 'watch') {
+            this.alertedTickWatch.add(t);
+            this.tickCatches.set(t, {
+              ticker: t,
+              price: num(m.price) ?? 0,
+              change_pct: num(m.chg) ?? 0,
+              rel_vol: num(m.rel_vol) ?? 0,
+              mom_pct: num(m.mom) ?? 0,
+              status: 'watch',
+              caught_at: iso(atMs),
+              confirmed_at: null,
+              watch_change_pct: num(m.chg),
+              last_event_ms: atMs,
+              screened_at_watch: m.on_screen === true,
+            });
+          } else if (r.event === 'confirm') {
+            this.alertedTickCatch.add(t);
+            const prev = this.tickCatches.get(t);
+            this.tickCatches.set(t, {
+              ticker: t,
+              price: num(m.price) ?? prev?.price ?? 0,
+              change_pct: num(m.chg) ?? 0,
+              rel_vol: num(m.rel_vol) ?? 0,
+              mom_pct: num(m.mom) ?? 0,
+              status: 'confirmed',
+              caught_at: prev?.caught_at ?? iso(atMs),
+              confirmed_at: iso(atMs),
+              watch_change_pct: num(m.watch_chg) ?? prev?.watch_change_pct ?? null,
+              last_event_ms: atMs,
+              screened_at_watch: prev?.screened_at_watch,
+            });
+          } else if (r.event === 'fade' || r.event === 'watch_expired') {
+            this.tickCatches.delete(t);
+          }
+        } else if (r.tier === 'radar') {
+          if (r.event === 'hit') {
+            if (typeof m.url === 'string') this.radarSeenUrls.add(m.url);
+            this.alertedNewsRadar.add(t); // conservative — no duplicate pushes post-boot
+            this.newsRadar.set(t, {
+              ticker: t,
+              source: (typeof m.source === 'string' ? m.source : 'benzinga') as NewsSource,
+              title: typeof m.title === 'string' ? m.title : '',
+              url: typeof m.url === 'string' ? m.url : '',
+              published_at: null,
+              first_seen_at: iso(atMs),
+              first_seen_ms: atMs,
+              impact: num(m.impact) ?? 0,
+              hype: num(m.hype) ?? 0,
+              direction: 'bullish',
+              urgency: (typeof m.urgency === 'string' ? m.urgency : 'watch') as CatalystUrgency,
+              catalyst_type: typeof m.type === 'string' ? m.type : 'other',
+              classifier: 'rules',
+              status: 'news',
+              escalated_at: null,
+              escalated_via: null,
+              prior_close: null,
+            });
+          } else if (r.event === 'moving') {
+            const e = this.newsRadar.get(t);
+            if (e) {
+              e.status = 'moving';
+              e.escalated_at = iso(atMs);
+              e.escalated_via = m.via === 'screen' ? 'screen' : 'tick';
+            }
+          } else if (r.event === 'expired' || r.event === 'dropped') {
+            this.newsRadar.delete(t);
+          }
+        } else if (r.tier === 'cross') {
+          if (r.event === 'confirm') {
+            const prev = this.emaCrosses.get(t);
+            this.emaCrosses.set(t, {
+              ticker: t,
+              status: 'confirmed',
+              price: num(m.price) ?? 0,
+              cross_price: num(m.cross_price) ?? num(m.price) ?? 0,
+              vol_ratio: num(m.vol_ratio) ?? 0,
+              cross_at: prev?.cross_at ?? iso(atMs),
+              confirmed_at: iso(atMs),
+              last_event_ms: atMs,
+            });
+          } else if (r.event === 'nominate' && m.in_ladder !== true) {
+            // Track for cross_at continuity only — pruned below unless a
+            // confirm follows (the old process's observation died with it).
+            this.emaCrosses.set(t, {
+              ticker: t, status: 'observing',
+              price: num(m.price) ?? 0,
+              cross_price: num(m.cross_price) ?? num(m.price) ?? 0,
+              vol_ratio: num(m.vol_ratio) ?? 0,
+              cross_at: iso(atMs), confirmed_at: null, last_event_ms: atMs,
+            });
+          } else if (r.event === 'expire') {
+            this.emaCrosses.delete(t);
+          }
+        }
+      }
+      // TTL sweep — entries past their display windows drop; dedup sets stay.
+      const nowMs = Date.now();
+      for (const [t, tc] of this.tickCatches) {
+        const ttl = tc.status === 'accum' ? ACCUM.ttl_min * 60_000
+          : tc.status === 'faded' ? 0
+          : 15 * 60 * 1000;
+        if (nowMs - tc.last_event_ms > ttl) this.tickCatches.delete(t);
+      }
+      for (const [t, item] of this.newsRadar) {
+        if (nowMs - item.first_seen_ms > NEWS_RADAR.ttl_min * 60_000) this.newsRadar.delete(t);
+      }
+      for (const [t, xc] of this.emaCrosses) {
+        if (xc.status === 'observing' || nowMs - xc.last_event_ms > 30 * 60 * 1000) this.emaCrosses.delete(t);
+      }
+      console.log(
+        `[poller] seeded tier state from today's tier_events (${rows.length} events) — ` +
+        `ladder ${this.tickCatches.size}, radar ${this.newsRadar.size}, crosses ${this.emaCrosses.size}; ` +
+        `dedups: accum ${this.accumSeen.size}, 👀 ${this.alertedTickWatch.size}, 🛰️ ${this.alertedTickCatch.size}, 📰 ${this.alertedNewsRadar.size}`,
+      );
+    } catch (err) {
+      console.error('[poller] could not seed tier state (continuing):', err);
+    }
+  }
+
   async start() {
     if (this.running) return;
     this.running = true;
@@ -1037,6 +1212,7 @@ class PollerService {
     await this.seedVwapState();
     await this.seedIgnitionState();
     await this.seedRadarHistory();
+    await this.seedTierState();
     console.log(`[poller] starting (every ${this.config.interval_sec}s)`);
     void this.tick();
     this.timer = setInterval(() => void this.tick(), this.config.interval_sec * 1000);
