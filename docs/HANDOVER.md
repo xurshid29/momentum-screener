@@ -1,69 +1,41 @@
-# Session Handover — updated 2026-07-03
+# Session Handover — updated 2026-07-15
 
 A running handover so a fresh session can continue without re-deriving context.
 **Read `docs/web-dashboard.md` first** (the canonical status doc); this file is
 the "where we are right now + what's open" layer on top of it. Memory files
 under `…/memory/` also carry the durable facts.
 
-**CURRENT FOCUS (2026-07-05): 🤫 quiet-accumulation tier — measured + shipped.**
-The operator's recurring EMA/MACD instinct finally decomposed into its real
-carrier: volume-before-price. Conditional EMA/MACD entry test = negative (book
-closed, entry EMAMACD2); the quiet+strong-fastRV cohort = real 3–7× lift
-(entry QVOL) and now ships as the earliest LIVE TICKS ladder state
-(accum → 👀 → 🛰️), with graded logs to tune from after a week.
+**CURRENT FOCUS (2026-07-15): the early-detection chain is COMPLETE and in its
+grading week.** The full chain, all live on prod:
+📰 news radar (pre-move catalyst on known runners) →
+🤫 quiet accumulation (volume-before-price; screen-side chg<10+fastRV≥10×
+sustained, AND detector-side cum 3–10% + relvol≥3× sustained 120s) →
+📈 EMA-cross layer (6/50 on 5m bars NOMINATES, volume-vs-sibling-candles
+CONFIRMS — the operator's manual TV loop automated; **TRIAL status**) →
+👀 watch (+10% cross, evidence-gated rv≥3× OR mom≥3%/60s) →
+🛰️ confirm (surge / sustain / screen) → screens.
+Every transition persists to the `tier_events` DB table and the live sidebar
+state reseeds on boot (`seedTierState`) — deploys no longer erase evidence,
+entries, or dedups.
 
-**PRIOR FOCUS (2026-07-03): 📰 NEWS RADAR — catalyst-first detection, shipped.**
-Operator's observation ("ticker starts moving 10–15 min after its news")
-validated on our own data (median news→detection lag 7.9 min, p75 91) and
-built: the market-wide Benzinga delta (+ fresh halts) matched against the
-known-runner set (30d momentum/ignition history) for names not yet on any
-screen → purple sidebar section + soft ping (Telegram only strong/major),
-arms the tick feed, escalates to "moving ↗" when the tick detector or a
-screen picks the name up, expires at 90 min with a logged outcome. See the
-top "What shipped" entry (NR) for the watch items — especially the live
-precision numbers to collect from logs. Prior focus (tick-feed two-tier,
-2026-07-02) shipped + operator-reviewed the same day.
+**THE PENDING TASK — the grading pass (run from ~2026-07-17, needs a few full
+sessions of tier_events):** (a) keep/kill the 📈 cross layer — nominate→confirm
+rate, confirmed-cross forward outcomes, overlap with 🤫/👀 (day-1 2026-07-14:
+37 nominations → 13 confirms / 14 expires); (b) audit the 👀 evidence gate's
+cost — `watch_suppressed reason='low_evidence'` tickers that later confirmed;
+(c) re-check accum v2 precision (persistence gate promised ~65% promote / 24%
+≥+20pts) + whether the news-gated 🤫 Telegram picks winners; (d) radar
+precision by catalyst type. Then promote/demote Telegram gates accordingly.
 
-**PRIOR FOCUS (2026-07-02): Tick feed two-tier WATCH→CONFIRM — built, shipped.**
-The operator's complaint: tick catches (and the relvol-gated screens) fire when
-names are already +30–50% — on nano-caps volume confirmation is structurally
-late, and prod near-miss logs proved it (three mechanisms). The detector is now
-a state machine: price-led 👀 WATCH flag (baseline-free, tiny junk floor) →
-🛰️ CONFIRM (unchanged surge rule / baseline-free sustain read / a screen
-returning the name) → fade. Tiered alerts (👀 + soft ping on watch, 🛰️ + radar
-on confirm, once/day per tier). See the top "What shipped" entry (TICKW) for
-the watch items + calibration knobs. Prior focuses (EMA/MACD conditional test,
-Trade Journal attribution join) remain open below.
-
-**PRIOR FOCUS (2026-07-01): EMA/MACD confluence signal — investigated + MEASURED,
-no standalone edge; the conditional test was CLOSED negative on 2026-07-05 (entry
-EMAMACD2).** The operator noticed many
-ignition/momentum names "jump every few days," built a TradingView indicator
-(EMA 6/20 bull cross + MACD 12/26/9 confluence, testing 30m vs 1h) that *seemed*
-to fire before our ignition system, and wired ~all momentum-history tickers as
-1h alerts. We backtested it on free Yahoo intraday bars. **Verdict: it fires
-early (high recall) but has NO predictive edge — forward hit rate ≈ base rate
-(base-rate illusion + chart survivorship).** Full spec, numbers, and the one
-open follow-up (conditional-on-fresh-catalyst test) in the top research entry
-(EMAMACD) below. Prior focuses (Trade Journal, tick feed) remain live/valid.
-
-**CURRENT FOCUS (2026-06-21): Trade Journal — IBKR import + P&L calendar 📅,
-the first piece of the trade-journal/report system. LIVE on prod + validated.**
-Deployed (3 pushes: feature + 2 follow-up fixes); the operator imported real May
-+ June statements and **gross P&L matches their Tradervue to the penny** (net
-within ~4¢ — per-trade rounding, not a logic gap). See the top "What shipped"
-entry (TJ) for state + the next step (**the screener-attribution join — the
-actual payoff**). No new env vars. Prior focus — the tick-feed detector 🛰️ —
-remains live with its own open items (entry 000000).
-
-**CURRENT FOCUS (2026-06-18): the live tick-feed early-ignition detector 🛰️** —
-built, activated, validated in prod, and Option B shipped (catches → dashboard
-🛰️ LIVE TICKS section, Telegram rebalanced to high-conviction only). See the
-top "What shipped" entry (000000) for the full state + the OPEN items to pick
-up next (outcome tracking, re-surge suppression, baseline restart-seeding,
-candidate enrichment). The detailed durable record is the [[tick_feed_scoping]]
-memory. ⚠️ Process note: that work briefly looked reverted in the working tree
-but was committed (`3903b9e`) — **trust the commits/origin, not the tree.**
+**Recent focus trail** (each has a dated entry below): 07-15 SEEDT (state
+survives deploys) + XCROSS bar-close timestamps · 07-10 📈 XCROSS layer +
+NEWSDAY (🔥 icons no longer vanish at midnight ET) · 07-08 ACCUM2 (detector-side
+🤫, the SLS case) · 07-07 first live scorecard → TIEREV (tier_events), TICKW-EV
+(👀 evidence gate), radar LULD filter, accum v2 (persistence + news-gated push) ·
+07-05 QVOL (🤫 measured+shipped) + EMAMACD2 (EMA/MACD book CLOSED — twice-
+measured no edge; the 📈 layer is cross-as-NOMINATOR only, volume confirms) ·
+07-03 NR (📰 radar) · 07-02 TICKW (two-tier watch/confirm) · 06-21 TJ (Trade
+Journal; **attribution join still the open payoff**) · 06-17 tick feed go-live.
 
 ---
 
@@ -117,7 +89,9 @@ NR. **📰 NEWS RADAR — catalyst-first detection (2026-07-03).** Full spec in 
    - **Key mechanics:** known-runner set = 30d of momentum/ignition tickers (`seedRadarHistory` boot seed + live growth); dedup by article URL/day; classify via the shared URL cache (LLM refinement upgrades in place, bearish flip drops the entry); radar entries carry a `daily_bars` prior close so `TickFeedService.syncScreenRows` (30s) arms the detector for non-universe names; escalation check runs in the payload build (`screenRowByTicker` / `tickCatches`); session='closed' skipped.
    - **WATCH / OPEN:** (a) **precision unknown until live** — the DB couldn't measure how many headlines lead nowhere; after ~1 week: `docker compose logs api | grep news-radar` → hit rate = `↗ moving` / (`↗ moving` + `💤 expired (no move)`), per catalyst type/impact band; then tune display gates (currently ALL non-bearish shown) + the Telegram gate (strong/major). (b) expect **premarket 8:00–9:30 ET burst** — if the section floods, add a `min_impact` display gate (`NEWS_RADAR` const). (c) radar entries are in-memory (deploy loses them; `radarSeenUrls` dedup also resets → a deploy can re-radar an active article — same known residual as tick catches). (d) marketContext is null at classify time (no live float/mcap for non-screening names) → hype skews low until the LLM pass lands.
 
-XCROSS. **📈 EMA-cross layer — the operator's manual TV loop, automated (2026-07-10).** Operator (5th EMA raise, now with the right architecture): EMA(6/50) bullish cross on **5m bars** over the known-runner set NOMINATES a ticker for a ~30-min observation; it CONFIRMS only if a closed bar's volume runs ≥3× the sibling median (prior hour's bars) with price ≥ cross×1.005 — or instantly if the cross bar itself arrives ≥5×; no expansion → silent expire. This matches the twice-measured verdict: the cross has no selection power (it's the *nominator*), volume-expansion is the carrier (the *confirmer*). Built on tick-feed per-second bars aggregated in-process (`services/ema-cross.ts`, `EMA_CROSS` knobs) — zero API calls. Sidebar section 📈 EMA CROSS (dim "…observing" → green "✅ N× vol"), soft ping + browser notif on CONFIRM only, no Telegram until graded. `tier_events` tier='cross' (nominate/confirm/expire, with `in_ladder` when LIVE TICKS already had the name — those skip display). **Caveats:** (a) EMAs are SMA-seeded and need 50 closed 5m bars (~4h of trading) after each deploy — the layer warms up; mid-day deploys blind it for hours (same class as detector baselines). (b) Sparse tapes close bars late (bar closes on the next trade — TV-like). (c) Fire rate unknown — grade nominate→confirm/expire rates + confirmed forward outcomes from tier_events after ~a week; knobs: `confirm_vol_x`, `sibling_min_sh`, `observe_bars`, `warmup_bars`.
+NEWSDAY. **🔥 icons no longer vanish at midnight ET (2026-07-10, the VRAX report).** Operator: "tickers don't show the fire icon even when there's news." Data showed the real bug: at 00:00 ET the poller cleared its news caches and "today's news" became the new (empty) calendar day — ignition rows went 174/174-with-catalyst at 23h ET → 0/174 at 00h, while the board still shows the finished day's change% until premarket. For a UTC+5 operator, 00:00–04:00 ET is prime review time. **Fix:** the NEWS day rolls at **04:00 ET** (premarket start) — Finviz/Yahoo/Benzinga/halt today-filters + headline/classification caches follow `newsDayEt`; alert dedups, watermarks, and per-day trading state stay midnight-anchored. Related display nuance recorded: a row's flame reflects the source-precedence headline (halt > sec > bz > yahoo > finviz), so a 46-score LULD halt can front a better PR — the modal has the full list. Also that day: Benzinga multi-ticker "why is it moving" blurbs carry ONE representative ticker's quote-page URL — single-ticker news lists now rewrite `/quote/<sym>` links to the viewed ticker (the SOC→SKYQ case).
+
+XCROSS. **📈 EMA-cross layer — the operator's manual TV loop, automated (2026-07-10).** Operator (5th EMA raise, now with the right architecture): EMA(6/50) bullish cross on **5m bars** over the known-runner set NOMINATES a ticker for a ~30-min observation; it CONFIRMS only if a closed bar's volume runs ≥3× the sibling median (prior hour's bars) with price ≥ cross×1.005 — or instantly if the cross bar itself arrives ≥5×; no expansion → silent expire. This matches the twice-measured verdict: the cross has no selection power (it's the *nominator*), volume-expansion is the carrier (the *confirmer*). Built on tick-feed per-second bars aggregated in-process (`services/ema-cross.ts`, `EMA_CROSS` knobs) — zero API calls. Sidebar section 📈 EMA CROSS (dim "…observing" → green "✅ N× vol"), soft ping + browser notif on CONFIRM only, no Telegram until graded. `tier_events` tier='cross' (nominate/confirm/expire, with `in_ladder` when LIVE TICKS already had the name — those skip display). **Caveats:** (a) EMAs are SMA-seeded and need 50 closed 5m bars (~4h of trading) after each deploy — the layer warms up; mid-day deploys blind it for hours (same class as detector baselines). (b) Sparse tapes close bars late (bar closes on the next trade — TV-like). (c) Fire rate unknown — grade nominate→confirm/expire rates + confirmed forward outcomes from tier_events after ~a week; knobs: `confirm_vol_x`, `sibling_min_sh`, `observe_bars`, `warmup_bars`. **Follow-up fix (2026-07-15, the OPTX confusion):** row timestamps now use the BAR's close time (TV labels bars by OPEN — a 5m skew read as a missed detection) and the row's "ago" always anchors on the cross ("cross 20m ago"). Day-1 funnel: 37 nominations → 13 confirms (35%) / 14 expires.
 
 ACCUM2. **Detector-side 🤫 — the sub-screen accumulation tier (2026-07-08, the SLS case).** Operator raised EMA/MACD a fourth time with a real win: their 1h TV cross alerted SLS at 09:25 ET (+3%), our first signal was the 👀 at 09:41 (+10.2%). Diagnosis: SLS **never hit any screen** (day-RVol never cleared momentum's 5× Finviz gate; $14 ≫ ignition's sub-$1), so the screen-scanning accum tier was blind and the tick feed's first word is the +10% watch — a structural sub-10% blind zone for unscreened names. **Built the queued phase 2:** the tick DETECTOR now emits an `accum` event when cum ∈ [3%, 10%) AND trailing volume ≥3× its own quiet baseline, SUSTAINED 120s (the measured persistence lesson), with the junk floor + near-high checks (`TICK_DETECT.accum_*`). Rides the existing ladder (teal 🤫 row, promotes at the +10% cross, confirm/TTL/tier_events with `meta.source='tick'` vs `'screen'`); dashboard-only — no Telegram until tier_events grades this source. Also fixed a latent baseline bug found on the way: surge windows below mom_min used to feed the "quiet" baseline and self-dampen (an accumulation burst at +4% polluted its own reference); quiet sampling now excludes ≥3× windows. Regression: identical watch/confirm timings, false-confirms 1/38 unchanged, 0 accums on the fizzler control, gappers correctly produce no accum (hold unmeetable at their speed). **Watch:** detector-accum volume/day unknown — grade `tier_events WHERE tier='accum' AND meta->>'source'='tick'` after a few days; dial `accum_relvol_min` 3→5 if noisy.
 
@@ -308,14 +282,31 @@ history (temp tables `ir_entry` / `scored`, joined `ignition_results` →
 
 ---
 
-## Other deferred / known
+## Other deferred / known (refreshed 2026-07-15)
 
-- ✅ Swing debug-log cleanup (2026-06-13; empty-scan warn kept — failure-path
-  diagnostic) · ✅ Finviz ~1 req/s recorded in CLAUDE.md · ✅ GitHub Actions
-  Node 24 (checkout@v5 + `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true`, opted in
-  ahead of the 2026-06-16 forced default).
-- **Deeper Finviz relief:** share the after-hours v=152 quote overlay across
-  screens (cuts AH calls ~9→~5/cycle). Non-urgent now that the gate exists.
-- **Retune from outcomes generally:** swing alert ≥65, ignition weights,
-  dual-signal threshold — all first-pass guesses, now have data to tune.
-- Git state at handover: `main` @ `99f3eee`, in sync, clean tree.
+- **The grading pass** — see CURRENT FOCUS. The single next task.
+- **Trade Journal attribution join (TJ)** — trades ↔ `screener_outcomes` +
+  detections on `(ticker, et_date)`; the report-system payoff, untouched since
+  06-21.
+- **EMA warmup persistence** — 📈 needs ~4h of 5m bars after every deploy; fix
+  = persist bars or seed from Yahoo at boot. ONLY worth it if the layer
+  graduates the trial.
+- **DB growth** — 4.9 GB total, ~20 GB/yr run-rate (per-cycle tables dominate);
+  49 GB free → years of headroom. Plan when disk crosses ~60%: archive+prune
+  per-cycle rows >120–180d (or month-partitioning). Deliberately deferred.
+- **Databento capacity** — non-issue: flat $199/mo, ~3k symbols subscribed
+  (structural universe snapshot, self-bounding), chunked additive SUBs,
+  `ALL_SYMBOLS` exists as the ceiling. Real limit = ONE live connection
+  (deploy-overlap incident class, fixed 06-22).
+- **Known-runner set eviction** — `radarHistory` re-seeds per boot (rolling
+  30d); a process running many weeks without deploys wouldn't evict. Moot at
+  current deploy cadence; one-line daily reseed if that changes.
+- **Detector-side residuals that intentionally remain:** quiet baselines
+  rebuild ~1–2 min post-deploy; reseeded 'observing' cross rows are dropped;
+  tick catches still lack float/catalyst enrichment (open item d from 06-23).
+- **Deeper Finviz relief** (share the AH v=152 overlay across screens) and
+  **retune swing/dual-signal thresholds from outcomes** — both still open,
+  both non-urgent.
+- Git state at handover: `main` @ `c4b62b2` + this docs commit, in sync;
+  working tree has only the operator's untracked `watchlist-*.txt` scratch
+  files.
