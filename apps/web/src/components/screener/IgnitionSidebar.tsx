@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Typography, Tooltip, Empty, Button, Popover, List } from 'antd';
 import { CloseOutlined, EyeInvisibleOutlined } from '@ant-design/icons';
-import type { CatalystInfo, CyclePayload, IgnitionRow, NewsRadarItem, TickCatch } from '../../api/types';
+import type { CatalystInfo, CyclePayload, EmaCrossItem, IgnitionRow, NewsRadarItem, TickCatch } from '../../api/types';
 import { useSelection } from '../../context/SelectionContext';
 import { useLayout } from '../../context/LayoutContext';
 import { useHiddenTickers } from '../../hooks/useHiddenTickers';
@@ -103,6 +103,8 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
   const tickCatches = (payload?.tick_catches ?? []).filter((t) => !hidden.has(t.ticker));
   // News radar — fresh catalysts on known runners that aren't moving yet.
   const newsRadar = (payload?.news_radar ?? []).filter((n) => !hidden.has(n.ticker));
+  // EMA-cross layer — 6/50 5m crossovers under observation / volume-confirmed.
+  const emaCrosses = (payload?.ema_crosses ?? []).filter((x) => !hidden.has(x.ticker));
   const hiddenList = [...hidden].sort();
 
   const renderRow = (r: IgnitionRow) => (
@@ -214,6 +216,24 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
         </div>
       )}
 
+      {/* EMA-cross layer — 6/50 5m crossovers, volume-confirmation pending/done */}
+      {emaCrosses.length > 0 && (
+        <div
+          style={{
+            flex: '0 0 auto',
+            maxHeight: '25%',
+            overflow: 'auto',
+            background: '#0f1a12',
+            borderBottom: '2px solid #237804',
+          }}
+        >
+          <SectionHeader label="📈 EMA CROSS" count={emaCrosses.length} color="#95de64" />
+          {emaCrosses.map((x) => (
+            <EmaCrossRow key={x.ticker} item={x} selected={x.ticker === selected} onSelect={setSelected} />
+          ))}
+        </div>
+      )}
+
       {all.length === 0 && tickCatches.length === 0 && newsRadar.length === 0 ? (
         <div style={{ flex: '1 1 auto', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <Empty
@@ -316,6 +336,50 @@ function TickItem({ tc, selected, onSelect }: { tc: TickCatch; selected: boolean
         <Text style={{ color: (num(tc.change_pct) ?? 0) >= 0 ? '#52c41a' : '#ff4d4f', fontWeight: 600 }}>
           {fmtPct(tc.change_pct)}
         </Text>
+      </span>
+    </div>
+  );
+}
+
+// An EMA-cross row — a 6/50 crossover on 5m bars, either under its ~30-min
+// volume observation (dim, "…observing") or volume-confirmed (bright green,
+// shows the expansion multiple). Click to chart it.
+function EmaCrossRow({ item, selected, onSelect }: {
+  item: EmaCrossItem;
+  selected: boolean;
+  onSelect: (t: string) => void;
+}) {
+  const confirmed = item.status === 'confirmed';
+  const anchor = confirmed && item.confirmed_at ? item.confirmed_at : item.cross_at;
+  const agoMs = Date.now() - new Date(anchor).getTime();
+  const ago = agoMs < 60_000 ? `${Math.round(agoMs / 1000)}s` : `${Math.round(agoMs / 60_000)}m`;
+  return (
+    <div
+      onClick={() => onSelect(item.ticker)}
+      style={{
+        display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
+        padding: '4px 8px', borderBottom: '1px solid #162b1a', cursor: 'pointer',
+        borderLeft: `3px solid ${confirmed ? '#52c41a' : '#3f6600'}`,
+        background: selected ? '#1c3a22' : undefined,
+        opacity: confirmed ? 1 : 0.75,
+      }}
+    >
+      <span style={{ minWidth: 0 }}>
+        <span style={{ marginRight: 6, display: 'inline-flex', verticalAlign: 'middle' }}>
+          <TickerLinks ticker={item.ticker} />
+        </span>
+        <TickerLink
+          ticker={item.ticker}
+          onSelect={onSelect}
+          stopPropagation
+          style={{ color: confirmed ? '#95de64' : '#8c9b8c', fontWeight: 600, fontSize: 13 }}
+        />
+        <span style={{ marginLeft: 6, fontSize: 10, color: '#8c8c8c' }}>
+          {confirmed ? `✅ ${Math.round(item.vol_ratio)}× vol` : '… observing'} · {ago} ago
+        </span>
+      </span>
+      <span style={{ flex: '0 0 auto' }}>
+        <Text type="secondary" style={{ fontSize: 11 }}>{fmtPrice(item.price)}</Text>
       </span>
     </div>
   );

@@ -312,6 +312,21 @@ export interface NewsRadarItem {
   prior_close: number | null;
 }
 
+// 📈 EMA-cross layer — an EMA(6/50) bullish crossover on 5m bars nominated a
+// known runner; it shows as 'observing' for the ~30-min window and flips to
+// 'confirmed' when volume expands vs its sibling candles with price holding
+// (the operator's manual TV loop, automated). Unconfirmed nominations are
+// pruned silently. See services/ema-cross.ts + onEmaCrossEvent.
+export interface EmaCrossItem {
+  ticker: string;
+  status: 'observing' | 'confirmed';
+  price: number;
+  cross_price: number;
+  vol_ratio: number;      // latest bar volume / sibling median
+  cross_at: string;
+  confirmed_at: string | null;
+}
+
 export interface CyclePayload {
   cycle_id: string;
   polled_at: string;
@@ -328,6 +343,7 @@ export interface CyclePayload {
   continuation: ContinuationCandidate[];
   tick_catches: TickCatch[];
   news_radar: NewsRadarItem[];
+  ema_crosses: EmaCrossItem[];
 }
 
 export interface EnrichedRow extends ScreenerRow {
@@ -544,6 +560,9 @@ class PollerService {
   private accumSeen = new Set<string>();
   private alertedAccum = new Set<string>();
   private accumHotCycles = new Map<string, number>();
+  // 📈 EMA-cross layer entries (observing/confirmed), keyed by ticker.
+  // Display-only; graded via tier_events (tier='cross'). Cleared at midnight.
+  private emaCrosses = new Map<string, EmaCrossItem & { last_event_ms: number }>();
   // Tickers that have traded in an Ignition pre-market cycle today. Feeds the
   // runner-score's pre-market-exhaustion penalty (a name that already ran in PM
   // gives back into the close). ET-day concept — cleared at midnight.
@@ -649,6 +668,72 @@ class PollerService {
 
   getLastPayload(): CyclePayload | null {
     return this.lastPayload;
+  }
+
+  // Is the ticker in the known-runner set (30d momentum/ignition history)?
+  // Used by the tick feed to scope the 📈 EMA-cross layer.
+  isKnownRunner(ticker: string): boolean {
+    return this.radarHistory.has(ticker);
+  }
+
+  // 📈 EMA-cross layer events (see services/ema-cross.ts): a 6/50 bullish
+  // cross on 5m bars nominates a known runner for a ~30-min observation;
+  // volume expansion vs sibling candles confirms it; no expansion → silent
+  // prune. Display-only (dashboard soft ping on confirm via the web hook);
+  // no Telegram until tier_events grades the layer. Names already in the
+  // LIVE TICKS ladder skip display — the ladder outranks a nomination.
+  onEmaCrossEvent(e: import('./ema-cross.js').EmaCrossEvent): void {
+    const nowMs = Date.now();
+    if (e.type === 'nominate' || (e.type === 'confirm' && !this.emaCrosses.has(e.ticker))) {
+      const inLadder = this.tickCatches.has(e.ticker);
+      recordTierEvent('cross', e.type, e.ticker, {
+        price: e.price, cross_price: e.cross_price, vol_ratio: e.vol_ratio,
+        bars: e.bars_since_cross, in_ladder: inLadder,
+      });
+      console.log(
+        `[ema-cross] ${e.type === 'confirm' ? '📈✅ instant-confirm' : '📈 nominate'} ${e.ticker} ` +
+        `$${e.price.toFixed(2)} · ${e.vol_ratio}x sibling vol${inLadder ? ' · (in ladder — display skipped)' : ''}`,
+      );
+      if (inLadder) return;
+      this.emaCrosses.set(e.ticker, {
+        ticker: e.ticker,
+        status: e.type === 'confirm' ? 'confirmed' : 'observing',
+        price: e.price,
+        cross_price: e.cross_price,
+        vol_ratio: e.vol_ratio,
+        cross_at: new Date(nowMs).toISOString(),
+        confirmed_at: e.type === 'confirm' ? new Date(nowMs).toISOString() : null,
+        last_event_ms: nowMs,
+      });
+      return;
+    }
+    const existing = this.emaCrosses.get(e.ticker);
+    if (e.type === 'confirm') {
+      recordTierEvent('cross', 'confirm', e.ticker, {
+        price: e.price, cross_price: e.cross_price, vol_ratio: e.vol_ratio, bars: e.bars_since_cross,
+      });
+      console.log(
+        `[ema-cross] 📈✅ confirm ${e.ticker} $${e.price.toFixed(2)} · ${e.vol_ratio}x sibling vol · ` +
+        `${e.bars_since_cross} bars after the cross ($${e.cross_price.toFixed(2)})`,
+      );
+      if (existing) {
+        existing.status = 'confirmed';
+        existing.price = e.price;
+        existing.vol_ratio = e.vol_ratio;
+        existing.confirmed_at = new Date(nowMs).toISOString();
+        existing.last_event_ms = nowMs;
+      }
+      return;
+    }
+    // expire — the observation window ran out without expansion.
+    recordTierEvent('cross', 'expire', e.ticker, {
+      cross_price: e.cross_price, peak_ratio: e.peak_ratio ?? null, peak_price: e.peak_price ?? null,
+    });
+    console.log(
+      `[ema-cross] 📉 expire ${e.ticker} — no expansion in ${e.bars_since_cross} bars ` +
+      `(peak ${e.peak_ratio ?? '?'}x vol)`,
+    );
+    if (existing && existing.status === 'observing') this.emaCrosses.delete(e.ticker);
   }
 
   // Is the ticker in the latest broadcast's Momentum or Ignition lists? Used
@@ -1000,6 +1085,7 @@ class PollerService {
       this.accumSeen.clear();
       this.alertedAccum.clear();
       this.accumHotCycles.clear();
+      this.emaCrosses.clear();
       this.newsRadar.clear();
       this.radarSeenUrls.clear();
       this.alertedNewsRadar.clear();
@@ -1899,6 +1985,28 @@ class PollerService {
       || b.first_seen_at.localeCompare(a.first_seen_at));
     const radarDisplay = radarList.slice(0, NEWS_RADAR.max_display);
 
+    // 📈 EMA-cross layer — the tracker expires observations by BAR count, but
+    // a sparse tape can stall bars; safety-prune on wall clock too. Confirmed
+    // entries show 30 min from confirmation.
+    const CROSS_OBSERVE_SAFETY_MS = 45 * 60 * 1000;
+    const CROSS_CONFIRMED_TTL_MS = 30 * 60 * 1000;
+    const emaCrossList: EmaCrossItem[] = [];
+    for (const [t, xc] of this.emaCrosses) {
+      const ttl = xc.status === 'confirmed' ? CROSS_CONFIRMED_TTL_MS : CROSS_OBSERVE_SAFETY_MS;
+      if (nowMsTick - xc.last_event_ms > ttl) {
+        this.emaCrosses.delete(t);
+        continue;
+      }
+      emaCrossList.push({
+        ticker: xc.ticker, status: xc.status, price: xc.price, cross_price: xc.cross_price,
+        vol_ratio: xc.vol_ratio, cross_at: xc.cross_at, confirmed_at: xc.confirmed_at,
+      });
+    }
+    emaCrossList.sort((a, b) =>
+      (a.status === 'confirmed' ? 0 : 1) - (b.status === 'confirmed' ? 0 : 1)
+      || (b.confirmed_at ?? b.cross_at).localeCompare(a.confirmed_at ?? a.cross_at));
+    const emaCrossDisplay = emaCrossList.slice(0, 12);
+
     // After-hours: re-impose a volume gate on the momentum list. Finviz drops
     // its relvol filter at the close, so names that ticked >5% on a few AH
     // shares (BLIV on 5, GRAN on 90) otherwise flood it. Keep a row only if it
@@ -1923,6 +2031,7 @@ class PollerService {
       continuation: this.lastContinuation,
       tick_catches: tickCatchList,
       news_radar: radarDisplay,
+      ema_crosses: emaCrossDisplay,
       banners: { new_with_catalyst: newWithCatalyst, fresh_news: freshList },
       fresh_news: enriched
         .filter((r) => r.is_fresh_news && r.news_title)

@@ -337,6 +337,19 @@ export interface NewsRadarItem {
   escalated_via: 'tick' | 'screen' | null;
 }
 
+// 📈 EMA-cross layer — a 6/50 bullish cross on 5m bars nominated a known
+// runner ('observing', ~30-min window); volume expansion vs sibling candles
+// with price holding flips it to 'confirmed'. Unconfirmed entries vanish.
+export interface EmaCrossItem {
+  ticker: string;
+  status: 'observing' | 'confirmed';
+  price: number;
+  cross_price: number;
+  vol_ratio: number;
+  cross_at: string;
+  confirmed_at: string | null;
+}
+
 export interface CyclePayload {
   cycle_id: string;
   polled_at: string | null;
@@ -350,6 +363,7 @@ export interface CyclePayload {
   fresh_news: NewsHeadline[];
   tick_catches: TickCatch[];
   news_radar: NewsRadarItem[];
+  ema_crosses: EmaCrossItem[];
 }
 
 export interface HistoryRow {

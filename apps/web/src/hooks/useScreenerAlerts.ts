@@ -130,13 +130,29 @@ export function useScreenerAlerts(payload: CyclePayload | null) {
       .map((t) => ({ key: `${t.ticker}:${t.status ?? 'confirmed'}`, ticker: t.ticker, status: t.status ?? 'confirmed' }));
     const radarKeys = (payload.news_radar ?? [])
       .map((n) => ({ key: `${n.ticker}:${n.url}`, ticker: n.ticker }));
+    // EMA-cross layer: ping only on volume CONFIRMATION (nominations are
+    // silent — the whole point is the system does the 30-min watching).
+    const crossKeys = (payload.ema_crosses ?? [])
+      .filter((x) => x.status === 'confirmed')
+      .map((x) => ({ key: `${x.ticker}:${x.confirmed_at}`, ticker: x.ticker }));
 
     if (!seenFirst.current) {
       seenFirst.current = true;
       // Seed seen ticks so catches already on screen at load don't all ping.
       tickKeys.forEach((t) => seenTicks.current.add(t.key));
       radarKeys.forEach((n) => seenRadar.current.add(n.key));
+      crossKeys.forEach((x) => seenTicks.current.add(x.key));
       return;
+    }
+
+    const newCrosses = crossKeys.filter((x) => !seenTicks.current.has(x.key));
+    newCrosses.forEach((x) => seenTicks.current.add(x.key));
+    if (newCrosses.length > 0) {
+      try { watchPing(); } catch { /* audio context not unlocked */ }
+      notify(
+        '📈 EMA cross confirmed — volume expanding',
+        newCrosses.length <= 3 ? newCrosses.map((x) => x.ticker).join(', ') : `${newCrosses.length} confirmed crosses`,
+      );
     }
 
     // News radar — soft ping for each new entry (a fresh catalyst on a known

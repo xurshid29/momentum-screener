@@ -14,6 +14,7 @@ import { createInterface, type Interface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { TickDetector, type TickBar } from './tick-detect.js';
+import { EmaCrossTracker } from './ema-cross.js';
 import { universe } from './universe.js';
 import { poller } from './poller.js';
 
@@ -43,6 +44,8 @@ function etDate(d = new Date()): string {
 
 class TickFeedService {
   private detector = new TickDetector();
+  // 📈 EMA 6/50 cross layer on 5m bars, known runners only — see ema-cross.ts.
+  private emaCross = new EmaCrossTracker();
   private child: ChildProcessWithoutNullStreams | null = null;
   private rl: Interface | null = null;
   private syncTimer: NodeJS.Timeout | null = null;
@@ -67,6 +70,7 @@ class TickFeedService {
       enabled: TICKFEED.enabled,
       running: this.running,
       symbols_tracked: this.detector.symbolsTracked(),
+      ema_cross_tracked: this.emaCross.symbolsTracked(),
       bars_seen: this.barsSeen,
       accums: this.accums,
       watches: this.watches,
@@ -147,6 +151,7 @@ class TickFeedService {
     if (today !== this.etDate) {
       this.etDate = today;
       this.detector.reset();
+      this.emaCross.resetDaily();
       this.extraSubs.clear();
       // Fresh Databento session for the new day.
       this.child?.kill();
@@ -250,6 +255,12 @@ class TickFeedService {
       else if (ev.type === 'confirm') this.candidates++;
       else this.fades++;
       poller.onTickEvent(ev);
+    }
+    // 📈 EMA-cross layer — known runners only (the operator's spec: "check our
+    // momentum tickers of our database"), everything else skips the tracker.
+    if (poller.isKnownRunner(m.s)) {
+      const xev = this.emaCross.addBar(m.s, m.t, m.c, m.v);
+      if (xev) poller.onEmaCrossEvent(xev);
     }
     // Surface near-miss reasons (gapped vs which gate) so the rollout is
     // debuggable — why a moving name didn't fire.
