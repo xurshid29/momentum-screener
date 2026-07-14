@@ -695,14 +695,19 @@ class PollerService {
         `$${e.price.toFixed(2)} · ${e.vol_ratio}x sibling vol${inLadder ? ' · (in ladder — display skipped)' : ''}`,
       );
       if (inLadder) return;
+      // Timestamps use the BAR's close time, not processing wall-clock, so
+      // the row's "ago" matches what the operator sees on a TV chart
+      // (2026-07-15, the OPTX confusion — TV labels bars by OPEN time, we
+      // close them; don't add processing skew on top).
+      const barIso = new Date(e.ts_sec * 1000).toISOString();
       this.emaCrosses.set(e.ticker, {
         ticker: e.ticker,
         status: e.type === 'confirm' ? 'confirmed' : 'observing',
         price: e.price,
         cross_price: e.cross_price,
         vol_ratio: e.vol_ratio,
-        cross_at: new Date(nowMs).toISOString(),
-        confirmed_at: e.type === 'confirm' ? new Date(nowMs).toISOString() : null,
+        cross_at: barIso,
+        confirmed_at: e.type === 'confirm' ? barIso : null,
         last_event_ms: nowMs,
       });
       return;
@@ -720,7 +725,7 @@ class PollerService {
         existing.status = 'confirmed';
         existing.price = e.price;
         existing.vol_ratio = e.vol_ratio;
-        existing.confirmed_at = new Date(nowMs).toISOString();
+        existing.confirmed_at = new Date(e.ts_sec * 1000).toISOString();
         existing.last_event_ms = nowMs;
       }
       return;

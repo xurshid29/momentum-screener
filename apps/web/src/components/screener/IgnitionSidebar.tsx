@@ -350,8 +350,9 @@ function EmaCrossRow({ item, selected, onSelect }: {
   onSelect: (t: string) => void;
 }) {
   const confirmed = item.status === 'confirmed';
-  const anchor = confirmed && item.confirmed_at ? item.confirmed_at : item.cross_at;
-  const agoMs = Date.now() - new Date(anchor).getTime();
+  // "ago" always anchors on the CROSS bar so it reads like the TV chart the
+  // operator compares against; the ✅ multiple marks the confirmation itself.
+  const agoMs = Date.now() - new Date(item.cross_at).getTime();
   const ago = agoMs < 60_000 ? `${Math.round(agoMs / 1000)}s` : `${Math.round(agoMs / 60_000)}m`;
   return (
     <div
@@ -375,7 +376,7 @@ function EmaCrossRow({ item, selected, onSelect }: {
           style={{ color: confirmed ? '#95de64' : '#8c9b8c', fontWeight: 600, fontSize: 13 }}
         />
         <span style={{ marginLeft: 6, fontSize: 10, color: '#8c8c8c' }}>
-          {confirmed ? `✅ ${Math.round(item.vol_ratio)}× vol` : '… observing'} · {ago} ago
+          {confirmed ? `✅ ${Math.round(item.vol_ratio)}× vol` : '… observing'} · cross {ago} ago
         </span>
       </span>
       <span style={{ flex: '0 0 auto' }}>
