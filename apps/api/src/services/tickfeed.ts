@@ -176,9 +176,10 @@ class TickFeedService {
   private barFlushTimer: NodeJS.Timeout | null = null;
   private barsPersisted = 0;
   private lastBarDbErrorMs = 0;
-  // Yahoo 5m history backfill for known runners still below EMA warmup —
-  // closes a symbol's one-time cold start (new universe entrants, freshly
-  // minted known runners) without waiting hours of live tape.
+  // Historical 5m backfill for known runners still below EMA warmup —
+  // Databento hist (batched) primary, Yahoo per-symbol fallback. Closes a
+  // symbol's one-time cold start (new universe entrants, freshly minted
+  // known runners) without waiting hours of live tape.
   private backfillTimer: NodeJS.Timeout | null = null;
   private backfillRunning = false;
   private backfillAttempted = new Set<string>();  // once per ET day per symbol
@@ -286,15 +287,17 @@ class TickFeedService {
   }
 
   // Find known runners still below EMA warmup (< warmup-ish bar count in
-  // bars_5m over 5 days) and backfill them from Yahoo's free 5m history —
-  // gently (1 fetch / 2s), once per symbol per ET day. Fetched closes seed
-  // the tracker directly ONLY while the symbol has produced no live bar
-  // (ordering safety); bars within 72h also persist so the next boot's DB
-  // replay covers them. ⚠️ Yahoo volumes are consolidated-tape scale while
-  // live bars are MINI-feed scale — fine for the EMA math (closes are
-  // closes), and the sibling-volume window self-heals within ~an hour of
-  // live tape (ratios read conservatively LOW until then: misses, never
-  // false confirms).
+  // bars_5m over 5 days) and backfill them, once per symbol per ET day:
+  // Databento historical first (batched ~100 symbols/request, same EQUS.MINI
+  // scale as the live stream — no volume-scale skew), Yahoo per-symbol as the
+  // fallback for request failures and names too thin to print on MINI in 3d.
+  // Fetched closes seed the tracker directly ONLY while the symbol has
+  // produced no live bar (ordering safety); bars within 72h also persist so
+  // the next boot's DB replay covers them. ⚠️ The Yahoo path's volumes are
+  // consolidated-tape scale while live bars are MINI-feed scale — fine for
+  // the EMA math (closes are closes); the sibling-volume window self-heals
+  // within ~an hour of live tape (ratios read LOW until then), and the
+  // confirm notional floor guards the thin-tape residual either way.
   private async scanBackfill(): Promise<void> {
     if (this.backfillRunning || !this.running) return;
     this.backfillRunning = true;

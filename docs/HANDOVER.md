@@ -1,4 +1,4 @@
-# Session Handover — updated 2026-07-15
+# Session Handover — updated 2026-07-16
 
 A running handover so a fresh session can continue without re-deriving context.
 **Read `docs/web-dashboard.md` first** (the canonical status doc); this file is
@@ -23,14 +23,17 @@ entries, or dedups.
 **THE PENDING TASK — the grading pass (run from ~2026-07-17, needs a few full
 sessions of tier_events):** (a) keep/kill the 📈 cross layer — nominate→confirm
 rate, confirmed-cross forward outcomes, overlap with 🤫/👀 (day-1 2026-07-14:
-37 nominations → 13 confirms / 14 expires); (b) audit the 👀 evidence gate's
+37 nominations → 13 confirms / 14 expires; ⚠️ semantics changed 2026-07-16 —
+cooldown re-arm + confirm notional floor, see entry XMETA — segment at the
+date and count the funnel per observation, not per ticker); (b) audit the 👀 evidence gate's
 cost — `watch_suppressed reason='low_evidence'` tickers that later confirmed;
 (c) re-check accum v2 precision (persistence gate promised ~65% promote / 24%
 ≥+20pts) + whether the news-gated 🤫 Telegram picks winners; (d) radar
 precision by catalyst type. Then promote/demote Telegram gates accordingly.
 
-**Recent focus trail** (each has a dated entry below): 07-15 SEEDT (state
-survives deploys) + XCROSS bar-close timestamps · 07-10 📈 XCROSS layer +
+**Recent focus trail** (each has a dated entry below): 07-16 XMETA (📈
+hardening: Databento backfill, cooldown re-arm, notional floor, gradable
+meta) · 07-15 SEEDT (state survives deploys) + XCROSS bar-close timestamps · 07-10 📈 XCROSS layer +
 NEWSDAY (🔥 icons no longer vanish at midnight ET) · 07-08 ACCUM2 (detector-side
 🤫, the SLS case) · 07-07 first live scorecard → TIEREV (tier_events), TICKW-EV
 (👀 evidence gate), radar LULD filter, accum v2 (persistence + news-gated push) ·
@@ -74,6 +77,26 @@ Journal; **attribution join still the open payoff**) · 06-17 tick feed go-live.
 ---
 
 ## What shipped this session (newest first, all on prod unless noted)
+
+XMETA. **📈 layer pre-grading hardening (2026-07-16, two sessions).** Overnight
+session: (1) **Databento historical is now the primary EMA backfill** (batched
+~100 syms/request, ohlcv-1m→5m locally, same MINI scale as live — kills the
+Yahoo volume-scale skew for the primary path; Yahoo stays as per-symbol
+fallback for MINI-invisible names; end clamped to `available_end`, the 422
+fix); (2) **expired nominations re-arm after a 60-min cooldown** — the
+once/ticker/day lock was measured wrong on TGHL (a weak 0.4× cross burned the
+slot; the real 6.7× cross ran +20%); a confirm still ends the symbol's day.
+Day session: (3) **confirm notional floor** `confirm_min_notional: $10k`
+(feed-visible, first guess) on BOTH confirm paths — the sibling floor is 50
+*shares*, so a dead-tape "3×" could confirm on ~$200; an instant-confirm
+failing it demotes to a nomination; (4) **gradable meta** — tier_events cross
+rows now carry `vol`/`sib_median`/`notional` (expire carries `sib_median` so
+`peak_ratio` converts to absolute) — bars_5m prunes at 3d, so without this the
+grading week couldn't audit confirm quality retroactively; (5) committed
+synthetic regression `apps/api/scripts/verify-ema-cross.ts` (8 scenarios:
+warmup, both confirm paths, floors, price hold, cooldown, seed silence — the
+overnight session's tests had lived in scratch). **Grading note: cross-funnel
+semantics changed 2026-07-16 — segment at the date, count per observation.**
 
 QVOL. **🤫 Quiet-accumulation tier — measured, then shipped (2026-07-05).** The operator kept seeing "EMA cross + rising MACD on flat candles" before moves (USDE: cross ~16:00–16:30 ET Jul 1, launch 17:48, NO news until next morning — so the radar couldn't see it, and the EMAMACD2 study anchored on news couldn't either). Decomposed the observation: the carrier is **volume before price**, not the indicator. Verified USDE in our own rows: momentum NEW at 16:04 ET, +6.97%, day-RVol 21×, rv5m 3,119% → every alert path silent for 104 min (all gate on chg≥10 / catalyst / score).
    - **Cohort study (55d, first appearance per ticker/ET-day, `scripts/research/quiet-accum-cohort-v2-fastrv.sql`):** quiet entries (chg<10) split by fast RVol (max rv1m/rv5m in first 5 min — session-independent; ⚠️ v1 with day-RVol was distorted, Finviz day-RV reads ~0 in PM). **Quiet + fastRV≥10× → ≥+20pt continuation 20–25% (AH, n=507) / 12–14% (PM-REG, n=315) vs 3% for quiet-no-vol** — a 3–7× lift. `seen_recently=true` slightly OUTPERFORMS within the cohort (known runner quietly re-loading). Hot (chg≥10) still has higher absolute rates but enters extended — the accum tier's value is the early cheap entry + lead time to the +10% line (USDE 104 min).

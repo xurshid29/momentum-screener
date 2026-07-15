@@ -61,12 +61,15 @@ process); detector baselines rebuild live in ~1–2 min.
 **bars_5m + backfill** (table `bars_5m`, logic in `tickfeed.ts`). Every LIVE
 closed 5m bar for known runners persists (batched, 3-day retention, pruned at
 midnight). Boot replays 48h through the EMA tracker (silent — history can't
-nominate). Known runners still below ~50 banked bars get Yahoo 5m history
-(free, 1 fetch/2s, once/symbol/ET-day, re-scanned every 4h) — closes seed the
-tracker only while the symbol has produced no live bar. Net effect: the EMA
-layer is always warm. Yahoo volumes are consolidated-scale; the sibling-volume
-window self-heals within ~1h of live tape (errs toward misses, never false
-confirms).
+nominate). Known runners still below ~50 banked bars get historical 5m bars
+(once/symbol/ET-day, re-scanned every 4h): **Databento historical** first
+(batched ~100 symbols/request, same MINI scale as the live stream — no
+volume-scale skew; metered but cents), **Yahoo** as the per-symbol fallback
+for names too thin to print on MINI. Closes seed the tracker only while the
+symbol has produced no live bar. Net effect: the EMA layer is always warm.
+The Yahoo path's volumes are consolidated-scale — ratios read LOW until the
+sibling window self-heals (~1h of live tape); the confirm notional floor
+covers the thin-tape residual.
 
 **News-day semantics.** "Today's news" rolls at **04:00 ET** (premarket
 start), not midnight — the closed session belongs to the finished trading day,
@@ -150,14 +153,21 @@ it is strictly a nominator; the volume stage carries the precision.
 **How.** Per-second bars aggregate into 5m buckets (bar closes when a trade
 arrives in a later bucket — TV-like on thin tapes). EMAs are SMA-seeded;
 crosses count only after 50 closed bars (warmup — solved by bars_5m replay +
-Yahoo backfill, see shared infra). On a cross (`prevDiff ≤ 0 && diff > 0`,
-sibling median ≥50 sh, once/ticker/day): if the cross bar itself runs ≥5× the
-sibling median → instant confirm; else observe 6 bars (~30 min) — confirm on
-any closed bar with volume ≥3× the anchored sibling median AND close ≥ cross
-× 1.005; otherwise silent expire (peak telemetry recorded). Quantization
-caveat: signals land on 5-min boundaries — a pure gap (no preparatory bar)
-crosses one bar late; a move with a preparatory bar (TGHL) crosses at that
-bar's close, on par with the ignition screen.
+historical backfill, see shared infra). On a cross (`prevDiff ≤ 0 && diff >
+0`, sibling median ≥50 sh): if the cross bar itself runs ≥5× the sibling
+median → instant confirm; else observe 6 bars (~30 min) — confirm on any
+closed bar with volume ≥3× the anchored sibling median AND close ≥ cross ×
+1.005. Every confirm path also needs ≥$10k on the confirming bar
+(`confirm_min_notional`, feed-visible $ — the sibling floor is 50 SHARES, so
+a dead-tape "3×" can be a few hundred dollars; an instant-confirm that fails
+it demotes to a normal nomination). No expansion → silent expire (peak
+telemetry). **Re-fire rules (2026-07-16):** a confirm ends the symbol's day;
+an expired observation re-arms after a 60-min cooldown
+(`renominate_cooldown_sec` — the TGHL lesson: a weak 0.4× morning cross must
+not lock out the real 6.7× afternoon one). Quantization caveat: signals land
+on 5-min boundaries — a pure gap (no preparatory bar) crosses one bar late; a
+move with a preparatory bar (TGHL) crosses at that bar's close, on par with
+the ignition screen.
 
 **Surfacing.** Green 📈 sidebar section: dim "…observing" → "✅ N× vol" with a
 soft ping on confirm only. Timestamps are bar-close times; "ago" anchors on
@@ -165,8 +175,15 @@ the cross (matches the TV chart). Names already in the LIVE TICKS ladder skip
 display (logged `in_ladder`). No Telegram until graded.
 
 **Status.** TRIAL — keep/kill by the grading pass (~07-17+). Day-1 (07-14):
-37 nominations → 13 confirms / 14 expires. 07-15 was a blind day (warmup);
-full infrastructure (coverage + persistence + backfill) only since 07-16.
+37 nominations → 13 confirms / 14 expires — but those numbers predate the
+07-16 semantics (cooldown re-arm means several nominate→expire cycles per
+ticker/day are legitimate; the notional floor prunes dead-tape confirms), so
+**segment grading at 07-16 and count the funnel per observation, not per
+ticker**. 07-15 was a blind day (warmup); full infrastructure (coverage +
+persistence + backfill) only since 07-16. Meta now records `vol`,
+`sib_median`, `notional` on nominate/confirm (and `sib_median` on expire, so
+`peak_ratio` converts to absolute shares) — recalibrate `confirm_min_notional`
+from these. Synthetic regression: `npx tsx scripts/verify-ema-cross.ts`.
 Knobs: `EMA_CROSS`. Grading: `tier='cross'`.
 
 ---
