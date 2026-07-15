@@ -31,6 +31,13 @@ export const EMA_CROSS = {
   confirm_vol_x: 3,    // a closed bar ≥3× the sibling median…
   confirm_price_ext: 0.005, // …with close ≥ cross close × (1 + this)
   instant_vol_x: 5,    // the cross bar itself arriving ≥5× median = instant confirm
+  // Re-arm cooldown after an EXPIRED observation. Nominations were originally
+  // once/ticker/day, but TGHL 2026-07-15 showed why that's wrong: a weak
+  // 0.4× morning cross burned the slot and expired, and the REAL 16:25 cross
+  // (6.7×, ran +20%) would have been locked out — it only fired because a
+  // deploy happened to reset the tracker. A CONFIRMED cross still ends the
+  // symbol's day (it's already surfaced); an expired one re-arms after this.
+  renominate_cooldown_sec: 3600,
 } as const;
 
 export interface EmaCrossEvent {
@@ -66,7 +73,8 @@ interface SymState {
   prevDiff: number | null; // emaF - emaS at the previous closed bar
   sibVols: number[];     // ring: volumes of the last sibling_bars CLOSED bars
   watch: Observation | null;
-  firedToday: boolean;   // one nomination per symbol per ET day
+  confirmedToday: boolean; // a confirm ends the symbol's day (already surfaced)
+  lockedUntil: number;   // no re-nomination before this ts (cooldown after expire)
   seededUpTo: number;    // bucket start of the last boot-seeded bar (-1 = none)
                          // — live ticks at/before it are already accounted for
 }
@@ -111,7 +119,8 @@ export class EmaCrossTracker {
   // history deliberately survive: price structure isn't day-anchored.
   resetDaily(): void {
     for (const st of this.state.values()) {
-      st.firedToday = false;
+      st.confirmedToday = false;
+      st.lockedUntil = 0;
       st.watch = null;
     }
   }
@@ -122,7 +131,7 @@ export class EmaCrossTracker {
       st = {
         bucketStart: -1, bucketClose: 0, bucketVol: 0,
         emaF: null, emaS: null, seedSumF: 0, seedSumS: 0,
-        bars: 0, prevDiff: null, sibVols: [], watch: null, firedToday: false,
+        bars: 0, prevDiff: null, sibVols: [], watch: null, confirmedToday: false, lockedUntil: 0,
         seededUpTo: -1,
       };
       this.state.set(ticker, st);
@@ -195,12 +204,16 @@ export class EmaCrossTracker {
       if (ratio > w.peakRatio) w.peakRatio = ratio;
       if (c > w.peakPrice) w.peakPrice = c;
       if (ratio >= EMA_CROSS.confirm_vol_x && c >= w.crossPrice * (1 + EMA_CROSS.confirm_price_ext)) {
+        st.confirmedToday = true;
         out = {
           type: 'confirm', ticker, ts_sec: closeTs, price: c,
           cross_price: w.crossPrice, vol_ratio: +ratio.toFixed(1), bars_since_cross: w.barsSeen,
         };
         st.watch = null;
       } else if (w.barsSeen >= EMA_CROSS.observe_bars) {
+        // Expired without expansion — re-arm after the cooldown so a weak
+        // cross doesn't lock out a genuine later one (the TGHL lesson).
+        st.lockedUntil = closeTs + EMA_CROSS.renominate_cooldown_sec;
         out = {
           type: 'expire', ticker, ts_sec: closeTs, price: c,
           cross_price: w.crossPrice, vol_ratio: +ratio.toFixed(1), bars_since_cross: w.barsSeen,
@@ -218,15 +231,15 @@ export class EmaCrossTracker {
       st.emaF != null && st.emaS != null &&
       st.bars > EMA_CROSS.warmup_bars &&
       st.prevDiff != null &&
-      !st.watch && !st.firedToday
+      !st.watch && !st.confirmedToday && closeTs >= st.lockedUntil
     ) {
       const diff = st.emaF - st.emaS;
       if (st.prevDiff <= 0 && diff > 0 && sibMedian >= EMA_CROSS.sibling_min_sh) {
-        st.firedToday = true;
         const ratio = v / sibMedian;
         if (ratio >= EMA_CROSS.instant_vol_x && c > 0) {
           // The cross bar itself arrived on expanded volume — the operator's
           // "sometimes the current volume is much higher than siblings" case.
+          st.confirmedToday = true;
           out = {
             type: 'confirm', ticker, ts_sec: closeTs, price: c,
             cross_price: c, vol_ratio: +ratio.toFixed(1), bars_since_cross: 0,
