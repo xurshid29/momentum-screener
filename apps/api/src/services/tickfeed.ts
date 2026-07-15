@@ -45,12 +45,36 @@ export const TICKFEED = {
 // on the order of cents-to-dollars. Fetches ohlcv-1m (no 5m schema exists)
 // and aggregates 5→1 locally; returns ascending CLOSED bars in our bar-CLOSE
 // convention. Null on failure → callers fall back to Yahoo.
+// Historical availability lags real-time by a few minutes — an `end` past
+// the dataset's available_end 422s. Clamp via metadata.get_dataset_range,
+// memoized for 10 min.
+let dbHistEnd: { endMs: number; at: number } | null = null;
+async function databentoAvailableEnd(authHeader: string): Promise<number | null> {
+  if (dbHistEnd && Date.now() - dbHistEnd.at < 10 * 60_000) return dbHistEnd.endMs;
+  try {
+    const res = await fetch('https://hist.databento.com/v0/metadata.get_dataset_range?dataset=EQUS.MINI', {
+      headers: { Authorization: authHeader },
+    });
+    if (!res.ok) return null;
+    const j = await res.json() as { end?: string };
+    const endMs = j?.end ? Date.parse(j.end) : NaN;
+    if (!Number.isFinite(endMs)) return null;
+    dbHistEnd = { endMs, at: Date.now() };
+    return endMs;
+  } catch {
+    return null;
+  }
+}
+
 async function fetchDatabento5m(symbols: string[]): Promise<Map<string, Array<{ closeTs: number; close: number; volume: number }>> | null> {
   const key = process.env.DATABENTO_API_KEY;
   if (!key || symbols.length === 0) return null;
   try {
-    const end = new Date();
-    const start = new Date(end.getTime() - 3 * 86_400_000);
+    const authHeader = 'Basic ' + Buffer.from(`${key}:`).toString('base64');
+    const availEnd = await databentoAvailableEnd(authHeader);
+    const endMs = Math.min(Date.now(), (availEnd ?? Date.now() - 15 * 60_000)) - 1_000;
+    const end = new Date(endMs);
+    const start = new Date(endMs - 3 * 86_400_000);
     const params = new URLSearchParams({
       dataset: 'EQUS.MINI',
       schema: 'ohlcv-1m',
@@ -63,7 +87,7 @@ async function fetchDatabento5m(symbols: string[]): Promise<Map<string, Array<{ 
       map_symbols: 'true',
     });
     const res = await fetch(`https://hist.databento.com/v0/timeseries.get_range?${params}`, {
-      headers: { Authorization: 'Basic ' + Buffer.from(`${key}:`).toString('base64') },
+      headers: { Authorization: authHeader },
     });
     if (!res.ok) {
       console.error(`[ema-backfill] databento hist HTTP ${res.status} — falling back to Yahoo`);
