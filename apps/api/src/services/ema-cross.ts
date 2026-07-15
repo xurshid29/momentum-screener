@@ -88,6 +88,14 @@ export class EmaCrossTracker {
     return this.state.size;
   }
 
+  // True when historical bars may still be seeded for this symbol — i.e. it
+  // has never produced a live bar. Once live aggregation has started, seeding
+  // older bars would corrupt EMA ordering, so the backfill must skip it.
+  canSeed(ticker: string): boolean {
+    const st = this.state.get(ticker);
+    return !st || (st.bars === 0 && st.bucketStart === -1);
+  }
+
   // Boot-time replay of a persisted CLOSED bar: runs the same EMA/sibling/
   // counter math but emits no events, starts no observations, and does not
   // re-persist. Bars must arrive in time order per symbol. Marks the bucket

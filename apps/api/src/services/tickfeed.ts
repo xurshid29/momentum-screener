@@ -37,6 +37,37 @@ export const TICKFEED = {
   restart_delay_ms: 5_000,
 };
 
+// Yahoo 5m history for one symbol — free, no auth (the same endpoint the
+// research studies used). Returns ascending CLOSED bars; the still-open
+// bucket is dropped, and timestamps convert from Yahoo's bucket-OPEN
+// convention to our bar-CLOSE one.
+async function fetchYahoo5m(ticker: string): Promise<Array<{ closeTs: number; close: number; volume: number }> | null> {
+  try {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=5m&range=5d&includePrePost=true`;
+    const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    if (!res.ok) return null;
+    const json = await res.json() as {
+      chart?: { result?: Array<{ timestamp?: number[]; indicators?: { quote?: Array<{ close?: Array<number | null>; volume?: Array<number | null> }> } }> };
+    };
+    const r0 = json?.chart?.result?.[0];
+    const ts = r0?.timestamp ?? [];
+    const q = r0?.indicators?.quote?.[0];
+    if (ts.length === 0 || !q) return null;
+    const nowSec = Math.floor(Date.now() / 1000);
+    const out: Array<{ closeTs: number; close: number; volume: number }> = [];
+    for (let i = 0; i < ts.length; i++) {
+      const c = q.close?.[i];
+      if (c == null || !(c > 0)) continue;
+      const closeTs = Math.floor(ts[i] / 300) * 300 + 300;
+      if (closeTs > nowSec - 30) continue; // still-open bucket
+      out.push({ closeTs, close: c, volume: q.volume?.[i] ?? 0 });
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
 function etDate(d = new Date()): string {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
@@ -55,6 +86,13 @@ class TickFeedService {
   private barFlushTimer: NodeJS.Timeout | null = null;
   private barsPersisted = 0;
   private lastBarDbErrorMs = 0;
+  // Yahoo 5m history backfill for known runners still below EMA warmup —
+  // closes a symbol's one-time cold start (new universe entrants, freshly
+  // minted known runners) without waiting hours of live tape.
+  private backfillTimer: NodeJS.Timeout | null = null;
+  private backfillRunning = false;
+  private backfillAttempted = new Set<string>();  // once per ET day per symbol
+  private backfilledOk = 0;
   private child: ChildProcessWithoutNullStreams | null = null;
   private rl: Interface | null = null;
   private syncTimer: NodeJS.Timeout | null = null;
@@ -81,6 +119,7 @@ class TickFeedService {
       symbols_tracked: this.detector.symbolsTracked(),
       ema_cross_tracked: this.emaCross.symbolsTracked(),
       ema_bars_persisted: this.barsPersisted,
+      ema_backfilled: this.backfilledOk,
       bars_seen: this.barsSeen,
       accums: this.accums,
       watches: this.watches,
@@ -109,6 +148,11 @@ class TickFeedService {
       this.syncTimer = setInterval(() => this.sync(), TICKFEED.sync_interval_ms);
       this.screenSyncTimer = setInterval(() => this.syncScreenRows(), TICKFEED.screen_sync_interval_ms);
       this.barFlushTimer = setInterval(() => this.flushBars(), 5_000);
+      // Backfill under-warmed known runners from Yahoo shortly after boot
+      // (the DB seed above has already run, so the scan sees what's missing),
+      // then re-scan periodically for symbols that entered the set mid-day.
+      setTimeout(() => void this.scanBackfill(), 120_000);
+      this.backfillTimer = setInterval(() => void this.scanBackfill(), 4 * 3600_000);
     });
   }
 
@@ -120,6 +164,8 @@ class TickFeedService {
     this.screenSyncTimer = null;
     if (this.barFlushTimer) clearInterval(this.barFlushTimer);
     this.barFlushTimer = null;
+    if (this.backfillTimer) clearInterval(this.backfillTimer);
+    this.backfillTimer = null;
     this.flushBars();
     this.rl?.close();
     this.child?.kill();
@@ -146,6 +192,73 @@ class TickFeedService {
       console.log(`[ema-cross] seeded ${rows.length} closed 5m bars for ${syms.size} symbols (48h) — warmup carried over`);
     } catch (err) {
       console.error('[ema-cross] bar seed failed (continuing unseeded):', err instanceof Error ? err.message : err);
+    }
+  }
+
+  // Find known runners still below EMA warmup (< warmup-ish bar count in
+  // bars_5m over 5 days) and backfill them from Yahoo's free 5m history —
+  // gently (1 fetch / 2s), once per symbol per ET day. Fetched closes seed
+  // the tracker directly ONLY while the symbol has produced no live bar
+  // (ordering safety); bars within 72h also persist so the next boot's DB
+  // replay covers them. ⚠️ Yahoo volumes are consolidated-tape scale while
+  // live bars are MINI-feed scale — fine for the EMA math (closes are
+  // closes), and the sibling-volume window self-heals within ~an hour of
+  // live tape (ratios read conservatively LOW until then: misses, never
+  // false confirms).
+  private async scanBackfill(): Promise<void> {
+    if (this.backfillRunning || !this.running) return;
+    this.backfillRunning = true;
+    try {
+      const counts = new Map<string, number>();
+      const rows = await getDb()
+        .selectFrom('bars_5m')
+        .select(['ticker', (eb) => eb.fn.countAll<number>().as('n')])
+        .where('bar_ts', '>', new Date(Date.now() - 5 * 86_400_000))
+        .groupBy('ticker')
+        .execute();
+      for (const r of rows) counts.set(r.ticker, Number(r.n));
+      const targets: string[] = [];
+      for (const tk of poller.getKnownRunners()) {
+        if (this.backfillAttempted.has(tk)) continue;
+        if ((counts.get(tk) ?? 0) >= 50) continue;
+        targets.push(tk);
+        if (targets.length >= 800) break;
+      }
+      if (targets.length === 0) return;
+      console.log(`[ema-backfill] ${targets.length} known runners below warmup — fetching Yahoo 5m history`);
+      let ok = 0, seeded = 0, persisted = 0;
+      for (const tk of targets) {
+        if (!this.running) return;
+        this.backfillAttempted.add(tk);
+        const bars = await fetchYahoo5m(tk);
+        await new Promise((r) => setTimeout(r, 2_000));
+        if (!bars || bars.length === 0) continue;
+        ok++;
+        // Seed the tracker only if this symbol hasn't streamed live yet
+        // (re-checked AFTER the fetch — it may have started meanwhile).
+        if (this.emaCross.canSeed(tk)) {
+          for (const b of bars.slice(-120)) this.emaCross.seedBar(tk, b.closeTs, b.close, b.volume);
+          seeded++;
+        }
+        // Persist the recent slice so the next boot's replay covers it
+        // (retention prunes >3d, so older history would be wasted writes).
+        const recent = bars.filter((b) => b.closeTs * 1000 > Date.now() - 72 * 3600_000);
+        if (recent.length > 0) {
+          persisted += recent.length;
+          void getDb()
+            .insertInto('bars_5m')
+            .values(recent.map((b) => ({ ticker: tk, bar_ts: new Date(b.closeTs * 1000), close: b.close, volume: b.volume })))
+            .onConflict((oc) => oc.columns(['ticker', 'bar_ts']).doNothing())
+            .execute()
+            .catch(() => { /* non-critical */ });
+        }
+      }
+      this.backfilledOk += ok;
+      console.log(`[ema-backfill] done — ${ok}/${targets.length} fetched, ${seeded} tracker-seeded, ${persisted} bars persisted`);
+    } catch (err) {
+      console.error('[ema-backfill] scan failed (continuing):', err instanceof Error ? err.message : err);
+    } finally {
+      this.backfillRunning = false;
     }
   }
 
@@ -213,6 +326,7 @@ class TickFeedService {
       this.detector.reset();
       this.emaCross.resetDaily();
       this.extraSubs.clear();
+      this.backfillAttempted.clear();
       // Prune persisted 5m bars beyond the seed window (fire-and-forget).
       void getDb()
         .deleteFrom('bars_5m')

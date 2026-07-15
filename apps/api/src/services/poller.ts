@@ -685,6 +685,12 @@ class PollerService {
     return this.radarHistory.has(ticker);
   }
 
+  // The full known-runner set — the tick feed's EMA-backfill walks it to find
+  // symbols still below warmup.
+  getKnownRunners(): ReadonlySet<string> {
+    return this.radarHistory;
+  }
+
   // 📈 EMA-cross layer events (see services/ema-cross.ts): a 6/50 bullish
   // cross on 5m bars nominates a known runner for a ~30-min observation;
   // volume expansion vs sibling candles confirms it; no expansion → silent
