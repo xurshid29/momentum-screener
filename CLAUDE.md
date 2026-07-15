@@ -6,7 +6,7 @@ The web service runs a singleton `PollerService` that does the same Finviz + Yah
 
 **Continuing a session? Start with [`docs/HANDOVER.md`](docs/HANDOVER.md)** — the live "where we are + what's open" layer (most recent: the Ignition review, in progress). Then:
 
-**Status & roadmap:** what's built, recent work, and what's next live in [`docs/web-dashboard.md`](docs/web-dashboard.md). The low-float runner-detection strategy and its phased plan: [`docs/catching-runners.md`](docs/catching-runners.md); the Ignition screener spec: [`docs/ignition-screener-spec.md`](docs/ignition-screener-spec.md); the in-progress multi-day Swing screener spec: [`docs/swing-screener-spec.md`](docs/swing-screener-spec.md).
+**Status & roadmap:** what's built, recent work, and what's next live in [`docs/web-dashboard.md`](docs/web-dashboard.md). The low-float runner-detection strategy and its phased plan: [`docs/catching-runners.md`](docs/catching-runners.md); the Ignition screener spec: [`docs/ignition-screener-spec.md`](docs/ignition-screener-spec.md); the in-progress multi-day Swing screener spec: [`docs/swing-screener-spec.md`](docs/swing-screener-spec.md). **The early-detection chain (📰 news radar → 🤫 quiet accumulation → 📈 EMA cross → 👀/🛰️ tick watch/confirm → screens) is documented layer-by-layer in [`docs/detection-layers.md`](docs/detection-layers.md)** — read it before touching the tick feed, the poller's tier logic, or `tier_events`.
 
 ## Environment Variables
 

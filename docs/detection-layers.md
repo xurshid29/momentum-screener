@@ -1,0 +1,245 @@
+# The Early-Detection Layers — reference (current as of 2026-07-15)
+
+The dashboard detects runners through a chain of layers, ordered by how early
+they can speak. Each was measured before (or while) shipping, each is graded
+continuously via the `tier_events` table, and each survives deploys. This doc
+is the *how-it-works* reference; `docs/HANDOVER.md` carries what changed
+lately, `docs/web-dashboard.md` the full history.
+
+```
+📰 news radar        catalyst lands, price hasn't moved      (minutes–hours early)
+🤫 quiet accum       volume arrives, price still <10%        (minutes–hours early)
+📈 EMA cross         price curls on 5m bars, volume confirms (minutes early; TRIAL)
+👀 tick watch        +10% cross on the per-second tape       (seconds into the move)
+🛰️ tick confirm      volume proves the move                  (the conviction ping)
+⚡ screens           Finviz momentum / ignition / swing      (the established layer)
+```
+
+Which layer speaks first depends on the **move shape**:
+
+| Move shape | First responder |
+|---|---|
+| News published before any move | 📰 radar |
+| Volume builds while price sits flat | 🤫 accum |
+| Slow curl over tens of minutes | 📈 EMA cross (and 🤫) |
+| Vertical ignition (seconds–minutes) | 👀 watch → 🛰️ confirm |
+| Anything that sustains | ⚡ screens (+ runner score, alerts) |
+
+---
+
+## Shared infrastructure
+
+**Tick feed** (`tickfeed.ts` + `sidecar/tickfeed.py` + `tick-detect.ts`).
+Databento EQUS.MINI per-second OHLCV over one live session (Standard plan,
+$199/mo flat, $0 metered; the only hard limit is ONE concurrent connection —
+the sidecar releases its slot on SIGTERM and backs off on the limit error).
+Subscribed universe = the **union of both screens' structural bands**: the
+momentum filter minus its momentum sub-filters, ∪ the ignition filter's band
+(`ind_stocksonly,sh_price_u10`) — ~3,500–4,000 symbols, refreshed every 10 min
+(two Finviz exports, 1.3s apart). Without the union, a sub-$1 runner is
+invisible to the per-second layers until a screen catches it mid-flight (the
+TGHL case). Additional additive subscriptions: current screen rows every 30s
+(prior close derived from the row in PM/REG, from `daily_bars` in AH — the UPC
+case), and news-radar names (prior close from `daily_bars`).
+⚠️ MINI is a fraction of consolidated tape — all $-notional knobs are
+*feed-visible* dollars.
+
+**tier_events** (`tier-events.ts`, table `tier_events`). Every layer
+transition is inserted fire-and-forget (never blocks a cycle):
+`accum` flag/promote/expire · `tick` watch/watch_suppressed/confirm/fade/
+watch_expired · `radar` hit/moving/expired/dropped · `cross`
+nominate/confirm/expire — each with a meta jsonb (chg, rel_vol, mom, via, pts,
+minutes, impact, reason, source…). Grading is SQL over any date range; docker
+logs reset on every deploy, this doesn't.
+
+**seedTierState** (poller, boot). Replays today's tier_events in order to
+rebuild the LIVE TICKS ladder, radar entries, confirmed crosses, and every
+once-per-day dedup set — deploys don't blank the sidebar or re-ping names.
+Reseeded *observing* crosses are dropped (their observation died with the old
+process); detector baselines rebuild live in ~1–2 min.
+
+**bars_5m + backfill** (table `bars_5m`, logic in `tickfeed.ts`). Every LIVE
+closed 5m bar for known runners persists (batched, 3-day retention, pruned at
+midnight). Boot replays 48h through the EMA tracker (silent — history can't
+nominate). Known runners still below ~50 banked bars get Yahoo 5m history
+(free, 1 fetch/2s, once/symbol/ET-day, re-scanned every 4h) — closes seed the
+tracker only while the symbol has produced no live bar. Net effect: the EMA
+layer is always warm. Yahoo volumes are consolidated-scale; the sibling-volume
+window self-heals within ~1h of live tape (errs toward misses, never false
+confirms).
+
+**News-day semantics.** "Today's news" rolls at **04:00 ET** (premarket
+start), not midnight — the closed session belongs to the finished trading day,
+matching the change% column (the VRAX 🔥-cliff fix). Alert dedups and per-day
+trading state stay midnight-anchored.
+
+**Known runners** = every ticker seen on momentum/ignition in the last 30 days
+(`radarHistory`: DB-seeded at boot, grown live; ~1,500). Scopes the radar and
+the EMA layer.
+
+---
+
+## 📰 News radar (`poller.ts`: NEWS_RADAR, updateNewsRadar)
+
+**What/why.** A fresh bullish catalyst on a known runner that is NOT on any
+screen yet. Measured: when a headline precedes a detection, the move starts
+minutes later (median news→detection lag 7.9 min, p75 91); entering on the
+news beats entering at our detection ~2× on peak capture (EMAMACD2 study).
+
+**How.** The Benzinga delta the poller already pulls every 20s is market-wide
+(paginated ≤3×100/cycle); fresh articles + news-type halts (T1/T2/T12 only —
+LULD pauses are mid-move mechanics, filtered out) are matched against known
+runners not currently screening. Hits classify through the shared URL cache
+(rules now, LLM refinement upgrades in place; a bearish flip drops the entry).
+Entry TTL 90 min; escalates to **moving ↗** when the tick detector
+(watch/confirmed only) or a screen picks the name up. Radar names are armed
+into the tick feed so the per-second ladder is listening before the move.
+
+**Surfacing.** Purple 📰 sidebar section + soft ping per hit; Telegram only
+for strong/major urgency, once/ticker/day. Benzinga's multi-ticker
+"why is it moving" blurbs carry one representative ticker's quote-page URL —
+single-ticker news lists rewrite `/quote/<sym>` to the viewed ticker.
+
+**Grading.** `tier='radar'`: hit → moving (via, minutes) vs expired
+(outcome moved/no_move). Knobs: `NEWS_RADAR` (history_days 30, ttl_min 90,
+max_display 12).
+
+---
+
+## 🤫 Quiet accumulation (two sources, one ladder state)
+
+**What/why.** Volume arrives before price — the real carrier behind the
+operator's recurring EMA/MACD chart instinct. Measured (55d cohort): quiet
+names (chg<10%) with fast RVol ≥10× go on to ≥+20pt moves 20–25% (AH) /
+12–14% (PM/REG) vs ~3% without volume; **persistence is THE discriminator**
+(hot ≥3 cycles: 65% promote / 24% big-move vs 35%/7% transient).
+
+**Screen-side** (`poller.ts`: ACCUM, scanAccumulation): a screened row within
+its first 10 min on screen, chg 0–10%, `max(rv1m, rv5m) ≥ 1000%`, sustained
+across ≥3 poll cycles. Once/ticker/day.
+
+**Detector-side** (`tick-detect.ts`: TICK_DETECT.accum_*): for names the
+screens can't see (the SLS case — day-RVol never cleared momentum's Finviz
+gate). Cum ∈ [3%, 10%) AND trailing 60s volume ≥3× the symbol's own quiet
+baseline, sustained 120s, junk floor + near-high. The quiet baseline excludes
+surge windows (an accumulation burst must not pollute its own reference).
+
+**Lifecycle.** Teal 🤫 row in LIVE TICKS, TTL 120 min (measured: when these
+resolve, they usually cross +10% in 1–17 min; only ~3–6% after 2h). Promotes
+to 👀 via the detector's watch event (suppression bypassed — the tier already
+vetted it) or a screen backstop at +10%; confirms via the normal 🛰️ paths.
+
+**Surfacing.** Quietest ping in the set per flag; Telegram ONLY for sustained
+accumulation + a bullish catalyst (the highest-conviction slice: 72% promote /
+30% ≥+20pts, ~1.6/day). Raw fastRV magnitude does NOT rank winners (measured —
+the old ≥3000% push gate was backwards and is retired).
+
+**Grading.** `tier='accum'`: flag (meta.source 'screen'|'tick', fast_rv/chg) →
+promote (via, minutes, pts) vs expire (peak_pts).
+
+---
+
+## 📈 EMA-cross layer (`ema-cross.ts`; **TRIAL**)
+
+**What/why.** The operator's manual TV loop, automated: an EMA(6/50) bullish
+crossover on 5-minute bars **nominates** a known runner; volume expansion vs
+its sibling candles **confirms**. Both prior studies say the cross alone has
+zero selection power (≈0.9× random; +0.0pts paired as an entry trigger) — so
+it is strictly a nominator; the volume stage carries the precision.
+
+**How.** Per-second bars aggregate into 5m buckets (bar closes when a trade
+arrives in a later bucket — TV-like on thin tapes). EMAs are SMA-seeded;
+crosses count only after 50 closed bars (warmup — solved by bars_5m replay +
+Yahoo backfill, see shared infra). On a cross (`prevDiff ≤ 0 && diff > 0`,
+sibling median ≥50 sh, once/ticker/day): if the cross bar itself runs ≥5× the
+sibling median → instant confirm; else observe 6 bars (~30 min) — confirm on
+any closed bar with volume ≥3× the anchored sibling median AND close ≥ cross
+× 1.005; otherwise silent expire (peak telemetry recorded). Quantization
+caveat: signals land on 5-min boundaries — a pure gap (no preparatory bar)
+crosses one bar late; a move with a preparatory bar (TGHL) crosses at that
+bar's close, on par with the ignition screen.
+
+**Surfacing.** Green 📈 sidebar section: dim "…observing" → "✅ N× vol" with a
+soft ping on confirm only. Timestamps are bar-close times; "ago" anchors on
+the cross (matches the TV chart). Names already in the LIVE TICKS ladder skip
+display (logged `in_ladder`). No Telegram until graded.
+
+**Status.** TRIAL — keep/kill by the grading pass (~07-17+). Day-1 (07-14):
+37 nominations → 13 confirms / 14 expires. 07-15 was a blind day (warmup);
+full infrastructure (coverage + persistence + backfill) only since 07-16.
+Knobs: `EMA_CROSS`. Grading: `tier='cross'`.
+
+---
+
+## 👀 Tick watch → 🛰️ confirm (`tick-detect.ts` + poller `onTickEvent`)
+
+**What/why.** The per-second early-ignition ladder. Single-shot relvol
+detection was structurally late on nano-caps (catches at +23–63%: gappers had
+no baseline; relvol clears 20–30pts after price; slow grinders never trip the
+momentum gate) — so price flags first, volume confirms second.
+
+**👀 Watch.** Fires when cum (vs prior close) crosses +10% (≤100%), near the
+window high, over a junk floor (≥5 prints & ≥$2k/2min feed-visible). Gates in
+the poller: **evidence at the cross** — rel_vol ≥3× own quiet baseline OR
+momentum ≥3%/60s (drift-crossers like VSTM/ADCT grinding to +10% over hours
+fail both and are suppressed; confirm paths stay live); **staleness** — a
+first-sight-already-above-the-line name that's already on a screen is old news
+(suppressed; boot-time "screens unknown" counts as screened). Fresh crosses
+alert even on-screen (a catalyst-less screen row generates no push — the AUID
+case). Telegram 👀 + soft ping, once/ticker/day.
+
+**🛰️ Confirm** — any of three paths, once/ticker/day: the validated **surge**
+rule (relvol ≥5× quiet baseline + cum ≥12 + mom ≥8%/60s + near-high); the
+baseline-free **sustain** read (age ≥2min + extended ≥3pts + holding ≥ flag
+price + ≥$25k feed-visible since flag; express lane: 30s if extension ≥20pts —
+the CETX fix); or a **screen** returning the name (only counts when the screen
+did NOT already hold it at watch time). Telegram 🛰️ + radar ping.
+
+**Fade/expiry.** Watch fades on 60% giveback or 15-min TTL (both logged);
+faded names can resurrect only via the surge rule. In AH, LIVE TICKS rows
+refresh price only (row change% is AH-anchored; the ⚑ flag is prior-day
+anchored — the UPC display fix).
+
+**Grading.** `tier='tick'`: watch / watch_suppressed (reason
+low_evidence|stale_*) / confirm (via) / fade / watch_expired. Knobs:
+`TICK_DETECT`, `TICK_WATCH_EVIDENCE` (poller).
+
+---
+
+## ⚡ Screens (the established layer — pointers only)
+
+Momentum (change+relvol gated), Ignition (volume-led sub-$10, runner_score,
+alert ≥65 or premium catalyst), Swing (v2, alert ≥60), Faders/continuation,
+fresh-burst 🚀, new-ignition 🆕, outcome tracking (`screener_outcomes`),
+burned ⛔ / hype 🚀 markers. See `CLAUDE.md` + `docs/web-dashboard.md` +
+`docs/ignition-screener-spec.md`.
+
+---
+
+## The grading playbook (run after ≥3 full sessions)
+
+```sql
+-- accum precision, by source and volume band
+SELECT meta->>'source' src, count(*) FILTER (WHERE event='flag') flags,
+       count(*) FILTER (WHERE event='promote') promotes,
+       count(*) FILTER (WHERE event='expire') expires
+FROM tier_events WHERE tier='accum' GROUP BY 1;
+
+-- evidence-gate cost: suppressed watches that later confirmed
+SELECT s.ticker, s.at, c.at FROM tier_events s
+JOIN tier_events c ON c.ticker=s.ticker AND c.tier='tick' AND c.event='confirm'
+  AND c.at BETWEEN s.at AND s.at + interval '2 hours'
+WHERE s.tier='tick' AND s.event='watch_suppressed'
+  AND s.meta->>'reason'='low_evidence';
+
+-- cross-layer funnel + whether confirms led anywhere (join screener peaks)
+SELECT event, count(*) FROM tier_events WHERE tier='cross' GROUP BY 1;
+
+-- radar precision by catalyst type
+SELECT meta->>'type', count(*) FILTER (WHERE event='moving') moved,
+       count(*) FILTER (WHERE event='expired' AND meta->>'outcome'='no_move') dead
+FROM tier_events WHERE tier='radar' GROUP BY 1;
+```
+
+Keep/kill standard: a layer earns its Telegram push (or retirement) from these
+numbers, never from anecdotes — the same bar every shipped layer has passed.
