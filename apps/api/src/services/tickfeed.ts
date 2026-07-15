@@ -37,10 +37,76 @@ export const TICKFEED = {
   restart_delay_ms: 5_000,
 };
 
-// Yahoo 5m history for one symbol — free, no auth (the same endpoint the
-// research studies used). Returns ascending CLOSED bars; the still-open
-// bucket is dropped, and timestamps convert from Yahoo's bucket-OPEN
-// convention to our bar-CLOSE one.
+// Databento HISTORICAL 5m bars for a BATCH of symbols — the primary backfill
+// source (2026-07-16): same EQUS.MINI feed as our live stream, so volumes are
+// the same feed-visible scale (kills the Yahoo consolidated-vs-MINI sibling
+// caveat), contracted API, and one request covers ~100 symbols. Metered, but
+// OHLCV-1m aggregates are tiny — a full 800-symbol × 3-day backfill bills
+// on the order of cents-to-dollars. Fetches ohlcv-1m (no 5m schema exists)
+// and aggregates 5→1 locally; returns ascending CLOSED bars in our bar-CLOSE
+// convention. Null on failure → callers fall back to Yahoo.
+async function fetchDatabento5m(symbols: string[]): Promise<Map<string, Array<{ closeTs: number; close: number; volume: number }>> | null> {
+  const key = process.env.DATABENTO_API_KEY;
+  if (!key || symbols.length === 0) return null;
+  try {
+    const end = new Date();
+    const start = new Date(end.getTime() - 3 * 86_400_000);
+    const params = new URLSearchParams({
+      dataset: 'EQUS.MINI',
+      schema: 'ohlcv-1m',
+      symbols: symbols.join(','),
+      stype_in: 'raw_symbol',
+      start: start.toISOString(),
+      end: end.toISOString(),
+      encoding: 'csv',
+      pretty_px: 'true',
+      map_symbols: 'true',
+    });
+    const res = await fetch(`https://hist.databento.com/v0/timeseries.get_range?${params}`, {
+      headers: { Authorization: 'Basic ' + Buffer.from(`${key}:`).toString('base64') },
+    });
+    if (!res.ok) {
+      console.error(`[ema-backfill] databento hist HTTP ${res.status} — falling back to Yahoo`);
+      return null;
+    }
+    const text = await res.text();
+    const lines = text.split('\n');
+    // header: ts_event,rtype,publisher_id,instrument_id,open,high,low,close,volume,symbol
+    const nowSec = Math.floor(Date.now() / 1000);
+    const buckets = new Map<string, Map<number, { close: number; volume: number }>>();
+    for (let i = 1; i < lines.length; i++) {
+      const c = lines[i].split(',');
+      if (c.length < 10) continue;
+      const sec = Number(c[0].slice(0, -9)); // ns → s without float precision loss
+      const close = parseFloat(c[7]);
+      const vol = Number(c[8]);
+      const sym = c[9]?.trim();
+      if (!sym || !Number.isFinite(sec) || !(close > 0)) continue;
+      const bStart = Math.floor(sec / 300) * 300;
+      if (bStart + 300 > nowSec - 30) continue; // still-open bucket
+      let m = buckets.get(sym);
+      if (!m) { m = new Map(); buckets.set(sym, m); }
+      const b = m.get(bStart);
+      if (b) { b.close = close; b.volume += vol; } // rows arrive ts-ascending → last close wins
+      else m.set(bStart, { close, volume: Number.isFinite(vol) ? vol : 0 });
+    }
+    const out = new Map<string, Array<{ closeTs: number; close: number; volume: number }>>();
+    for (const [sym, m] of buckets) {
+      out.set(sym, [...m.entries()].sort((a, b) => a[0] - b[0]).map(([bs, b]) => ({ closeTs: bs + 300, close: b.close, volume: b.volume })));
+    }
+    return out;
+  } catch (err) {
+    console.error('[ema-backfill] databento hist fetch failed — falling back to Yahoo:', err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
+// Yahoo 5m history for one symbol — the FALLBACK backfill source (free, no
+// auth; the same endpoint the research studies used). Returns ascending
+// CLOSED bars; the still-open bucket is dropped, and timestamps convert from
+// Yahoo's bucket-OPEN convention to our bar-CLOSE one. ⚠️ Yahoo volumes are
+// consolidated-tape scale (vs our MINI-scale live bars) — the sibling-volume
+// window self-heals within ~1h of live tape.
 async function fetchYahoo5m(ticker: string): Promise<Array<{ closeTs: number; close: number; volume: number }> | null> {
   try {
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=5m&range=5d&includePrePost=true`;
@@ -225,41 +291,60 @@ class TickFeedService {
         if (targets.length >= 800) break;
       }
       if (targets.length === 0) return;
-      console.log(`[ema-backfill] ${targets.length} known runners below warmup — fetching Yahoo 5m history`);
-      let ok = 0, seeded = 0, persisted = 0;
-      for (const tk of targets) {
+      console.log(`[ema-backfill] ${targets.length} known runners below warmup — Databento hist (Yahoo fallback)`);
+      let ok = 0, seeded = 0, persisted = 0, viaYahoo = 0;
+      const CHUNK = 100;
+      for (let i = 0; i < targets.length; i += CHUNK) {
         if (!this.running) return;
-        this.backfillAttempted.add(tk);
-        const bars = await fetchYahoo5m(tk);
-        await new Promise((r) => setTimeout(r, 2_000));
-        if (!bars || bars.length === 0) continue;
-        ok++;
-        // Seed the tracker only if this symbol hasn't streamed live yet
-        // (re-checked AFTER the fetch — it may have started meanwhile).
-        if (this.emaCross.canSeed(tk)) {
-          for (const b of bars.slice(-120)) this.emaCross.seedBar(tk, b.closeTs, b.close, b.volume);
-          seeded++;
+        const chunk = targets.slice(i, i + CHUNK);
+        chunk.forEach((t) => this.backfillAttempted.add(t));
+        const batch = await fetchDatabento5m(chunk);
+        for (const tk of chunk) {
+          if (!this.running) return;
+          let bars = batch?.get(tk) ?? null;
+          if (!bars || bars.length === 0) {
+            // Batch failed, or this symbol printed nothing on MINI in 3d —
+            // try Yahoo (consolidated tape sees more of the thin names).
+            bars = await fetchYahoo5m(tk);
+            await new Promise((r) => setTimeout(r, 1_500));
+            if (bars && bars.length > 0) viaYahoo++;
+          }
+          if (!bars || bars.length === 0) continue;
+          ok++;
+          const r = this.applyBackfillBars(tk, bars);
+          seeded += r.seeded;
+          persisted += r.persisted;
         }
-        // Persist the recent slice so the next boot's replay covers it
-        // (retention prunes >3d, so older history would be wasted writes).
-        const recent = bars.filter((b) => b.closeTs * 1000 > Date.now() - 72 * 3600_000);
-        if (recent.length > 0) {
-          persisted += recent.length;
-          void getDb()
-            .insertInto('bars_5m')
-            .values(recent.map((b) => ({ ticker: tk, bar_ts: new Date(b.closeTs * 1000), close: b.close, volume: b.volume })))
-            .onConflict((oc) => oc.columns(['ticker', 'bar_ts']).doNothing())
-            .execute()
-            .catch(() => { /* non-critical */ });
-        }
+        await new Promise((r) => setTimeout(r, 500));
       }
       this.backfilledOk += ok;
-      console.log(`[ema-backfill] done — ${ok}/${targets.length} fetched, ${seeded} tracker-seeded, ${persisted} bars persisted`);
+      console.log(`[ema-backfill] done — ${ok}/${targets.length} backfilled (${viaYahoo} via Yahoo), ${seeded} tracker-seeded, ${persisted} bars persisted`);
     } catch (err) {
       console.error('[ema-backfill] scan failed (continuing):', err instanceof Error ? err.message : err);
     } finally {
       this.backfillRunning = false;
     }
+  }
+
+  // Apply fetched history for one symbol: direct-seed the tracker only while
+  // it has produced no live bar (ordering safety, re-checked here — after the
+  // fetch), and persist the recent 72h slice for the next boot's replay.
+  private applyBackfillBars(tk: string, bars: Array<{ closeTs: number; close: number; volume: number }>): { seeded: number; persisted: number } {
+    let seeded = 0;
+    if (this.emaCross.canSeed(tk)) {
+      for (const b of bars.slice(-120)) this.emaCross.seedBar(tk, b.closeTs, b.close, b.volume);
+      seeded = 1;
+    }
+    const recent = bars.filter((b) => b.closeTs * 1000 > Date.now() - 72 * 3600_000);
+    if (recent.length > 0) {
+      void getDb()
+        .insertInto('bars_5m')
+        .values(recent.map((b) => ({ ticker: tk, bar_ts: new Date(b.closeTs * 1000), close: b.close, volume: b.volume })))
+        .onConflict((oc) => oc.columns(['ticker', 'bar_ts']).doNothing())
+        .execute()
+        .catch(() => { /* non-critical */ });
+    }
+    return { seeded, persisted: recent.length };
   }
 
   private flushBars(): void {
