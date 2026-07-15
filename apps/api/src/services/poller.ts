@@ -670,6 +670,15 @@ class PollerService {
     return this.lastPayload;
   }
 
+  // The Ignition screen's Finviz filter — the UniverseService derives its
+  // structural part so the tick feed also covers the sub-$10 volume-led band
+  // (TGHL 2026-07-15: prior close $0.66 sat below the momentum filter's $1
+  // floor → never tick-subscribed → the per-second tiers were blind until
+  // screen-sync added it at +91%).
+  getIgnitionFilter(): string {
+    return IGNITION.filter;
+  }
+
   // Is the ticker in the known-runner set (30d momentum/ignition history)?
   // Used by the tick feed to scope the 📈 EMA-cross layer.
   isKnownRunner(ticker: string): boolean {
