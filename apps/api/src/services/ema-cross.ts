@@ -62,11 +62,13 @@ interface SymState {
   emaS: number | null;
   seedSumF: number;
   seedSumS: number;
-  bars: number;          // closed bars seen
+  bars: number;          // closed bars seen (live + boot-seeded)
   prevDiff: number | null; // emaF - emaS at the previous closed bar
   sibVols: number[];     // ring: volumes of the last sibling_bars CLOSED bars
   watch: Observation | null;
   firedToday: boolean;   // one nomination per symbol per ET day
+  seededUpTo: number;    // bucket start of the last boot-seeded bar (-1 = none)
+                         // — live ticks at/before it are already accounted for
 }
 
 function median(xs: number[]): number {
@@ -78,8 +80,22 @@ function median(xs: number[]): number {
 export class EmaCrossTracker {
   private state = new Map<string, SymState>();
 
+  // onBarClosed fires for every LIVE closed bar (not boot-seeded replays) —
+  // the tick feed persists these to bars_5m so warmup survives deploys.
+  constructor(private onBarClosed?: (ticker: string, closeTs: number, close: number, volume: number) => void) {}
+
   symbolsTracked(): number {
     return this.state.size;
+  }
+
+  // Boot-time replay of a persisted CLOSED bar: runs the same EMA/sibling/
+  // counter math but emits no events, starts no observations, and does not
+  // re-persist. Bars must arrive in time order per symbol. Marks the bucket
+  // so a live tick belonging to an already-seeded bar can't double-process.
+  seedBar(ticker: string, closeTs: number, close: number, volume: number): void {
+    const st = this.ensure(ticker);
+    this.processClosedBar(ticker, st, closeTs, close, volume, true);
+    st.seededUpTo = closeTs - EMA_CROSS.interval_sec;
   }
 
   // ET-day roll: nominations re-arm, in-flight observations drop (they can't
@@ -92,21 +108,28 @@ export class EmaCrossTracker {
     }
   }
 
-  // Feed one per-second bar; returns an event when a 5m bar CLOSES and trips
-  // a transition. Aggregation is causal: a bucket only closes when a trade
-  // arrives in a later bucket.
-  addBar(ticker: string, tsSec: number, close: number, volume: number): EmaCrossEvent | null {
+  private ensure(ticker: string): SymState {
     let st = this.state.get(ticker);
     if (!st) {
       st = {
         bucketStart: -1, bucketClose: 0, bucketVol: 0,
         emaF: null, emaS: null, seedSumF: 0, seedSumS: 0,
         bars: 0, prevDiff: null, sibVols: [], watch: null, firedToday: false,
+        seededUpTo: -1,
       };
       this.state.set(ticker, st);
     }
+    return st;
+  }
+
+  // Feed one per-second bar; returns an event when a 5m bar CLOSES and trips
+  // a transition. Aggregation is causal: a bucket only closes when a trade
+  // arrives in a later bucket.
+  addBar(ticker: string, tsSec: number, close: number, volume: number): EmaCrossEvent | null {
+    const st = this.ensure(ticker);
     const bucket = Math.floor(tsSec / EMA_CROSS.interval_sec) * EMA_CROSS.interval_sec;
     if (bucket < st.bucketStart) return null; // stale/out-of-order tick — ignore
+    if (bucket <= st.seededUpTo) return null; // bar already covered by boot seed
     if (st.bucketStart === -1) {
       st.bucketStart = bucket;
       st.bucketClose = close;
@@ -120,14 +143,16 @@ export class EmaCrossTracker {
     }
     // A later bucket started → the open one is closed. Process it, then open
     // the new one.
-    const ev = this.onBarClose(ticker, st, st.bucketStart + EMA_CROSS.interval_sec, st.bucketClose, st.bucketVol);
+    const closeTs = st.bucketStart + EMA_CROSS.interval_sec;
+    const ev = this.processClosedBar(ticker, st, closeTs, st.bucketClose, st.bucketVol, false);
+    this.onBarClosed?.(ticker, closeTs, st.bucketClose, st.bucketVol);
     st.bucketStart = bucket;
     st.bucketClose = close;
     st.bucketVol = volume;
     return ev;
   }
 
-  private onBarClose(ticker: string, st: SymState, closeTs: number, c: number, v: number): EmaCrossEvent | null {
+  private processClosedBar(ticker: string, st: SymState, closeTs: number, c: number, v: number, silent: boolean): EmaCrossEvent | null {
     st.bars++;
 
     // EMA update — SMA seed over the first `length` closed bars, recursive after.
@@ -153,8 +178,9 @@ export class EmaCrossTracker {
     let out: EmaCrossEvent | null = null;
 
     // 1) Active observation — does this bar confirm (volume expansion with
-    // price holding), or does the window run out?
-    if (st.watch) {
+    // price holding), or does the window run out? (Skipped on boot-seed
+    // replays: history must not nominate, confirm, or expire anything.)
+    if (!silent && st.watch) {
       const w = st.watch;
       w.barsSeen++;
       const ratio = w.sibMedian > 0 ? v / w.sibMedian : 0;
@@ -179,6 +205,7 @@ export class EmaCrossTracker {
     // 2) Cross detection — only with warmed EMAs, once per day per symbol, and
     // only when the tape has a usable sibling baseline.
     if (
+      !silent &&
       out == null &&
       st.emaF != null && st.emaS != null &&
       st.bars > EMA_CROSS.warmup_bars &&

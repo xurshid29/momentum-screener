@@ -335,6 +335,16 @@ export interface TierEventsTable {
   meta: JSONColumnType<Record<string, unknown>> | null;
 }
 
+// Closed 5m bars for the known-runner set — written live by the EMA-cross
+// tracker, replayed at boot so the layer's ~50-bar warmup survives deploys.
+// Pruned to 3 days. See services/ema-cross.ts + tickfeed.ts.
+export interface Bars5mTable {
+  ticker: string;
+  bar_ts: ColumnType<Date, Date | string, Date | string>;
+  close: number;
+  volume: number;
+}
+
 export interface Database {
   users: UsersTable;
   screener_settings: ScreenerSettingsTable;
@@ -356,4 +366,5 @@ export interface Database {
   broker_imports: BrokerImportsTable;
   trade_executions: TradeExecutionsTable;
   tier_events: TierEventsTable;
+  bars_5m: Bars5mTable;
 }

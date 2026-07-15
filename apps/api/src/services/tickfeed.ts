@@ -17,6 +17,7 @@ import { TickDetector, type TickBar } from './tick-detect.js';
 import { EmaCrossTracker } from './ema-cross.js';
 import { universe } from './universe.js';
 import { poller } from './poller.js';
+import { getDb } from '../db/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -45,7 +46,15 @@ function etDate(d = new Date()): string {
 class TickFeedService {
   private detector = new TickDetector();
   // 📈 EMA 6/50 cross layer on 5m bars, known runners only — see ema-cross.ts.
-  private emaCross = new EmaCrossTracker();
+  // Every LIVE closed bar is buffered for persistence (bars_5m) so the
+  // ~50-bar warmup survives deploys; boot replays the last 48h.
+  private emaCross = new EmaCrossTracker((ticker, closeTs, close, volume) => {
+    this.barBuffer.push({ ticker, bar_ts: new Date(closeTs * 1000), close, volume });
+  });
+  private barBuffer: { ticker: string; bar_ts: Date; close: number; volume: number }[] = [];
+  private barFlushTimer: NodeJS.Timeout | null = null;
+  private barsPersisted = 0;
+  private lastBarDbErrorMs = 0;
   private child: ChildProcessWithoutNullStreams | null = null;
   private rl: Interface | null = null;
   private syncTimer: NodeJS.Timeout | null = null;
@@ -71,6 +80,7 @@ class TickFeedService {
       running: this.running,
       symbols_tracked: this.detector.symbolsTracked(),
       ema_cross_tracked: this.emaCross.symbolsTracked(),
+      ema_bars_persisted: this.barsPersisted,
       bars_seen: this.barsSeen,
       accums: this.accums,
       watches: this.watches,
@@ -90,10 +100,16 @@ class TickFeedService {
     if (this.running) return;
     this.running = true;
     console.log('[tickfeed] starting');
-    this.spawnSidecar();
-    setTimeout(() => this.sync(), TICKFEED.initial_delay_ms);
-    this.syncTimer = setInterval(() => this.sync(), TICKFEED.sync_interval_ms);
-    this.screenSyncTimer = setInterval(() => this.syncScreenRows(), TICKFEED.screen_sync_interval_ms);
+    // Seed the EMA-cross tracker from persisted bars BEFORE the sidecar
+    // starts streaming, so live ticks can't interleave with the replay.
+    void this.seedEmaBars().finally(() => {
+      if (!this.running) return;
+      this.spawnSidecar();
+      setTimeout(() => this.sync(), TICKFEED.initial_delay_ms);
+      this.syncTimer = setInterval(() => this.sync(), TICKFEED.sync_interval_ms);
+      this.screenSyncTimer = setInterval(() => this.syncScreenRows(), TICKFEED.screen_sync_interval_ms);
+      this.barFlushTimer = setInterval(() => this.flushBars(), 5_000);
+    });
   }
 
   stop(): void {
@@ -102,9 +118,53 @@ class TickFeedService {
     this.syncTimer = null;
     if (this.screenSyncTimer) clearInterval(this.screenSyncTimer);
     this.screenSyncTimer = null;
+    if (this.barFlushTimer) clearInterval(this.barFlushTimer);
+    this.barFlushTimer = null;
+    this.flushBars();
     this.rl?.close();
     this.child?.kill();
     this.child = null;
+  }
+
+  // Replay the last 48h of persisted 5m bars through the tracker so the
+  // EMA(6/50) warmup (~50 closed bars/symbol) survives deploys. Three deploys
+  // on 2026-07-14 left the layer silent all of 07-15 — this closes that.
+  private async seedEmaBars(): Promise<void> {
+    try {
+      const rows = await getDb()
+        .selectFrom('bars_5m')
+        .select(['ticker', 'bar_ts', 'close', 'volume'])
+        .where('bar_ts', '>', new Date(Date.now() - 48 * 3600_000))
+        .orderBy('ticker', 'asc')
+        .orderBy('bar_ts', 'asc')
+        .execute();
+      const syms = new Set<string>();
+      for (const r of rows) {
+        this.emaCross.seedBar(r.ticker, Math.floor(new Date(r.bar_ts).getTime() / 1000), Number(r.close), Number(r.volume));
+        syms.add(r.ticker);
+      }
+      console.log(`[ema-cross] seeded ${rows.length} closed 5m bars for ${syms.size} symbols (48h) — warmup carried over`);
+    } catch (err) {
+      console.error('[ema-cross] bar seed failed (continuing unseeded):', err instanceof Error ? err.message : err);
+    }
+  }
+
+  private flushBars(): void {
+    if (this.barBuffer.length === 0) return;
+    const rows = this.barBuffer.splice(0);
+    void getDb()
+      .insertInto('bars_5m')
+      .values(rows)
+      .onConflict((oc) => oc.columns(['ticker', 'bar_ts']).doNothing())
+      .execute()
+      .then(() => { this.barsPersisted += rows.length; })
+      .catch((err) => {
+        const now = Date.now();
+        if (now - this.lastBarDbErrorMs > 60_000) {
+          this.lastBarDbErrorMs = now;
+          console.error('[ema-cross] bar persist failed (continuing):', err instanceof Error ? err.message : err);
+        }
+      });
   }
 
   private spawnSidecar(): void {
@@ -153,6 +213,12 @@ class TickFeedService {
       this.detector.reset();
       this.emaCross.resetDaily();
       this.extraSubs.clear();
+      // Prune persisted 5m bars beyond the seed window (fire-and-forget).
+      void getDb()
+        .deleteFrom('bars_5m')
+        .where('bar_ts', '<', new Date(Date.now() - 3 * 86_400_000))
+        .execute()
+        .catch(() => { /* retried next midnight */ });
       // Fresh Databento session for the new day.
       this.child?.kill();
       console.log('[tickfeed] midnight ET — detector reset, sidecar will respawn');
