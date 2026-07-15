@@ -31,6 +31,14 @@ export const EMA_CROSS = {
   confirm_vol_x: 3,    // a closed bar ≥3× the sibling median…
   confirm_price_ext: 0.005, // …with close ≥ cross close × (1 + this)
   instant_vol_x: 5,    // the cross bar itself arriving ≥5× median = instant confirm
+  // Dollar floor on the confirming bar (close × volume). The sibling floor is
+  // 50 SHARES, so on a dead tape "3× the median" can be ~180 shares — under
+  // $200 on a sub-$1 name. Same lesson as the tick tiers' junk floor. Applies
+  // to both confirm paths; an instant-confirm that fails it demotes to a
+  // normal nomination (the cross is real, the dollar evidence isn't yet).
+  // ⚠️ Feed-visible (EQUS.MINI) dollars, first guess — recalibrate from the
+  // notional now recorded in tier_events meta.
+  confirm_min_notional: 10_000,
   // Re-arm cooldown after an EXPIRED observation. Nominations were originally
   // once/ticker/day, but TGHL 2026-07-15 showed why that's wrong: a weak
   // 0.4× morning cross burned the slot and expired, and the REAL 16:25 cross
@@ -47,6 +55,8 @@ export interface EmaCrossEvent {
   price: number;         // close of the triggering bar
   cross_price: number;   // close of the cross bar
   vol_ratio: number;     // triggering bar volume / sibling median
+  volume: number;        // triggering bar volume (shares) — makes the ratio auditable
+  sib_median: number;    // the sibling median the ratio was computed against
   bars_since_cross: number;
   peak_ratio?: number;   // expire telemetry: best vol ratio seen in the window
   peak_price?: number;   // expire telemetry: best close seen in the window
@@ -203,11 +213,16 @@ export class EmaCrossTracker {
       const ratio = w.sibMedian > 0 ? v / w.sibMedian : 0;
       if (ratio > w.peakRatio) w.peakRatio = ratio;
       if (c > w.peakPrice) w.peakPrice = c;
-      if (ratio >= EMA_CROSS.confirm_vol_x && c >= w.crossPrice * (1 + EMA_CROSS.confirm_price_ext)) {
+      if (
+        ratio >= EMA_CROSS.confirm_vol_x &&
+        c >= w.crossPrice * (1 + EMA_CROSS.confirm_price_ext) &&
+        c * v >= EMA_CROSS.confirm_min_notional
+      ) {
         st.confirmedToday = true;
         out = {
           type: 'confirm', ticker, ts_sec: closeTs, price: c,
-          cross_price: w.crossPrice, vol_ratio: +ratio.toFixed(1), bars_since_cross: w.barsSeen,
+          cross_price: w.crossPrice, vol_ratio: +ratio.toFixed(1),
+          volume: v, sib_median: w.sibMedian, bars_since_cross: w.barsSeen,
         };
         st.watch = null;
       } else if (w.barsSeen >= EMA_CROSS.observe_bars) {
@@ -216,15 +231,16 @@ export class EmaCrossTracker {
         st.lockedUntil = closeTs + EMA_CROSS.renominate_cooldown_sec;
         out = {
           type: 'expire', ticker, ts_sec: closeTs, price: c,
-          cross_price: w.crossPrice, vol_ratio: +ratio.toFixed(1), bars_since_cross: w.barsSeen,
+          cross_price: w.crossPrice, vol_ratio: +ratio.toFixed(1),
+          volume: v, sib_median: w.sibMedian, bars_since_cross: w.barsSeen,
           peak_ratio: +w.peakRatio.toFixed(1), peak_price: w.peakPrice,
         };
         st.watch = null;
       }
     }
 
-    // 2) Cross detection — only with warmed EMAs, once per day per symbol, and
-    // only when the tape has a usable sibling baseline.
+    // 2) Cross detection — only with warmed EMAs, a usable sibling baseline,
+    // no confirm yet today, and outside the post-expire re-arm cooldown.
     if (
       !silent &&
       out == null &&
@@ -236,13 +252,14 @@ export class EmaCrossTracker {
       const diff = st.emaF - st.emaS;
       if (st.prevDiff <= 0 && diff > 0 && sibMedian >= EMA_CROSS.sibling_min_sh) {
         const ratio = v / sibMedian;
-        if (ratio >= EMA_CROSS.instant_vol_x && c > 0) {
+        if (ratio >= EMA_CROSS.instant_vol_x && c * v >= EMA_CROSS.confirm_min_notional) {
           // The cross bar itself arrived on expanded volume — the operator's
           // "sometimes the current volume is much higher than siblings" case.
           st.confirmedToday = true;
           out = {
             type: 'confirm', ticker, ts_sec: closeTs, price: c,
-            cross_price: c, vol_ratio: +ratio.toFixed(1), bars_since_cross: 0,
+            cross_price: c, vol_ratio: +ratio.toFixed(1),
+            volume: v, sib_median: sibMedian, bars_since_cross: 0,
           };
         } else {
           st.watch = {
@@ -251,7 +268,8 @@ export class EmaCrossTracker {
           };
           out = {
             type: 'nominate', ticker, ts_sec: closeTs, price: c,
-            cross_price: c, vol_ratio: +ratio.toFixed(1), bars_since_cross: 0,
+            cross_price: c, vol_ratio: +ratio.toFixed(1),
+            volume: v, sib_median: sibMedian, bars_since_cross: 0,
           };
         }
       }

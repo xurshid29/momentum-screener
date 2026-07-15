@@ -703,6 +703,7 @@ class PollerService {
       const inLadder = this.tickCatches.has(e.ticker);
       recordTierEvent('cross', e.type, e.ticker, {
         price: e.price, cross_price: e.cross_price, vol_ratio: e.vol_ratio,
+        vol: e.volume, sib_median: e.sib_median, notional: Math.round(e.price * e.volume),
         bars: e.bars_since_cross, in_ladder: inLadder,
       });
       console.log(
@@ -730,7 +731,9 @@ class PollerService {
     const existing = this.emaCrosses.get(e.ticker);
     if (e.type === 'confirm') {
       recordTierEvent('cross', 'confirm', e.ticker, {
-        price: e.price, cross_price: e.cross_price, vol_ratio: e.vol_ratio, bars: e.bars_since_cross,
+        price: e.price, cross_price: e.cross_price, vol_ratio: e.vol_ratio,
+        vol: e.volume, sib_median: e.sib_median, notional: Math.round(e.price * e.volume),
+        bars: e.bars_since_cross,
       });
       console.log(
         `[ema-cross] 📈✅ confirm ${e.ticker} $${e.price.toFixed(2)} · ${e.vol_ratio}x sibling vol · ` +
@@ -747,7 +750,8 @@ class PollerService {
     }
     // expire — the observation window ran out without expansion.
     recordTierEvent('cross', 'expire', e.ticker, {
-      cross_price: e.cross_price, peak_ratio: e.peak_ratio ?? null, peak_price: e.peak_price ?? null,
+      cross_price: e.cross_price, sib_median: e.sib_median,
+      peak_ratio: e.peak_ratio ?? null, peak_price: e.peak_price ?? null,
     });
     console.log(
       `[ema-cross] 📉 expire ${e.ticker} — no expansion in ${e.bars_since_cross} bars ` +
