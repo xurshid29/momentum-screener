@@ -164,10 +164,19 @@ it demotes to a normal nomination). No expansion → silent expire (peak
 telemetry). **Re-fire rules (2026-07-16):** a confirm ends the symbol's day;
 an expired observation re-arms after a 60-min cooldown
 (`renominate_cooldown_sec` — the TGHL lesson: a weak 0.4× morning cross must
-not lock out the real 6.7× afternoon one). Quantization caveat: signals land
-on 5-min boundaries — a pure gap (no preparatory bar) crosses one bar late; a
-move with a preparatory bar (TGHL) crosses at that bar's close, on par with
-the ignition screen.
+not lock out the real 6.7× afternoon one).
+**Intrabar detection (2026-07-16, the DXST/EHGO lag report):** TV alerts
+evaluate the cross on the LIVE forming bar (the operator's alerts fired
+42–75s into the bar; bar-close-only evaluation was ~4–5 min behind). Every
+tick now also runs a provisional check — EMAs folded forward with the live
+price, confirms allowed mid-bar on the bucket's ACCUMULATED volume (monotone,
+so anything clearing a threshold mid-bar also clears it at close; the
+mid-bar cross bar keeps the 5× instant rule, later bars the 3× rule, floors
+unchanged). Events carry `intrabar` in meta — grade the latency win and the
+wiggle-nomination cost separately. Kill switch: `EMA_CROSS.intrabar_detect`.
+Residual quantization caveat: a pure gap (no preparatory bar) still crosses
+late; a move with a preparatory bar (TGHL) crosses at that bar — now at the
+moment the provisional EMAs touch, not its close.
 
 **Surfacing.** Green 📈 sidebar section: dim "…observing" → "✅ N× vol" with a
 soft ping on confirm only. Timestamps are bar-close times; "ago" anchors on

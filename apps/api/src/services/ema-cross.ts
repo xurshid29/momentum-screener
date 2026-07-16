@@ -19,6 +19,19 @@
 // warmup_bars closed bars before crosses count, so the layer warms up for a
 // few hours after each deploy (same class of limitation as detector
 // baselines; note it when grading the first hours of a day).
+//
+// INTRABAR detection (2026-07-16, the DXST/EHGO lag report): TV alerts
+// evaluate the cross on the LIVE forming bar, so the operator's alerts fired
+// 42–75s into the bar while our closed-bar-only evaluation waited for the
+// close — a structural ~4–5 min lag. Every live tick now also runs a
+// provisional check: EMAs folded forward with the current price (closed-bar
+// state untouched), and confirms may fire mid-bar on the bucket's ACCUMULATED
+// volume — sound because volume is monotone: anything clearing a threshold
+// mid-bar also clears it at close. Price-side repaint (a poke above that
+// un-crosses by close) can nominate a wiggle — exactly what the operator's TV
+// alert does — and the volume-confirm stage disposes of it. The closed-bar
+// path remains as the backstop; intrabar events carry `intrabar: true` so
+// grading can measure the latency win separately.
 
 export const EMA_CROSS = {
   interval_sec: 300,   // 5-minute bars (the operator trades this TF on TV)
@@ -46,18 +59,22 @@ export const EMA_CROSS = {
   // deploy happened to reset the tracker. A CONFIRMED cross still ends the
   // symbol's day (it's already surfaced); an expired one re-arms after this.
   renominate_cooldown_sec: 3600,
+  // TV-parity live evaluation (see header). Kill switch only — flip to false
+  // if the fast path misbehaves live; detection reverts to bar-close-only.
+  intrabar_detect: true,
 } as const;
 
 export interface EmaCrossEvent {
   type: 'nominate' | 'confirm' | 'expire';
   ticker: string;
-  ts_sec: number;        // close time of the triggering bar
-  price: number;         // close of the triggering bar
+  ts_sec: number;        // close time of the triggering bar (intrabar: the tick's time)
+  price: number;         // close of the triggering bar (intrabar: the tick's price)
   cross_price: number;   // close of the cross bar
-  vol_ratio: number;     // triggering bar volume / sibling median
+  vol_ratio: number;     // triggering bar volume / sibling median (intrabar: volume so far)
   volume: number;        // triggering bar volume (shares) — makes the ratio auditable
   sib_median: number;    // the sibling median the ratio was computed against
   bars_since_cross: number;
+  intrabar?: boolean;    // fired mid-bar by the TV-parity live check
   peak_ratio?: number;   // expire telemetry: best vol ratio seen in the window
   peak_price?: number;   // expire telemetry: best close seen in the window
 }
@@ -66,9 +83,11 @@ interface Observation {
   crossTs: number;
   crossPrice: number;
   sibMedian: number;
-  barsSeen: number;
+  barsSeen: number;      // CLOSED bars observed after the cross bar
   peakRatio: number;
   peakPrice: number;
+  crossBucket: number;   // bucket start of the cross bar; -1 = cross bar already
+                         // closed when detected (close-path nomination)
 }
 
 interface SymState {
@@ -161,12 +180,14 @@ export class EmaCrossTracker {
       st.bucketStart = bucket;
       st.bucketClose = close;
       st.bucketVol = volume;
-      return null;
+      // A boot-seeded symbol is already warm — its very first live tick can
+      // legitimately cross intrabar.
+      return this.intrabarCheck(ticker, st, tsSec, close);
     }
     if (bucket === st.bucketStart) {
       st.bucketClose = close;
       st.bucketVol += volume;
-      return null;
+      return this.intrabarCheck(ticker, st, tsSec, close);
     }
     // A later bucket started → the open one is closed. Process it, then open
     // the new one.
@@ -176,7 +197,70 @@ export class EmaCrossTracker {
     st.bucketStart = bucket;
     st.bucketClose = close;
     st.bucketVol = volume;
-    return ev;
+    return ev ?? this.intrabarCheck(ticker, st, tsSec, close);
+  }
+
+  // TV-parity live check, run on every tick (see header). Two jobs:
+  // (1) with an active observation, confirm mid-bar on the bucket's
+  // ACCUMULATED volume — the cross bar itself needs the instant rule (≥5×),
+  // later bars the normal one (≥3× + price hold); both need the notional
+  // floor. (2) with no observation, detect the cross itself on provisional
+  // EMAs (closed EMA state folded forward with the live price — never
+  // mutated). At a bucket's final tick the provisional diff equals the
+  // closed-bar diff, so this path strictly precedes the closed-bar backstop.
+  private intrabarCheck(ticker: string, st: SymState, tsSec: number, c: number): EmaCrossEvent | null {
+    if (!EMA_CROSS.intrabar_detect) return null;
+    const w = st.watch;
+    if (w) {
+      if (w.sibMedian <= 0) return null;
+      const isCrossBar = st.bucketStart === w.crossBucket;
+      const ratio = st.bucketVol / w.sibMedian;
+      const volOk = ratio >= (isCrossBar ? EMA_CROSS.instant_vol_x : EMA_CROSS.confirm_vol_x);
+      const priceOk = isCrossBar
+        ? c >= w.crossPrice
+        : c >= w.crossPrice * (1 + EMA_CROSS.confirm_price_ext);
+      if (volOk && priceOk && c * st.bucketVol >= EMA_CROSS.confirm_min_notional) {
+        st.confirmedToday = true;
+        st.watch = null;
+        return {
+          type: 'confirm', ticker, ts_sec: tsSec, price: c,
+          cross_price: w.crossPrice, vol_ratio: +ratio.toFixed(1),
+          volume: st.bucketVol, sib_median: w.sibMedian,
+          bars_since_cross: isCrossBar ? 0 : w.barsSeen + 1, intrabar: true,
+        };
+      }
+      return null;
+    }
+    if (st.confirmedToday || tsSec < st.lockedUntil) return null;
+    if (st.emaF == null || st.emaS == null || st.bars < EMA_CROSS.warmup_bars) return null;
+    if (st.prevDiff == null || st.prevDiff > 0) return null;
+    const kF = 2 / (EMA_CROSS.fast + 1);
+    const kS = 2 / (EMA_CROSS.slow + 1);
+    const pDiff = (c * kF + st.emaF * (1 - kF)) - (c * kS + st.emaS * (1 - kS));
+    if (pDiff <= 0) return null;
+    const sibMedian = median(st.sibVols);
+    if (sibMedian < EMA_CROSS.sibling_min_sh) return null;
+    const ratio = st.bucketVol / sibMedian;
+    if (ratio >= EMA_CROSS.instant_vol_x && c * st.bucketVol >= EMA_CROSS.confirm_min_notional) {
+      st.confirmedToday = true;
+      return {
+        type: 'confirm', ticker, ts_sec: tsSec, price: c,
+        cross_price: c, vol_ratio: +ratio.toFixed(1),
+        volume: st.bucketVol, sib_median: sibMedian,
+        bars_since_cross: 0, intrabar: true,
+      };
+    }
+    st.watch = {
+      crossTs: tsSec, crossPrice: c, sibMedian,
+      barsSeen: 0, peakRatio: +ratio.toFixed(1), peakPrice: c,
+      crossBucket: st.bucketStart,
+    };
+    return {
+      type: 'nominate', ticker, ts_sec: tsSec, price: c,
+      cross_price: c, vol_ratio: +ratio.toFixed(1),
+      volume: st.bucketVol, sib_median: sibMedian,
+      bars_since_cross: 0, intrabar: true,
+    };
   }
 
   private processClosedBar(ticker: string, st: SymState, closeTs: number, c: number, v: number, silent: boolean): EmaCrossEvent | null {
@@ -207,7 +291,28 @@ export class EmaCrossTracker {
     // 1) Active observation — does this bar confirm (volume expansion with
     // price holding), or does the window run out? (Skipped on boot-seed
     // replays: history must not nominate, confirm, or expire anything.)
-    if (!silent && st.watch) {
+    if (!silent && st.watch && closeTs - EMA_CROSS.interval_sec === st.watch.crossBucket) {
+      // An intrabar-detected cross bar just closed — bar 0. Its full volume
+      // gets the instant rule (parity with close-path detection); it neither
+      // consumes the observation window nor expires it.
+      const w = st.watch;
+      const ratio = w.sibMedian > 0 ? v / w.sibMedian : 0;
+      if (ratio > w.peakRatio) w.peakRatio = ratio;
+      if (c > w.peakPrice) w.peakPrice = c;
+      if (
+        ratio >= EMA_CROSS.instant_vol_x &&
+        c >= w.crossPrice &&
+        c * v >= EMA_CROSS.confirm_min_notional
+      ) {
+        st.confirmedToday = true;
+        out = {
+          type: 'confirm', ticker, ts_sec: closeTs, price: c,
+          cross_price: w.crossPrice, vol_ratio: +ratio.toFixed(1),
+          volume: v, sib_median: w.sibMedian, bars_since_cross: 0,
+        };
+        st.watch = null;
+      }
+    } else if (!silent && st.watch) {
       const w = st.watch;
       w.barsSeen++;
       const ratio = w.sibMedian > 0 ? v / w.sibMedian : 0;
@@ -265,6 +370,7 @@ export class EmaCrossTracker {
           st.watch = {
             crossTs: closeTs, crossPrice: c, sibMedian,
             barsSeen: 0, peakRatio: +ratio.toFixed(1), peakPrice: c,
+            crossBucket: -1, // this cross bar is already closed
           };
           out = {
             type: 'nominate', ticker, ts_sec: closeTs, price: c,

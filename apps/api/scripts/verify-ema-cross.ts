@@ -34,6 +34,13 @@ class Sim {
   bars(n: number, close: number, vol: number): void {
     for (let k = 0; k < n; k++) this.bar(close, vol);
   }
+  // Feed a tick INSIDE the currently open bucket (the one the last bar()
+  // call opened) — exercises the intrabar TV-parity path.
+  tick(close: number, vol: number, offsetSec = 42): EmaCrossEvent | null {
+    const ev = this.tracker.addBar(this.sym, T0 + (this.i - 1) * BAR + offsetSec, close, vol);
+    if (ev) this.events.push(ev);
+    return ev;
+  }
   seed(close: number, vol: number): void {
     this.tracker.seedBar(this.sym, T0 + this.i++ * BAR, close, vol);
   }
@@ -160,6 +167,56 @@ console.log('S8 — boot-seeded bars are silent but count toward warmup');
   s.bars(5, 1.2, 10_000); // live rally right after boot — warmup carried over
   check('live cross fires on seed-warmed EMAs', s.count('nominate') === 1);
   check('only live bars persist', s.liveClosed > 0 && s.liveClosed <= 5, `${s.liveClosed} persisted`);
+}
+
+console.log('S9 — intrabar: nominate seconds into the bar, confirm as volume floods (DXST/EHGO)');
+{
+  const s = new Sim();
+  warmDipped(s, 1.0, 10_000);
+  s.bar(0.95, 1_000); // bucket opens quietly below the cross
+  const nom = s.tick(1.35, 4_000, 42); // 42s in: provisional EMAs cross, volume still thin
+  check('nominated mid-bar (not at close)', nom?.type === 'nominate' && nom.intrabar === true,
+    `got ${nom?.type ?? 'nothing'}`);
+  const cf = s.tick(1.4, 50_000, 90); // the surge lands: 5.5× accumulated on the cross bar, $77k
+  check('confirmed mid-bar on accumulated volume', cf?.type === 'confirm' && cf.intrabar === true && cf.bars_since_cross === 0,
+    `got ${cf?.type ?? 'nothing'}`);
+  check('no duplicate events when the bar closes', (s.bars(2, 1.4, 10_000), s.count('nominate') === 1 && s.count('confirm') === 1));
+}
+
+console.log('S10 — intrabar cross bar can only instant-confirm (5×); 3× waits for the next bar');
+{
+  const s = new Sim();
+  warmDipped(s, 1.0, 10_000);
+  s.bar(0.95, 1_000);
+  const nom = s.tick(1.35, 4_000);
+  check('nominated mid-bar', nom?.type === 'nominate' && nom.intrabar === true);
+  s.tick(1.36, 30_000, 100); // 3.5× accumulated — below the cross bar's 5× rule
+  check('3.5× mid-cross-bar does not confirm', s.count('confirm') === 0);
+  s.bar(1.36, 1_000); // closes the cross bar at 3.5× → still the 5× rule → no confirm
+  check('3.5× at cross-bar close does not confirm either', s.count('confirm') === 0);
+  const cf = s.tick(1.4, 35_000, 60); // next bar: 3.5× accumulated + price hold → confirms
+  check('next bar confirms intrabar at 3×', cf?.type === 'confirm' && cf.intrabar === true && cf.bars_since_cross === 1,
+    `got ${cf?.type ?? 'nothing'}, bars ${cf?.bars_since_cross}`);
+}
+
+console.log('S11 — intrabar respects the floors: dead-tape dollars and the cooldown');
+{
+  const s = new Sim();
+  warmDipped(s, 0.5, 100);
+  s.bar(0.48, 50);
+  const nom = s.tick(0.62, 600); // 6× accumulated but ~$370 — demotes to nominate
+  check('intrabar 6× without dollars only nominates', nom?.type === 'nominate' && nom.intrabar === true);
+  s.tick(0.63, 350, 120); // more junk volume — still far below $10k
+  check('still no confirm', s.count('confirm') === 0);
+  s.bars(8, 0.6, 100); // run the window out
+  check('expired', s.count('expire') === 1);
+  const ex = s.events.find((e) => e.type === 'expire');
+  const locked = (ex?.ts_sec ?? 0) + EMA_CROSS.renominate_cooldown_sec;
+  s.bars(3, 0.45, 100);
+  s.bar(0.62, 100);
+  const early = s.tick(0.65, 100, 60); // re-cross poke inside the cooldown
+  check('intrabar re-cross blocked inside the cooldown',
+    early == null && !s.events.some((e) => e.type === 'nominate' && e.ts_sec > (ex?.ts_sec ?? 0) && e.ts_sec < locked));
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);

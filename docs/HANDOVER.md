@@ -31,9 +31,10 @@ cost — `watch_suppressed reason='low_evidence'` tickers that later confirmed;
 ≥+20pts) + whether the news-gated 🤫 Telegram picks winners; (d) radar
 precision by catalyst type. Then promote/demote Telegram gates accordingly.
 
-**Recent focus trail** (each has a dated entry below): 07-16 XMETA (📈
-hardening: Databento backfill, cooldown re-arm, notional floor, gradable
-meta) · 07-15 SEEDT (state survives deploys) + XCROSS bar-close timestamps · 07-10 📈 XCROSS layer +
+**Recent focus trail** (each has a dated entry below): 07-16 XINTRA (📈
+intrabar TV-parity — the ~5-min lag closed) + XMETA (📈 hardening: Databento
+backfill, cooldown re-arm, notional floor, gradable meta) · 07-15 SEEDT
+(state survives deploys) + XCROSS bar-close timestamps · 07-10 📈 XCROSS layer +
 NEWSDAY (🔥 icons no longer vanish at midnight ET) · 07-08 ACCUM2 (detector-side
 🤫, the SLS case) · 07-07 first live scorecard → TIEREV (tier_events), TICKW-EV
 (👀 evidence gate), radar LULD filter, accum v2 (persistence + news-gated push) ·
@@ -77,6 +78,24 @@ Journal; **attribution join still the open payoff**) · 06-17 tick feed go-live.
 ---
 
 ## What shipped this session (newest first, all on prod unless noted)
+
+XINTRA. **📈 intrabar detection — TV-parity, closes the ~5-min lag (2026-07-16,
+the DXST/EHGO report).** Operator's TV alerts fired 42–75s INTO the 5m bar
+(13:00:42 EHGO, 13:01:15 DXST local); our closed-bar-only evaluation waited
+for the bar close (+ next-trade close semantics) → ~4–5 min behind, exactly
+as reported. Now every live tick also runs a provisional check: EMAs folded
+forward with the current price (closed-bar state never mutated — at a
+bucket's final tick the provisional diff equals the closed diff, so the
+closed-bar path remains a pure backstop), and confirms may fire MID-BAR on
+the bucket's accumulated volume — sound because volume is monotone (anything
+clearing a threshold mid-bar clears it at close). The mid-bar cross bar keeps
+the 5× instant rule; later bars the 3× rule; notional/price floors unchanged.
+Price-side repaint (a poke that un-crosses by close) can nominate a wiggle —
+same as the operator's TV alert — and the volume stage disposes of it; watch
+the wiggle-nomination rate in grading via `meta.intrabar`. Kill switch:
+`EMA_CROSS.intrabar_detect`. Verify script extended to 11 scenarios (S9–S11:
+mid-bar nominate→confirm, cross-bar 5×-only rule, floors + cooldown under
+intrabar).
 
 XMETA. **📈 layer pre-grading hardening (2026-07-16, two sessions).** Overnight
 session: (1) **Databento historical is now the primary EMA backfill** (batched

@@ -704,11 +704,12 @@ class PollerService {
       recordTierEvent('cross', e.type, e.ticker, {
         price: e.price, cross_price: e.cross_price, vol_ratio: e.vol_ratio,
         vol: e.volume, sib_median: e.sib_median, notional: Math.round(e.price * e.volume),
-        bars: e.bars_since_cross, in_ladder: inLadder,
+        bars: e.bars_since_cross, in_ladder: inLadder, intrabar: e.intrabar ?? false,
       });
       console.log(
         `[ema-cross] ${e.type === 'confirm' ? '📈✅ instant-confirm' : '📈 nominate'} ${e.ticker} ` +
-        `$${e.price.toFixed(2)} · ${e.vol_ratio}x sibling vol${inLadder ? ' · (in ladder — display skipped)' : ''}`,
+        `$${e.price.toFixed(2)} · ${e.vol_ratio}x sibling vol` +
+        `${e.intrabar ? ' · intrabar' : ''}${inLadder ? ' · (in ladder — display skipped)' : ''}`,
       );
       if (inLadder) return;
       // Timestamps use the BAR's close time, not processing wall-clock, so
@@ -733,11 +734,11 @@ class PollerService {
       recordTierEvent('cross', 'confirm', e.ticker, {
         price: e.price, cross_price: e.cross_price, vol_ratio: e.vol_ratio,
         vol: e.volume, sib_median: e.sib_median, notional: Math.round(e.price * e.volume),
-        bars: e.bars_since_cross,
+        bars: e.bars_since_cross, intrabar: e.intrabar ?? false,
       });
       console.log(
         `[ema-cross] 📈✅ confirm ${e.ticker} $${e.price.toFixed(2)} · ${e.vol_ratio}x sibling vol · ` +
-        `${e.bars_since_cross} bars after the cross ($${e.cross_price.toFixed(2)})`,
+        `${e.bars_since_cross} bars after the cross ($${e.cross_price.toFixed(2)})${e.intrabar ? ' · intrabar' : ''}`,
       );
       if (existing) {
         existing.status = 'confirmed';
