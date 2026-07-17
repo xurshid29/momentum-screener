@@ -83,7 +83,12 @@ async function fetchDatabentoAgg(
   try {
     const authHeader = 'Basic ' + Buffer.from(`${key}:`).toString('base64');
     const availEnd = await databentoAvailableEnd(authHeader);
-    const endMs = Math.min(Date.now(), (availEnd ?? Date.now() - 15 * 60_000)) - 1_000;
+    // The metadata end is NOT a safe intraday bound — it reads rounded
+    // FORWARD (e.g. "13:00Z" at 12:55) while actual availability lags
+    // real-time by ~2-3 min, so end=min(now, availEnd) can still 422 right
+    // at the race (seen 2026-07-17 on the first 4h pass). Backfill doesn't
+    // care about the last few minutes: keep an unconditional 15-min margin.
+    const endMs = Math.min(Date.now() - 15 * 60_000, availEnd ?? Infinity) - 1_000;
     const end = new Date(endMs);
     const start = new Date(endMs - spanDays * 86_400_000);
     const params = new URLSearchParams({
@@ -101,7 +106,8 @@ async function fetchDatabentoAgg(
       headers: { Authorization: authHeader },
     });
     if (!res.ok) {
-      console.error(`[ema-backfill] databento hist HTTP ${res.status} (${schema}) — falling back to Yahoo`);
+      const body = (await res.text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 200);
+      console.error(`[ema-backfill] databento hist HTTP ${res.status} (${schema}): ${body}`);
       return null;
     }
     const text = await res.text();
@@ -453,7 +459,14 @@ class TickFeedService {
       const chunk = targets.slice(i, i + CHUNK);
       chunk.forEach((t) => this.backfillAttempted4h.add(t));
       const batch = await fetchDatabentoAgg(chunk, 'ohlcv-1h', 120, 14_400, off);
-      if (!batch) return; // hist API unavailable — retry next scan
+      if (!batch) {
+        // One failed chunk must not starve the rest of the fleet (the first
+        // live pass aborted entirely on a transient 422). These symbols
+        // retry on the next 4h rescan.
+        chunk.forEach((t) => this.backfillAttempted4h.delete(t));
+        console.error(`[ema-backfill] 4h chunk failed (${chunk[0]}…${chunk[chunk.length - 1]}) — will retry next scan`);
+        continue;
+      }
       for (const tk of chunk) {
         const bars = batch.get(tk);
         if (!bars || bars.length === 0) continue;
