@@ -197,7 +197,12 @@ batched, ET-aligned aggregation, no Yahoo fallback) are load-bearing.
 so the original 35d backfill left our EMA50 at the recent flat average
 (WOK: ours 2.02 vs TV's 2.63 after the collapse) and a $2.04 uptick
 "crossed" — TV-parity needs ~150 bars (~2% residual seed influence), hence
-the 120d depth.
+the 120d depth. ⚠️ **And splits (same day):** TV history is split-adjusted,
+Databento raw — a reverse split inside the seed window breaks the EMA scale
+(WOK 1:78 on Jun 18). `adjustSplitHistory` fixes it read-side at seed time
+(overnight up-jumps ≥4.85×, or 1.94–4.85× within 2.5% of a whole number;
+down-moves are never splits — real crashes stay). Applied to both layers'
+boot replay + the 4h backfill; the DB keeps raw truth.
 Context: cross-as-signal was twice measured at chance on 30m/1h — the
 operator's edge claim here lives in their manual filter + tight-stop
 management, explicitly their department; grade the layer on lead time and

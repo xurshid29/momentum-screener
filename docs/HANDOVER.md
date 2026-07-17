@@ -100,14 +100,24 @@ have no baseline anyway). **Surfacing: dashboard-only by operator choice**
 skipped — unlike 5m; no Telegram/ping until `tier_events meta.tf='4h'` shows
 the real fire rate; expect dozens-to-~100+/day across ~1,500 known runners).
 Verify script → 12 scenarios (S12: 4h config, offset grid, tf stamping).
-**Day-1 fix (the WOK phantom cross):** operator's first check caught our
-WOK "cross" with TV's EMA50 still far above price. Reconstructed from
-bars_4h: our EMA50 2.023 vs TV 2.63 — the 35d backfill ≈ only ~1× the
-EMA50 span, so on names with a big prior trend (WOK's $40→$2 collapse)
-our short-memory EMA50 sat at the recent flat average and a $2.04 poke
-"crossed". Fixed same day: backfill depth 35d→**120d** (~150+ bars → SMA
-seed influence <2%, EMA50 within pennies of TV), retention/boot-seed
-40d→**130d**, skip rule = ≥150 banked bars OR history reaching ≥100d back.
+**Day-1 fixes (the WOK phantom cross — THREE stacked root causes, all
+found from the operator's first check and fixed same day):**
+(1) **Databento end-bound**: the first 120d pass 422'd every chunk —
+`get_dataset_range`'s top-level end is the max across schemas and reads
+rounded forward, while ohlcv-1h only rolls once an hour; clamp is now to
+the PER-SCHEMA end (`databentoSchemaEnd`), plus per-chunk retry instead of
+aborting the fleet. (2) **Depth**: 35d backfill ≈ 1× the 4h-EMA50 span →
+no convergence; now 120d (~150+ bars), retention/boot-seed 130d, skip rule
+= ≥150 banked bars OR history reaching ≥100d back. (3) **Splits** (the one
+that actually bit WOK): TV charts are split-ADJUSTED, Databento is raw —
+WOK reverse-split ~1:78 Jun 18, so even 212 raw bars gave EMA50 2.00 vs
+TV 2.63 and a $2.04 poke "crossed". `adjustSplitHistory` (pure, tested,
+applied read-side at seed time; DB keeps raw): overnight UP-jumps ≥4.85×
+= split, 1.94–4.85× only within 2.5% of a whole number; DOWN-moves never
+(WOK's own -89% overnight crash is real history). Verified on WOK's real
+series: adjusted EMA50 2.742 ≈ TV's 2.63, cross condition flips false.
+**Grading note: 4h tier_events before ~2026-07-17 14:50 UTC are blind
+(scale-broken EMAs) — the 4h trial effectively starts from then.**
 **Watch:** (a) fire rate + time-of-day clustering after a few days → pick
 Telegram gate (operator deferred: watchlist/screens were the candidates);
 (b) confirm semantics on 4h are untuned first-guesses (sibling 12×4h bars,
