@@ -31,10 +31,11 @@ cost — `watch_suppressed reason='low_evidence'` tickers that later confirmed;
 ≥+20pts) + whether the news-gated 🤫 Telegram picks winners; (d) radar
 precision by catalyst type. Then promote/demote Telegram gates accordingly.
 
-**Recent focus trail** (each has a dated entry below): 07-16 XINTRA (📈
-intrabar TV-parity — the ~5-min lag closed) + XMETA (📈 hardening: Databento
-backfill, cooldown re-arm, notional floor, gradable meta) · 07-15 SEEDT
-(state survives deploys) + XCROSS bar-close timestamps · 07-10 📈 XCROSS layer +
+**Recent focus trail** (each has a dated entry below): 07-17 X4H (📈 4h
+cross layer — operator's swing-timing tool, dashboard-only) · 07-16 XINTRA
+(📈 intrabar TV-parity — the ~5-min lag closed) + XMETA (📈 hardening:
+Databento backfill, cooldown re-arm, notional floor, gradable meta) · 07-15
+SEEDT (state survives deploys) + XCROSS bar-close timestamps · 07-10 📈 XCROSS layer +
 NEWSDAY (🔥 icons no longer vanish at midnight ET) · 07-08 ACCUM2 (detector-side
 🤫, the SLS case) · 07-07 first live scorecard → TIEREV (tier_events), TICKW-EV
 (👀 evidence gate), radar LULD filter, accum v2 (persistence + news-gated push) ·
@@ -78,6 +79,33 @@ Journal; **attribution join still the open payoff**) · 06-17 tick feed go-live.
 ---
 
 ## What shipped this session (newest first, all on prod unless noted)
+
+X4H. **📈 4h EMA-cross layer — the operator's swing-timing tool (2026-07-17).**
+Operator showed 4 charts (KYTX/SHPH/CODX/CNTX) of 4h 6/50 crosses preceding
+swings and proposed: enter on the 4h cross with a tight stop, exit
+discretionary. Clarified scope: THEY keep the entry filter and the exit;
+what they need is detection the second the cross happens (not at 4h bar
+close). Cross-as-signal remains twice-measured-at-chance — the edge claim
+lives in their manual filter, so the layer is graded on lead time + fire
+rate, not precision. **Built:** `EmaCrossTracker` parameterized
+(`EmaCrossConfig`; events carry `tf`), second instance at `EMA_CROSS_4H`
+(interval 14400, buckets anchored to the ET session grid 04:00/08:00/… —
+TV's ETH 4h bars; EDT/EST offset recomputed at midnight); intrabar detection
+gives second-level cross latency. Warmup (~50 4h bars ≈ 2-3 weeks) is
+impossible live → new `bars_4h` table (migration `20260717120000`, 40d
+retention) + Databento ohlcv-1h backfill (35d, batched ~100/req via the
+generalized `fetchDatabentoAgg`, no Yahoo fallback — MINI-invisible names
+have no baseline anyway). **Surfacing: dashboard-only by operator choice**
+(4H badge in the EMA CROSS section, rows linger 6h, in-ladder names NOT
+skipped — unlike 5m; no Telegram/ping until `tier_events meta.tf='4h'` shows
+the real fire rate; expect dozens-to-~100+/day across ~1,500 known runners).
+Verify script → 12 scenarios (S12: 4h config, offset grid, tf stamping).
+**Watch:** (a) fire rate + time-of-day clustering after a few days → pick
+Telegram gate (operator deferred: watchlist/screens were the candidates);
+(b) confirm semantics on 4h are untuned first-guesses (sibling 12×4h bars,
+$10k floor) — nomination is the product, confirms are telemetry; (c) first
+boot pays the full ~15-request Databento pass, subsequent boots seed from
+bars_4h.
 
 XINTRA. **📈 intrabar detection — TV-parity, closes the ~5-min lag (2026-07-16,
 the DXST/EHGO report).** Operator's TV alerts fired 42–75s INTO the 5m bar

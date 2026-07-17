@@ -319,6 +319,7 @@ export interface NewsRadarItem {
 // pruned silently. See services/ema-cross.ts + onEmaCrossEvent.
 export interface EmaCrossItem {
   ticker: string;
+  tf: '5m' | '4h';        // which timeframe layer fired
   status: 'observing' | 'confirmed';
   price: number;
   cross_price: number;
@@ -326,6 +327,11 @@ export interface EmaCrossItem {
   cross_at: string;
   confirmed_at: string | null;
 }
+
+// 4h cross rows stay visible this long after their last event (both
+// statuses) — the nomination is the operator's working set on that layer,
+// unlike 5m where unconfirmed rows prune fast.
+const CROSS_4H_DISPLAY_MS = 6 * 3600 * 1000;
 
 export interface CyclePayload {
   cycle_id: string;
@@ -692,33 +698,40 @@ class PollerService {
   }
 
   // 📈 EMA-cross layer events (see services/ema-cross.ts): a 6/50 bullish
-  // cross on 5m bars nominates a known runner for a ~30-min observation;
-  // volume expansion vs sibling candles confirms it; no expansion → silent
-  // prune. Display-only (dashboard soft ping on confirm via the web hook);
-  // no Telegram until tier_events grades the layer. Names already in the
-  // LIVE TICKS ladder skip display — the ladder outranks a nomination.
+  // cross nominates a known runner for an observation; volume expansion vs
+  // sibling candles confirms it; no expansion → silent prune. Two timeframes
+  // share this handler — 5m (the intraday layer) and 4h (the operator's
+  // swing-timing tool, 2026-07-17) — display rows keyed by tf|ticker so the
+  // same name can hold both. Display-only; no Telegram until graded. 5m
+  // nominations for names already in the LIVE TICKS ladder skip display (the
+  // ladder outranks them); 4h rows always display — a 4h cross on an
+  // igniting name is exactly what the operator wants eyes on.
   onEmaCrossEvent(e: import('./ema-cross.js').EmaCrossEvent): void {
     const nowMs = Date.now();
-    if (e.type === 'nominate' || (e.type === 'confirm' && !this.emaCrosses.has(e.ticker))) {
+    const tf: EmaCrossItem['tf'] = e.tf === '4h' ? '4h' : '5m';
+    const key = `${tf}|${e.ticker}`;
+    const tfTag = tf === '4h' ? ' (4h)' : '';
+    if (e.type === 'nominate' || (e.type === 'confirm' && !this.emaCrosses.has(key))) {
       const inLadder = this.tickCatches.has(e.ticker);
       recordTierEvent('cross', e.type, e.ticker, {
-        price: e.price, cross_price: e.cross_price, vol_ratio: e.vol_ratio,
+        tf, price: e.price, cross_price: e.cross_price, vol_ratio: e.vol_ratio,
         vol: e.volume, sib_median: e.sib_median, notional: Math.round(e.price * e.volume),
         bars: e.bars_since_cross, in_ladder: inLadder, intrabar: e.intrabar ?? false,
       });
+      const skipDisplay = inLadder && tf === '5m';
       console.log(
-        `[ema-cross] ${e.type === 'confirm' ? '📈✅ instant-confirm' : '📈 nominate'} ${e.ticker} ` +
+        `[ema-cross] ${e.type === 'confirm' ? '📈✅ instant-confirm' : '📈 nominate'} ${e.ticker}${tfTag} ` +
         `$${e.price.toFixed(2)} · ${e.vol_ratio}x sibling vol` +
-        `${e.intrabar ? ' · intrabar' : ''}${inLadder ? ' · (in ladder — display skipped)' : ''}`,
+        `${e.intrabar ? ' · intrabar' : ''}${skipDisplay ? ' · (in ladder — display skipped)' : ''}`,
       );
-      if (inLadder) return;
-      // Timestamps use the BAR's close time, not processing wall-clock, so
-      // the row's "ago" matches what the operator sees on a TV chart
-      // (2026-07-15, the OPTX confusion — TV labels bars by OPEN time, we
-      // close them; don't add processing skew on top).
+      if (skipDisplay) return;
+      // Timestamps use the BAR's close time (intrabar: the tick's time), not
+      // processing wall-clock, so the row's "ago" matches what the operator
+      // sees on a TV chart (2026-07-15, the OPTX confusion).
       const barIso = new Date(e.ts_sec * 1000).toISOString();
-      this.emaCrosses.set(e.ticker, {
+      this.emaCrosses.set(key, {
         ticker: e.ticker,
+        tf,
         status: e.type === 'confirm' ? 'confirmed' : 'observing',
         price: e.price,
         cross_price: e.cross_price,
@@ -729,15 +742,15 @@ class PollerService {
       });
       return;
     }
-    const existing = this.emaCrosses.get(e.ticker);
+    const existing = this.emaCrosses.get(key);
     if (e.type === 'confirm') {
       recordTierEvent('cross', 'confirm', e.ticker, {
-        price: e.price, cross_price: e.cross_price, vol_ratio: e.vol_ratio,
+        tf, price: e.price, cross_price: e.cross_price, vol_ratio: e.vol_ratio,
         vol: e.volume, sib_median: e.sib_median, notional: Math.round(e.price * e.volume),
         bars: e.bars_since_cross, intrabar: e.intrabar ?? false,
       });
       console.log(
-        `[ema-cross] 📈✅ confirm ${e.ticker} $${e.price.toFixed(2)} · ${e.vol_ratio}x sibling vol · ` +
+        `[ema-cross] 📈✅ confirm ${e.ticker}${tfTag} $${e.price.toFixed(2)} · ${e.vol_ratio}x sibling vol · ` +
         `${e.bars_since_cross} bars after the cross ($${e.cross_price.toFixed(2)})${e.intrabar ? ' · intrabar' : ''}`,
       );
       if (existing) {
@@ -751,14 +764,14 @@ class PollerService {
     }
     // expire — the observation window ran out without expansion.
     recordTierEvent('cross', 'expire', e.ticker, {
-      cross_price: e.cross_price, sib_median: e.sib_median,
+      tf, cross_price: e.cross_price, sib_median: e.sib_median,
       peak_ratio: e.peak_ratio ?? null, peak_price: e.peak_price ?? null,
     });
     console.log(
-      `[ema-cross] 📉 expire ${e.ticker} — no expansion in ${e.bars_since_cross} bars ` +
+      `[ema-cross] 📉 expire ${e.ticker}${tfTag} — no expansion in ${e.bars_since_cross} bars ` +
       `(peak ${e.peak_ratio ?? '?'}x vol)`,
     );
-    if (existing && existing.status === 'observing') this.emaCrosses.delete(e.ticker);
+    if (existing && existing.status === 'observing') this.emaCrosses.delete(key);
   }
 
   // Is the ticker in the latest broadcast's Momentum or Ignition lists? Used
@@ -1166,10 +1179,13 @@ class PollerService {
             this.newsRadar.delete(t);
           }
         } else if (r.tier === 'cross') {
+          const xtf: EmaCrossItem['tf'] = m.tf === '4h' ? '4h' : '5m';
+          const xkey = `${xtf}|${t}`;
           if (r.event === 'confirm') {
-            const prev = this.emaCrosses.get(t);
-            this.emaCrosses.set(t, {
+            const prev = this.emaCrosses.get(xkey);
+            this.emaCrosses.set(xkey, {
               ticker: t,
+              tf: xtf,
               status: 'confirmed',
               price: num(m.price) ?? 0,
               cross_price: num(m.cross_price) ?? num(m.price) ?? 0,
@@ -1178,18 +1194,18 @@ class PollerService {
               confirmed_at: iso(atMs),
               last_event_ms: atMs,
             });
-          } else if (r.event === 'nominate' && m.in_ladder !== true) {
+          } else if (r.event === 'nominate' && (m.in_ladder !== true || xtf === '4h')) {
             // Track for cross_at continuity only — pruned below unless a
             // confirm follows (the old process's observation died with it).
-            this.emaCrosses.set(t, {
-              ticker: t, status: 'observing',
+            this.emaCrosses.set(xkey, {
+              ticker: t, tf: xtf, status: 'observing',
               price: num(m.price) ?? 0,
               cross_price: num(m.cross_price) ?? num(m.price) ?? 0,
               vol_ratio: num(m.vol_ratio) ?? 0,
               cross_at: iso(atMs), confirmed_at: null, last_event_ms: atMs,
             });
           } else if (r.event === 'expire') {
-            this.emaCrosses.delete(t);
+            this.emaCrosses.delete(xkey);
           }
         }
       }
@@ -1205,7 +1221,14 @@ class PollerService {
         if (nowMs - item.first_seen_ms > NEWS_RADAR.ttl_min * 60_000) this.newsRadar.delete(t);
       }
       for (const [t, xc] of this.emaCrosses) {
-        if (xc.status === 'observing' || nowMs - xc.last_event_ms > 30 * 60 * 1000) this.emaCrosses.delete(t);
+        // 5m observing rows drop (their tracker observation died with the
+        // old process); 4h rows survive within the display window — the
+        // nomination itself is the operator's product on that layer.
+        if (xc.tf === '4h') {
+          if (nowMs - xc.last_event_ms > CROSS_4H_DISPLAY_MS) this.emaCrosses.delete(t);
+        } else if (xc.status === 'observing' || nowMs - xc.last_event_ms > 30 * 60 * 1000) {
+          this.emaCrosses.delete(t);
+        }
       }
       console.log(
         `[poller] seeded tier state from today's tier_events (${rows.length} events) — ` +
@@ -2186,27 +2209,29 @@ class PollerService {
       || b.first_seen_at.localeCompare(a.first_seen_at));
     const radarDisplay = radarList.slice(0, NEWS_RADAR.max_display);
 
-    // 📈 EMA-cross layer — the tracker expires observations by BAR count, but
-    // a sparse tape can stall bars; safety-prune on wall clock too. Confirmed
-    // entries show 30 min from confirmation.
+    // 📈 EMA-cross layers — the tracker expires observations by BAR count,
+    // but a sparse tape can stall bars; safety-prune on wall clock too. 5m:
+    // confirmed shows 30 min, observing 45 min. 4h: both statuses show 6h —
+    // the nomination is the operator's working set on that layer.
     const CROSS_OBSERVE_SAFETY_MS = 45 * 60 * 1000;
     const CROSS_CONFIRMED_TTL_MS = 30 * 60 * 1000;
     const emaCrossList: EmaCrossItem[] = [];
     for (const [t, xc] of this.emaCrosses) {
-      const ttl = xc.status === 'confirmed' ? CROSS_CONFIRMED_TTL_MS : CROSS_OBSERVE_SAFETY_MS;
+      const ttl = xc.tf === '4h' ? CROSS_4H_DISPLAY_MS
+        : xc.status === 'confirmed' ? CROSS_CONFIRMED_TTL_MS : CROSS_OBSERVE_SAFETY_MS;
       if (nowMsTick - xc.last_event_ms > ttl) {
         this.emaCrosses.delete(t);
         continue;
       }
       emaCrossList.push({
-        ticker: xc.ticker, status: xc.status, price: xc.price, cross_price: xc.cross_price,
+        ticker: xc.ticker, tf: xc.tf, status: xc.status, price: xc.price, cross_price: xc.cross_price,
         vol_ratio: xc.vol_ratio, cross_at: xc.cross_at, confirmed_at: xc.confirmed_at,
       });
     }
     emaCrossList.sort((a, b) =>
       (a.status === 'confirmed' ? 0 : 1) - (b.status === 'confirmed' ? 0 : 1)
       || (b.confirmed_at ?? b.cross_at).localeCompare(a.confirmed_at ?? a.cross_at));
-    const emaCrossDisplay = emaCrossList.slice(0, 12);
+    const emaCrossDisplay = emaCrossList.slice(0, 16);
 
     // After-hours: re-impose a volume gate on the momentum list. Finviz drops
     // its relvol filter at the close, so names that ticked >5% on a few AH

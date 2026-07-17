@@ -183,6 +183,21 @@ soft ping on confirm only. Timestamps are bar-close times; "ago" anchors on
 the cross (matches the TV chart). Names already in the LIVE TICKS ladder skip
 display (logged `in_ladder`). No Telegram until graded.
 
+**4h variant (2026-07-17, operator's swing-timing tool).** Same tracker at
+`interval_sec: 14400` (`EMA_CROSS_4H`), buckets anchored to the ET session
+grid (04:00/08:00/12:00/16:00 ET — TV's ETH 4h bars; EDT offset 0, EST 3600,
+recomputed at midnight). The operator keeps the entry filter and the exit —
+this layer is a pure detection tool: intrabar nomination the second the 4h
+cross happens, **dashboard-only** (4H badge in the EMA CROSS section, rows
+linger 6h; no Telegram, no ping) until tier_events (`meta.tf='4h'`) shows the
+real fire rate. Warmup needs ~50 closed 4h bars ≈ 2–3 weeks — impossible
+live, so `bars_4h` (40d retention) + a Databento ohlcv-1h backfill (35d,
+batched, ET-aligned aggregation, no Yahoo fallback) are load-bearing.
+Context: cross-as-signal was twice measured at chance on 30m/1h — the
+operator's edge claim here lives in their manual filter + tight-stop
+management, explicitly their department; grade the layer on lead time and
+fire rate, not precision.
+
 **Status.** TRIAL — keep/kill by the grading pass (~07-17+). Day-1 (07-14):
 37 nominations → 13 confirms / 14 expires — but those numbers predate the
 07-16 semantics (cooldown re-arm means several nominate→expire cycles per

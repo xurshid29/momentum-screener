@@ -33,7 +33,30 @@
 // path remains as the backstop; intrabar events carry `intrabar: true` so
 // grading can measure the latency win separately.
 
-export const EMA_CROSS = {
+export interface EmaCrossConfig {
+  tf: string;                    // label stamped on every event ('5m' | '4h')
+  interval_sec: number;
+  fast: number;
+  slow: number;
+  warmup_bars: number;
+  sibling_bars: number;
+  sibling_min_sh: number;
+  observe_bars: number;
+  confirm_vol_x: number;
+  confirm_price_ext: number;
+  instant_vol_x: number;
+  confirm_min_notional: number;
+  renominate_cooldown_sec: number;
+  intrabar_detect: boolean;
+  // Bucket anchor offset in seconds. 5m buckets divide the hour so 0 always
+  // works; 4h buckets must align to the ET session grid (04:00/08:00/12:00/
+  // 16:00 ET — how TV draws 4h ETH bars), which is offset 0 under EDT but
+  // 3600 under EST. The tick feed recomputes it at the midnight roll.
+  bucket_offset_sec: number;
+}
+
+export const EMA_CROSS: EmaCrossConfig = {
+  tf: '5m',
   interval_sec: 300,   // 5-minute bars (the operator trades this TF on TV)
   fast: 6,
   slow: 50,
@@ -62,11 +85,36 @@ export const EMA_CROSS = {
   // TV-parity live evaluation (see header). Kill switch only — flip to false
   // if the fast path misbehaves live; detection reverts to bar-close-only.
   intrabar_detect: true,
-} as const;
+  bucket_offset_sec: 0,
+};
+
+// The 4h layer (2026-07-17): the operator's swing-timing loop — same 6/50
+// cross, 4-hour ETH bars, detected intrabar the second it happens. They keep
+// the entry filter and the exit; this is a pure detection tool (dashboard
+// only, no Telegram until tier_events shows the real fire rate). Confirm
+// machinery runs identically for grading, but the NOMINATION is the product.
+export const EMA_CROSS_4H: EmaCrossConfig = {
+  tf: '4h',
+  interval_sec: 14_400,
+  fast: 6,
+  slow: 50,
+  warmup_bars: 50,          // ~2-3 weeks of tape — needs the bars_4h backfill
+  sibling_bars: 12,         // ~2 trading days of volume context
+  sibling_min_sh: 50,
+  observe_bars: 6,          // ~24h observation
+  confirm_vol_x: 3,
+  confirm_price_ext: 0.005,
+  instant_vol_x: 5,
+  confirm_min_notional: 10_000,
+  renominate_cooldown_sec: 14_400, // one bar — a dud re-arms next bar
+  intrabar_detect: true,
+  bucket_offset_sec: 0,     // set live by the tick feed (EDT 0 / EST 3600)
+};
 
 export interface EmaCrossEvent {
   type: 'nominate' | 'confirm' | 'expire';
   ticker: string;
+  tf: string;            // which layer fired ('5m' | '4h') — from the config
   ts_sec: number;        // close time of the triggering bar (intrabar: the tick's time)
   price: number;         // close of the triggering bar (intrabar: the tick's price)
   cross_price: number;   // close of the cross bar
@@ -116,13 +164,26 @@ function median(xs: number[]): number {
 
 export class EmaCrossTracker {
   private state = new Map<string, SymState>();
+  private bucketOff: number;
 
   // onBarClosed fires for every LIVE closed bar (not boot-seeded replays) —
-  // the tick feed persists these to bars_5m so warmup survives deploys.
-  constructor(private onBarClosed?: (ticker: string, closeTs: number, close: number, volume: number) => void) {}
+  // the tick feed persists these (bars_5m / bars_4h) so warmup survives
+  // deploys. cfg defaults to the 5m layer for backward compatibility.
+  constructor(
+    private cfg: EmaCrossConfig = EMA_CROSS,
+    private onBarClosed?: (ticker: string, closeTs: number, close: number, volume: number) => void,
+  ) {
+    this.bucketOff = cfg.bucket_offset_sec;
+  }
 
   symbolsTracked(): number {
     return this.state.size;
+  }
+
+  // DST-aware bucket anchor (see EmaCrossConfig.bucket_offset_sec). Safe to
+  // change at the midnight roll — no buckets are open then.
+  setBucketOffset(sec: number): void {
+    this.bucketOff = sec;
   }
 
   // True when historical bars may still be seeded for this symbol — i.e. it
@@ -140,7 +201,7 @@ export class EmaCrossTracker {
   seedBar(ticker: string, closeTs: number, close: number, volume: number): void {
     const st = this.ensure(ticker);
     this.processClosedBar(ticker, st, closeTs, close, volume, true);
-    st.seededUpTo = closeTs - EMA_CROSS.interval_sec;
+    st.seededUpTo = closeTs - this.cfg.interval_sec;
   }
 
   // ET-day roll: nominations re-arm, in-flight observations drop (they can't
@@ -168,12 +229,13 @@ export class EmaCrossTracker {
     return st;
   }
 
-  // Feed one per-second bar; returns an event when a 5m bar CLOSES and trips
+  // Feed one per-second bar; returns an event when a bar CLOSES and trips
   // a transition. Aggregation is causal: a bucket only closes when a trade
   // arrives in a later bucket.
   addBar(ticker: string, tsSec: number, close: number, volume: number): EmaCrossEvent | null {
     const st = this.ensure(ticker);
-    const bucket = Math.floor(tsSec / EMA_CROSS.interval_sec) * EMA_CROSS.interval_sec;
+    const iv = this.cfg.interval_sec;
+    const bucket = Math.floor((tsSec - this.bucketOff) / iv) * iv + this.bucketOff;
     if (bucket < st.bucketStart) return null; // stale/out-of-order tick — ignore
     if (bucket <= st.seededUpTo) return null; // bar already covered by boot seed
     if (st.bucketStart === -1) {
@@ -191,7 +253,7 @@ export class EmaCrossTracker {
     }
     // A later bucket started → the open one is closed. Process it, then open
     // the new one.
-    const closeTs = st.bucketStart + EMA_CROSS.interval_sec;
+    const closeTs = st.bucketStart + iv;
     const ev = this.processClosedBar(ticker, st, closeTs, st.bucketClose, st.bucketVol, false);
     this.onBarClosed?.(ticker, closeTs, st.bucketClose, st.bucketVol);
     st.bucketStart = bucket;
@@ -209,21 +271,21 @@ export class EmaCrossTracker {
   // mutated). At a bucket's final tick the provisional diff equals the
   // closed-bar diff, so this path strictly precedes the closed-bar backstop.
   private intrabarCheck(ticker: string, st: SymState, tsSec: number, c: number): EmaCrossEvent | null {
-    if (!EMA_CROSS.intrabar_detect) return null;
+    if (!this.cfg.intrabar_detect) return null;
     const w = st.watch;
     if (w) {
       if (w.sibMedian <= 0) return null;
       const isCrossBar = st.bucketStart === w.crossBucket;
       const ratio = st.bucketVol / w.sibMedian;
-      const volOk = ratio >= (isCrossBar ? EMA_CROSS.instant_vol_x : EMA_CROSS.confirm_vol_x);
+      const volOk = ratio >= (isCrossBar ? this.cfg.instant_vol_x : this.cfg.confirm_vol_x);
       const priceOk = isCrossBar
         ? c >= w.crossPrice
-        : c >= w.crossPrice * (1 + EMA_CROSS.confirm_price_ext);
-      if (volOk && priceOk && c * st.bucketVol >= EMA_CROSS.confirm_min_notional) {
+        : c >= w.crossPrice * (1 + this.cfg.confirm_price_ext);
+      if (volOk && priceOk && c * st.bucketVol >= this.cfg.confirm_min_notional) {
         st.confirmedToday = true;
         st.watch = null;
         return {
-          type: 'confirm', ticker, ts_sec: tsSec, price: c,
+          type: 'confirm', ticker, tf: this.cfg.tf, ts_sec: tsSec, price: c,
           cross_price: w.crossPrice, vol_ratio: +ratio.toFixed(1),
           volume: st.bucketVol, sib_median: w.sibMedian,
           bars_since_cross: isCrossBar ? 0 : w.barsSeen + 1, intrabar: true,
@@ -232,19 +294,19 @@ export class EmaCrossTracker {
       return null;
     }
     if (st.confirmedToday || tsSec < st.lockedUntil) return null;
-    if (st.emaF == null || st.emaS == null || st.bars < EMA_CROSS.warmup_bars) return null;
+    if (st.emaF == null || st.emaS == null || st.bars < this.cfg.warmup_bars) return null;
     if (st.prevDiff == null || st.prevDiff > 0) return null;
-    const kF = 2 / (EMA_CROSS.fast + 1);
-    const kS = 2 / (EMA_CROSS.slow + 1);
+    const kF = 2 / (this.cfg.fast + 1);
+    const kS = 2 / (this.cfg.slow + 1);
     const pDiff = (c * kF + st.emaF * (1 - kF)) - (c * kS + st.emaS * (1 - kS));
     if (pDiff <= 0) return null;
     const sibMedian = median(st.sibVols);
-    if (sibMedian < EMA_CROSS.sibling_min_sh) return null;
+    if (sibMedian < this.cfg.sibling_min_sh) return null;
     const ratio = st.bucketVol / sibMedian;
-    if (ratio >= EMA_CROSS.instant_vol_x && c * st.bucketVol >= EMA_CROSS.confirm_min_notional) {
+    if (ratio >= this.cfg.instant_vol_x && c * st.bucketVol >= this.cfg.confirm_min_notional) {
       st.confirmedToday = true;
       return {
-        type: 'confirm', ticker, ts_sec: tsSec, price: c,
+        type: 'confirm', ticker, tf: this.cfg.tf, ts_sec: tsSec, price: c,
         cross_price: c, vol_ratio: +ratio.toFixed(1),
         volume: st.bucketVol, sib_median: sibMedian,
         bars_since_cross: 0, intrabar: true,
@@ -256,7 +318,7 @@ export class EmaCrossTracker {
       crossBucket: st.bucketStart,
     };
     return {
-      type: 'nominate', ticker, ts_sec: tsSec, price: c,
+      type: 'nominate', ticker, tf: this.cfg.tf, ts_sec: tsSec, price: c,
       cross_price: c, vol_ratio: +ratio.toFixed(1),
       volume: st.bucketVol, sib_median: sibMedian,
       bars_since_cross: 0, intrabar: true,
@@ -267,18 +329,18 @@ export class EmaCrossTracker {
     st.bars++;
 
     // EMA update — SMA seed over the first `length` closed bars, recursive after.
-    if (st.bars <= EMA_CROSS.fast) {
+    if (st.bars <= this.cfg.fast) {
       st.seedSumF += c;
-      if (st.bars === EMA_CROSS.fast) st.emaF = st.seedSumF / EMA_CROSS.fast;
+      if (st.bars === this.cfg.fast) st.emaF = st.seedSumF / this.cfg.fast;
     } else if (st.emaF != null) {
-      const k = 2 / (EMA_CROSS.fast + 1);
+      const k = 2 / (this.cfg.fast + 1);
       st.emaF = c * k + st.emaF * (1 - k);
     }
-    if (st.bars <= EMA_CROSS.slow) {
+    if (st.bars <= this.cfg.slow) {
       st.seedSumS += c;
-      if (st.bars === EMA_CROSS.slow) st.emaS = st.seedSumS / EMA_CROSS.slow;
+      if (st.bars === this.cfg.slow) st.emaS = st.seedSumS / this.cfg.slow;
     } else if (st.emaS != null) {
-      const k = 2 / (EMA_CROSS.slow + 1);
+      const k = 2 / (this.cfg.slow + 1);
       st.emaS = c * k + st.emaS * (1 - k);
     }
 
@@ -291,7 +353,7 @@ export class EmaCrossTracker {
     // 1) Active observation — does this bar confirm (volume expansion with
     // price holding), or does the window run out? (Skipped on boot-seed
     // replays: history must not nominate, confirm, or expire anything.)
-    if (!silent && st.watch && closeTs - EMA_CROSS.interval_sec === st.watch.crossBucket) {
+    if (!silent && st.watch && closeTs - this.cfg.interval_sec === st.watch.crossBucket) {
       // An intrabar-detected cross bar just closed — bar 0. Its full volume
       // gets the instant rule (parity with close-path detection); it neither
       // consumes the observation window nor expires it.
@@ -300,13 +362,13 @@ export class EmaCrossTracker {
       if (ratio > w.peakRatio) w.peakRatio = ratio;
       if (c > w.peakPrice) w.peakPrice = c;
       if (
-        ratio >= EMA_CROSS.instant_vol_x &&
+        ratio >= this.cfg.instant_vol_x &&
         c >= w.crossPrice &&
-        c * v >= EMA_CROSS.confirm_min_notional
+        c * v >= this.cfg.confirm_min_notional
       ) {
         st.confirmedToday = true;
         out = {
-          type: 'confirm', ticker, ts_sec: closeTs, price: c,
+          type: 'confirm', ticker, tf: this.cfg.tf, ts_sec: closeTs, price: c,
           cross_price: w.crossPrice, vol_ratio: +ratio.toFixed(1),
           volume: v, sib_median: w.sibMedian, bars_since_cross: 0,
         };
@@ -319,23 +381,23 @@ export class EmaCrossTracker {
       if (ratio > w.peakRatio) w.peakRatio = ratio;
       if (c > w.peakPrice) w.peakPrice = c;
       if (
-        ratio >= EMA_CROSS.confirm_vol_x &&
-        c >= w.crossPrice * (1 + EMA_CROSS.confirm_price_ext) &&
-        c * v >= EMA_CROSS.confirm_min_notional
+        ratio >= this.cfg.confirm_vol_x &&
+        c >= w.crossPrice * (1 + this.cfg.confirm_price_ext) &&
+        c * v >= this.cfg.confirm_min_notional
       ) {
         st.confirmedToday = true;
         out = {
-          type: 'confirm', ticker, ts_sec: closeTs, price: c,
+          type: 'confirm', ticker, tf: this.cfg.tf, ts_sec: closeTs, price: c,
           cross_price: w.crossPrice, vol_ratio: +ratio.toFixed(1),
           volume: v, sib_median: w.sibMedian, bars_since_cross: w.barsSeen,
         };
         st.watch = null;
-      } else if (w.barsSeen >= EMA_CROSS.observe_bars) {
+      } else if (w.barsSeen >= this.cfg.observe_bars) {
         // Expired without expansion — re-arm after the cooldown so a weak
         // cross doesn't lock out a genuine later one (the TGHL lesson).
-        st.lockedUntil = closeTs + EMA_CROSS.renominate_cooldown_sec;
+        st.lockedUntil = closeTs + this.cfg.renominate_cooldown_sec;
         out = {
-          type: 'expire', ticker, ts_sec: closeTs, price: c,
+          type: 'expire', ticker, tf: this.cfg.tf, ts_sec: closeTs, price: c,
           cross_price: w.crossPrice, vol_ratio: +ratio.toFixed(1),
           volume: v, sib_median: w.sibMedian, bars_since_cross: w.barsSeen,
           peak_ratio: +w.peakRatio.toFixed(1), peak_price: w.peakPrice,
@@ -350,19 +412,19 @@ export class EmaCrossTracker {
       !silent &&
       out == null &&
       st.emaF != null && st.emaS != null &&
-      st.bars > EMA_CROSS.warmup_bars &&
+      st.bars > this.cfg.warmup_bars &&
       st.prevDiff != null &&
       !st.watch && !st.confirmedToday && closeTs >= st.lockedUntil
     ) {
       const diff = st.emaF - st.emaS;
-      if (st.prevDiff <= 0 && diff > 0 && sibMedian >= EMA_CROSS.sibling_min_sh) {
+      if (st.prevDiff <= 0 && diff > 0 && sibMedian >= this.cfg.sibling_min_sh) {
         const ratio = v / sibMedian;
-        if (ratio >= EMA_CROSS.instant_vol_x && c * v >= EMA_CROSS.confirm_min_notional) {
+        if (ratio >= this.cfg.instant_vol_x && c * v >= this.cfg.confirm_min_notional) {
           // The cross bar itself arrived on expanded volume — the operator's
           // "sometimes the current volume is much higher than siblings" case.
           st.confirmedToday = true;
           out = {
-            type: 'confirm', ticker, ts_sec: closeTs, price: c,
+            type: 'confirm', ticker, tf: this.cfg.tf, ts_sec: closeTs, price: c,
             cross_price: c, vol_ratio: +ratio.toFixed(1),
             volume: v, sib_median: sibMedian, bars_since_cross: 0,
           };
@@ -373,7 +435,7 @@ export class EmaCrossTracker {
             crossBucket: -1, // this cross bar is already closed
           };
           out = {
-            type: 'nominate', ticker, ts_sec: closeTs, price: c,
+            type: 'nominate', ticker, tf: this.cfg.tf, ts_sec: closeTs, price: c,
             cross_price: c, vol_ratio: +ratio.toFixed(1),
             volume: v, sib_median: sibMedian, bars_since_cross: 0,
           };
@@ -385,7 +447,7 @@ export class EmaCrossTracker {
 
     // The just-closed bar becomes a sibling for the next ones.
     st.sibVols.push(v);
-    if (st.sibVols.length > EMA_CROSS.sibling_bars) st.sibVols.shift();
+    if (st.sibVols.length > this.cfg.sibling_bars) st.sibVols.shift();
 
     return out;
   }

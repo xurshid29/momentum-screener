@@ -14,7 +14,7 @@ import { createInterface, type Interface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { TickDetector, type TickBar } from './tick-detect.js';
-import { EmaCrossTracker } from './ema-cross.js';
+import { EmaCrossTracker, EMA_CROSS, EMA_CROSS_4H } from './ema-cross.js';
 import { universe } from './universe.js';
 import { poller } from './poller.js';
 import { getDb } from '../db/index.js';
@@ -66,7 +66,18 @@ async function databentoAvailableEnd(authHeader: string): Promise<number | null>
   }
 }
 
-async function fetchDatabento5m(symbols: string[]): Promise<Map<string, Array<{ closeTs: number; close: number; volume: number }>> | null> {
+// Generic Databento historical fetch + local aggregation: source schema
+// (ohlcv-1m for the 5m layer, ohlcv-1h for the 4h layer) over spanDays,
+// re-bucketed to bucketSec with an optional anchor offset (the 4h grid is
+// ET-session-aligned). Returns ascending CLOSED bars per symbol in our
+// bar-CLOSE convention. Null on failure → callers fall back to Yahoo.
+async function fetchDatabentoAgg(
+  symbols: string[],
+  schema: 'ohlcv-1m' | 'ohlcv-1h',
+  spanDays: number,
+  bucketSec: number,
+  offsetSec = 0,
+): Promise<Map<string, Array<{ closeTs: number; close: number; volume: number }>> | null> {
   const key = process.env.DATABENTO_API_KEY;
   if (!key || symbols.length === 0) return null;
   try {
@@ -74,10 +85,10 @@ async function fetchDatabento5m(symbols: string[]): Promise<Map<string, Array<{ 
     const availEnd = await databentoAvailableEnd(authHeader);
     const endMs = Math.min(Date.now(), (availEnd ?? Date.now() - 15 * 60_000)) - 1_000;
     const end = new Date(endMs);
-    const start = new Date(endMs - 3 * 86_400_000);
+    const start = new Date(endMs - spanDays * 86_400_000);
     const params = new URLSearchParams({
       dataset: 'EQUS.MINI',
-      schema: 'ohlcv-1m',
+      schema,
       symbols: symbols.join(','),
       stype_in: 'raw_symbol',
       start: start.toISOString(),
@@ -90,7 +101,7 @@ async function fetchDatabento5m(symbols: string[]): Promise<Map<string, Array<{ 
       headers: { Authorization: authHeader },
     });
     if (!res.ok) {
-      console.error(`[ema-backfill] databento hist HTTP ${res.status} — falling back to Yahoo`);
+      console.error(`[ema-backfill] databento hist HTTP ${res.status} (${schema}) — falling back to Yahoo`);
       return null;
     }
     const text = await res.text();
@@ -106,8 +117,8 @@ async function fetchDatabento5m(symbols: string[]): Promise<Map<string, Array<{ 
       const vol = Number(c[8]);
       const sym = c[9]?.trim();
       if (!sym || !Number.isFinite(sec) || !(close > 0)) continue;
-      const bStart = Math.floor(sec / 300) * 300;
-      if (bStart + 300 > nowSec - 30) continue; // still-open bucket
+      const bStart = Math.floor((sec - offsetSec) / bucketSec) * bucketSec + offsetSec;
+      if (bStart + bucketSec > nowSec - 30) continue; // still-open bucket
       let m = buckets.get(sym);
       if (!m) { m = new Map(); buckets.set(sym, m); }
       const b = m.get(bStart);
@@ -116,13 +127,25 @@ async function fetchDatabento5m(symbols: string[]): Promise<Map<string, Array<{ 
     }
     const out = new Map<string, Array<{ closeTs: number; close: number; volume: number }>>();
     for (const [sym, m] of buckets) {
-      out.set(sym, [...m.entries()].sort((a, b) => a[0] - b[0]).map(([bs, b]) => ({ closeTs: bs + 300, close: b.close, volume: b.volume })));
+      out.set(sym, [...m.entries()].sort((a, b) => a[0] - b[0]).map(([bs, b]) => ({ closeTs: bs + bucketSec, close: b.close, volume: b.volume })));
     }
     return out;
   } catch (err) {
-    console.error('[ema-backfill] databento hist fetch failed — falling back to Yahoo:', err instanceof Error ? err.message : err);
+    console.error(`[ema-backfill] databento hist fetch failed (${schema}) — falling back to Yahoo:`, err instanceof Error ? err.message : err);
     return null;
   }
+}
+
+// Anchor offset for the 4h bucket grid so bars land on 04:00/08:00/12:00/
+// 16:00 ET like TV's ETH 4h bars. Under EDT (UTC-4) the plain UTC 4h grid
+// already matches (04:00 ET = 08:00 UTC); under EST (UTC-5) shift one hour.
+function etBucketOffsetSec(): number {
+  const now = new Date();
+  const etH = Number(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hour: '2-digit', hourCycle: 'h23',
+  }).format(now));
+  const diff = ((now.getUTCHours() - etH) + 24) % 24; // 4 (EDT) or 5 (EST)
+  return diff === 5 ? 3600 : 0;
 }
 
 // Yahoo 5m history for one symbol — the FALLBACK backfill source (free, no
@@ -169,10 +192,21 @@ class TickFeedService {
   // 📈 EMA 6/50 cross layer on 5m bars, known runners only — see ema-cross.ts.
   // Every LIVE closed bar is buffered for persistence (bars_5m) so the
   // ~50-bar warmup survives deploys; boot replays the last 48h.
-  private emaCross = new EmaCrossTracker((ticker, closeTs, close, volume) => {
+  private emaCross = new EmaCrossTracker(EMA_CROSS, (ticker, closeTs, close, volume) => {
     this.barBuffer.push({ ticker, bar_ts: new Date(closeTs * 1000), close, volume });
   });
+  // 📈 4h variant (2026-07-17) — the operator's swing-timing tool: same
+  // tracker at interval 14400 with ET-session-aligned buckets, warmed from
+  // bars_4h + a Databento ohlcv-1h backfill. Dashboard-only.
+  private emaCross4h = new EmaCrossTracker(
+    { ...EMA_CROSS_4H, bucket_offset_sec: etBucketOffsetSec() },
+    (ticker, closeTs, close, volume) => {
+      this.bar4hBuffer.push({ ticker, bar_ts: new Date(closeTs * 1000), close, volume });
+    },
+  );
   private barBuffer: { ticker: string; bar_ts: Date; close: number; volume: number }[] = [];
+  private bar4hBuffer: { ticker: string; bar_ts: Date; close: number; volume: number }[] = [];
+  private backfillAttempted4h = new Set<string>();
   private barFlushTimer: NodeJS.Timeout | null = null;
   private barsPersisted = 0;
   private lastBarDbErrorMs = 0;
@@ -209,6 +243,7 @@ class TickFeedService {
       running: this.running,
       symbols_tracked: this.detector.symbolsTracked(),
       ema_cross_tracked: this.emaCross.symbolsTracked(),
+      ema_cross_4h_tracked: this.emaCross4h.symbolsTracked(),
       ema_bars_persisted: this.barsPersisted,
       ema_backfilled: this.backfilledOk,
       bars_seen: this.barsSeen,
@@ -263,9 +298,11 @@ class TickFeedService {
     this.child = null;
   }
 
-  // Replay the last 48h of persisted 5m bars through the tracker so the
-  // EMA(6/50) warmup (~50 closed bars/symbol) survives deploys. Three deploys
-  // on 2026-07-14 left the layer silent all of 07-15 — this closes that.
+  // Replay persisted bars through the trackers so the EMA(6/50) warmups
+  // survive deploys — 5m from bars_5m (48h), 4h from bars_4h (40d). Three
+  // deploys on 2026-07-14 left the 5m layer silent all of 07-15 — this
+  // closes that; the 4h layer can NEVER warm up live (~2-3 weeks of bars),
+  // so its replay + the Databento backfill are load-bearing, not resilience.
   private async seedEmaBars(): Promise<void> {
     try {
       const rows = await getDb()
@@ -283,6 +320,23 @@ class TickFeedService {
       console.log(`[ema-cross] seeded ${rows.length} closed 5m bars for ${syms.size} symbols (48h) — warmup carried over`);
     } catch (err) {
       console.error('[ema-cross] bar seed failed (continuing unseeded):', err instanceof Error ? err.message : err);
+    }
+    try {
+      const rows = await getDb()
+        .selectFrom('bars_4h')
+        .select(['ticker', 'bar_ts', 'close', 'volume'])
+        .where('bar_ts', '>', new Date(Date.now() - 40 * 86_400_000))
+        .orderBy('ticker', 'asc')
+        .orderBy('bar_ts', 'asc')
+        .execute();
+      const syms = new Set<string>();
+      for (const r of rows) {
+        this.emaCross4h.seedBar(r.ticker, Math.floor(new Date(r.bar_ts).getTime() / 1000), Number(r.close), Number(r.volume));
+        syms.add(r.ticker);
+      }
+      console.log(`[ema-cross] seeded ${rows.length} closed 4h bars for ${syms.size} symbols (40d)`);
+    } catch (err) {
+      console.error('[ema-cross] 4h bar seed failed (continuing unseeded):', err instanceof Error ? err.message : err);
     }
   }
 
@@ -317,40 +371,96 @@ class TickFeedService {
         targets.push(tk);
         if (targets.length >= 800) break;
       }
-      if (targets.length === 0) return;
-      console.log(`[ema-backfill] ${targets.length} known runners below warmup — Databento hist (Yahoo fallback)`);
-      let ok = 0, seeded = 0, persisted = 0, viaYahoo = 0;
-      const CHUNK = 100;
-      for (let i = 0; i < targets.length; i += CHUNK) {
-        if (!this.running) return;
-        const chunk = targets.slice(i, i + CHUNK);
-        chunk.forEach((t) => this.backfillAttempted.add(t));
-        const batch = await fetchDatabento5m(chunk);
-        for (const tk of chunk) {
+      if (targets.length > 0) {
+        console.log(`[ema-backfill] ${targets.length} known runners below warmup — Databento hist (Yahoo fallback)`);
+        let ok = 0, seeded = 0, persisted = 0, viaYahoo = 0;
+        const CHUNK = 100;
+        for (let i = 0; i < targets.length; i += CHUNK) {
           if (!this.running) return;
-          let bars = batch?.get(tk) ?? null;
-          if (!bars || bars.length === 0) {
-            // Batch failed, or this symbol printed nothing on MINI in 3d —
-            // try Yahoo (consolidated tape sees more of the thin names).
-            bars = await fetchYahoo5m(tk);
-            await new Promise((r) => setTimeout(r, 1_500));
-            if (bars && bars.length > 0) viaYahoo++;
+          const chunk = targets.slice(i, i + CHUNK);
+          chunk.forEach((t) => this.backfillAttempted.add(t));
+          const batch = await fetchDatabentoAgg(chunk, 'ohlcv-1m', 3, 300);
+          for (const tk of chunk) {
+            if (!this.running) return;
+            let bars = batch?.get(tk) ?? null;
+            if (!bars || bars.length === 0) {
+              // Batch failed, or this symbol printed nothing on MINI in 3d —
+              // try Yahoo (consolidated tape sees more of the thin names).
+              bars = await fetchYahoo5m(tk);
+              await new Promise((r) => setTimeout(r, 1_500));
+              if (bars && bars.length > 0) viaYahoo++;
+            }
+            if (!bars || bars.length === 0) continue;
+            ok++;
+            const r = this.applyBackfillBars(tk, bars);
+            seeded += r.seeded;
+            persisted += r.persisted;
           }
-          if (!bars || bars.length === 0) continue;
-          ok++;
-          const r = this.applyBackfillBars(tk, bars);
-          seeded += r.seeded;
-          persisted += r.persisted;
+          await new Promise((r) => setTimeout(r, 500));
         }
-        await new Promise((r) => setTimeout(r, 500));
+        this.backfilledOk += ok;
+        console.log(`[ema-backfill] done — ${ok}/${targets.length} backfilled (${viaYahoo} via Yahoo), ${seeded} tracker-seeded, ${persisted} bars persisted`);
       }
-      this.backfilledOk += ok;
-      console.log(`[ema-backfill] done — ${ok}/${targets.length} backfilled (${viaYahoo} via Yahoo), ${seeded} tracker-seeded, ${persisted} bars persisted`);
+      await this.scanBackfill4h();
     } catch (err) {
       console.error('[ema-backfill] scan failed (continuing):', err instanceof Error ? err.message : err);
     } finally {
       this.backfillRunning = false;
     }
+  }
+
+  // 4h-layer backfill: known runners below the ~50-bar 4h warmup get 35 days
+  // of Databento ohlcv-1h aggregated to the ET-aligned 4h grid — batched 100
+  // symbols/request, so a full first pass is ~15 requests (cents). No Yahoo
+  // fallback here: a name that printed nothing on MINI in 35 days has no
+  // usable sibling baseline anyway (the tracker's dead-tape floor would gate
+  // it). Persists to bars_4h so subsequent boots seed from the DB.
+  private async scanBackfill4h(): Promise<void> {
+    const counts = new Map<string, number>();
+    const rows = await getDb()
+      .selectFrom('bars_4h')
+      .select(['ticker', (eb) => eb.fn.countAll<number>().as('n')])
+      .where('bar_ts', '>', new Date(Date.now() - 40 * 86_400_000))
+      .groupBy('ticker')
+      .execute();
+    for (const r of rows) counts.set(r.ticker, Number(r.n));
+    const targets: string[] = [];
+    for (const tk of poller.getKnownRunners()) {
+      if (this.backfillAttempted4h.has(tk)) continue;
+      if ((counts.get(tk) ?? 0) >= 50) continue;
+      targets.push(tk);
+      if (targets.length >= 1600) break;
+    }
+    if (targets.length === 0) return;
+    console.log(`[ema-backfill] 4h: ${targets.length} known runners below warmup — Databento ohlcv-1h`);
+    let ok = 0, seeded = 0, persisted = 0;
+    const CHUNK = 100;
+    const off = etBucketOffsetSec();
+    for (let i = 0; i < targets.length; i += CHUNK) {
+      if (!this.running) return;
+      const chunk = targets.slice(i, i + CHUNK);
+      chunk.forEach((t) => this.backfillAttempted4h.add(t));
+      const batch = await fetchDatabentoAgg(chunk, 'ohlcv-1h', 35, 14_400, off);
+      if (!batch) return; // hist API unavailable — retry next scan
+      for (const tk of chunk) {
+        const bars = batch.get(tk);
+        if (!bars || bars.length === 0) continue;
+        ok++;
+        if (this.emaCross4h.canSeed(tk)) {
+          for (const b of bars) this.emaCross4h.seedBar(tk, b.closeTs, b.close, b.volume);
+          seeded++;
+        }
+        persisted += bars.length;
+        void getDb()
+          .insertInto('bars_4h')
+          .values(bars.map((b) => ({ ticker: tk, bar_ts: new Date(b.closeTs * 1000), close: b.close, volume: b.volume })))
+          .onConflict((oc) => oc.columns(['ticker', 'bar_ts']).doNothing())
+          .execute()
+          .catch(() => { /* non-critical */ });
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    console.log(`[ema-backfill] 4h done — ${ok}/${targets.length} backfilled, ${seeded} tracker-seeded, ${persisted} bars persisted`);
   }
 
   // Apply fetched history for one symbol: direct-seed the tracker only while
@@ -375,21 +485,31 @@ class TickFeedService {
   }
 
   private flushBars(): void {
-    if (this.barBuffer.length === 0) return;
-    const rows = this.barBuffer.splice(0);
-    void getDb()
-      .insertInto('bars_5m')
-      .values(rows)
-      .onConflict((oc) => oc.columns(['ticker', 'bar_ts']).doNothing())
-      .execute()
-      .then(() => { this.barsPersisted += rows.length; })
-      .catch((err) => {
-        const now = Date.now();
-        if (now - this.lastBarDbErrorMs > 60_000) {
-          this.lastBarDbErrorMs = now;
-          console.error('[ema-cross] bar persist failed (continuing):', err instanceof Error ? err.message : err);
-        }
-      });
+    if (this.barBuffer.length > 0) {
+      const rows = this.barBuffer.splice(0);
+      void getDb()
+        .insertInto('bars_5m')
+        .values(rows)
+        .onConflict((oc) => oc.columns(['ticker', 'bar_ts']).doNothing())
+        .execute()
+        .then(() => { this.barsPersisted += rows.length; })
+        .catch((err) => {
+          const now = Date.now();
+          if (now - this.lastBarDbErrorMs > 60_000) {
+            this.lastBarDbErrorMs = now;
+            console.error('[ema-cross] bar persist failed (continuing):', err instanceof Error ? err.message : err);
+          }
+        });
+    }
+    if (this.bar4hBuffer.length > 0) {
+      const rows = this.bar4hBuffer.splice(0);
+      void getDb()
+        .insertInto('bars_4h')
+        .values(rows)
+        .onConflict((oc) => oc.columns(['ticker', 'bar_ts']).doNothing())
+        .execute()
+        .catch(() => { /* same error-throttle class as above; low volume */ });
+    }
   }
 
   private spawnSidecar(): void {
@@ -437,12 +557,20 @@ class TickFeedService {
       this.etDate = today;
       this.detector.reset();
       this.emaCross.resetDaily();
+      this.emaCross4h.resetDaily();
+      this.emaCross4h.setBucketOffset(etBucketOffsetSec()); // DST roll-over safe
       this.extraSubs.clear();
       this.backfillAttempted.clear();
-      // Prune persisted 5m bars beyond the seed window (fire-and-forget).
+      this.backfillAttempted4h.clear();
+      // Prune persisted bars beyond their seed windows (fire-and-forget).
       void getDb()
         .deleteFrom('bars_5m')
         .where('bar_ts', '<', new Date(Date.now() - 3 * 86_400_000))
+        .execute()
+        .catch(() => { /* retried next midnight */ });
+      void getDb()
+        .deleteFrom('bars_4h')
+        .where('bar_ts', '<', new Date(Date.now() - 40 * 86_400_000))
         .execute()
         .catch(() => { /* retried next midnight */ });
       // Fresh Databento session for the new day.
@@ -548,11 +676,14 @@ class TickFeedService {
       else this.fades++;
       poller.onTickEvent(ev);
     }
-    // 📈 EMA-cross layer — known runners only (the operator's spec: "check our
-    // momentum tickers of our database"), everything else skips the tracker.
+    // 📈 EMA-cross layers (5m + 4h) — known runners only (the operator's
+    // spec: "check our momentum tickers of our database"), everything else
+    // skips the trackers.
     if (poller.isKnownRunner(m.s)) {
       const xev = this.emaCross.addBar(m.s, m.t, m.c, m.v);
       if (xev) poller.onEmaCrossEvent(xev);
+      const xev4 = this.emaCross4h.addBar(m.s, m.t, m.c, m.v);
+      if (xev4) poller.onEmaCrossEvent(xev4);
     }
     // Surface near-miss reasons (gapped vs which gate) so the rollout is
     // debuggable — why a moving name didn't fire.

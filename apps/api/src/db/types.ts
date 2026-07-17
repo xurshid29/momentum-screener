@@ -345,6 +345,15 @@ export interface Bars5mTable {
   volume: number;
 }
 
+// Closed 4h bars (ET-session-aligned) — the 4h EMA-cross layer's warmup
+// store. Pruned to 40 days. See services/ema-cross.ts + tickfeed.ts.
+export interface Bars4hTable {
+  ticker: string;
+  bar_ts: ColumnType<Date, Date | string, Date | string>;
+  close: number;
+  volume: number;
+}
+
 export interface Database {
   users: UsersTable;
   screener_settings: ScreenerSettingsTable;
@@ -367,4 +376,5 @@ export interface Database {
   trade_executions: TradeExecutionsTable;
   tier_events: TierEventsTable;
   bars_5m: Bars5mTable;
+  bars_4h: Bars4hTable;
 }

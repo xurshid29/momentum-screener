@@ -4,9 +4,8 @@
 // confirm), instant-confirm and its notional demotion to nominate, the price
 // hold, the post-expire re-arm cooldown (the TGHL lesson), confirm-ends-the-
 // day, and boot-seed silence. Run: npx tsx scripts/verify-ema-cross.ts
-import { EmaCrossTracker, EMA_CROSS, type EmaCrossEvent } from '../src/services/ema-cross.js';
+import { EmaCrossTracker, EMA_CROSS, EMA_CROSS_4H, type EmaCrossConfig, type EmaCrossEvent } from '../src/services/ema-cross.js';
 
-const BAR = EMA_CROSS.interval_sec;
 const T0 = 1_750_000_200; // aligned to a 5m boundary; absolute value irrelevant
 
 let failures = 0;
@@ -19,15 +18,21 @@ class Sim {
   tracker: EmaCrossTracker;
   events: EmaCrossEvent[] = [];
   liveClosed = 0;
+  lastCloseTs = 0;
+  private iv: number;
   private i = 0;
-  constructor(private sym = 'TEST') {
-    this.tracker = new EmaCrossTracker(() => { this.liveClosed++; });
+  constructor(private sym = 'TEST', cfg: EmaCrossConfig = EMA_CROSS) {
+    this.iv = cfg.interval_sec;
+    this.tracker = new EmaCrossTracker(cfg, (_t, closeTs) => {
+      this.liveClosed++;
+      this.lastCloseTs = closeTs;
+    });
   }
   // Feed one live tick that opens bucket i (closing bucket i-1). The event for
   // a bar surfaces when the NEXT bar's first tick arrives — feed a trailing
   // flush bar to close the last one you care about.
   bar(close: number, vol: number): EmaCrossEvent | null {
-    const ev = this.tracker.addBar(this.sym, T0 + this.i++ * BAR, close, vol);
+    const ev = this.tracker.addBar(this.sym, T0 + this.i++ * this.iv, close, vol);
     if (ev) this.events.push(ev);
     return ev;
   }
@@ -37,12 +42,12 @@ class Sim {
   // Feed a tick INSIDE the currently open bucket (the one the last bar()
   // call opened) — exercises the intrabar TV-parity path.
   tick(close: number, vol: number, offsetSec = 42): EmaCrossEvent | null {
-    const ev = this.tracker.addBar(this.sym, T0 + (this.i - 1) * BAR + offsetSec, close, vol);
+    const ev = this.tracker.addBar(this.sym, T0 + (this.i - 1) * this.iv + offsetSec, close, vol);
     if (ev) this.events.push(ev);
     return ev;
   }
   seed(close: number, vol: number): void {
-    this.tracker.seedBar(this.sym, T0 + this.i++ * BAR, close, vol);
+    this.tracker.seedBar(this.sym, T0 + this.i++ * this.iv, close, vol);
   }
   count(type: EmaCrossEvent['type']): number {
     return this.events.filter((e) => e.type === type).length;
@@ -217,6 +222,21 @@ console.log('S11 — intrabar respects the floors: dead-tape dollars and the coo
   const early = s.tick(0.65, 100, 60); // re-cross poke inside the cooldown
   check('intrabar re-cross blocked inside the cooldown',
     early == null && !s.events.some((e) => e.type === 'nominate' && e.ts_sec > (ex?.ts_sec ?? 0) && e.ts_sec < locked));
+}
+
+console.log('S12 — 4h config: same machine at interval 14400, tf-stamped, offset-aligned buckets');
+{
+  const OFF = 3600; // the EST anchor — buckets must land on offset-shifted boundaries
+  const s = new Sim('TEST', { ...EMA_CROSS_4H, bucket_offset_sec: OFF });
+  warmDipped(s, 1.0, 10_000);
+  check('4h bar closes land on the offset grid', (s.lastCloseTs - OFF) % 14_400 === 0,
+    `closeTs ${s.lastCloseTs}`);
+  s.bar(0.95, 1_000);
+  const nom = s.tick(1.35, 4_000);
+  check('4h intrabar nomination fires', nom?.type === 'nominate' && nom.intrabar === true);
+  check('events carry tf=4h', nom?.tf === '4h');
+  const cf = s.tick(1.4, 50_000, 90);
+  check('4h intrabar confirm on accumulated volume', cf?.type === 'confirm' && cf.tf === '4h');
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);

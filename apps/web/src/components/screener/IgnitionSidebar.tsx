@@ -229,7 +229,7 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
         >
           <SectionHeader label="📈 EMA CROSS" count={emaCrosses.length} color="#95de64" />
           {emaCrosses.map((x) => (
-            <EmaCrossRow key={x.ticker} item={x} selected={x.ticker === selected} onSelect={setSelected} />
+            <EmaCrossRow key={`${x.tf}|${x.ticker}`} item={x} selected={x.ticker === selected} onSelect={setSelected} />
           ))}
         </div>
       )}
@@ -350,10 +350,13 @@ function EmaCrossRow({ item, selected, onSelect }: {
   onSelect: (t: string) => void;
 }) {
   const confirmed = item.status === 'confirmed';
+  const is4h = item.tf === '4h';
   // "ago" always anchors on the CROSS bar so it reads like the TV chart the
   // operator compares against; the ✅ multiple marks the confirmation itself.
   const agoMs = Date.now() - new Date(item.cross_at).getTime();
-  const ago = agoMs < 60_000 ? `${Math.round(agoMs / 1000)}s` : `${Math.round(agoMs / 60_000)}m`;
+  const ago = agoMs < 60_000 ? `${Math.round(agoMs / 1000)}s`
+    : agoMs < 3_600_000 ? `${Math.round(agoMs / 60_000)}m`
+    : `${(agoMs / 3_600_000).toFixed(1)}h`;
   return (
     <div
       onClick={() => onSelect(item.ticker)}
@@ -375,8 +378,16 @@ function EmaCrossRow({ item, selected, onSelect }: {
           stopPropagation
           style={{ color: confirmed ? '#95de64' : '#8c9b8c', fontWeight: 600, fontSize: 13 }}
         />
+        {is4h && (
+          <span style={{
+            marginLeft: 5, fontSize: 9, fontWeight: 700, color: '#b7eb8f',
+            border: '1px solid #3f6600', borderRadius: 3, padding: '0 3px', verticalAlign: 'middle',
+          }}>
+            4H
+          </span>
+        )}
         <span style={{ marginLeft: 6, fontSize: 10, color: '#8c8c8c' }}>
-          {confirmed ? `✅ ${Math.round(item.vol_ratio)}× vol` : '… observing'} · cross {ago} ago
+          {confirmed ? `✅ ${Math.round(item.vol_ratio)}× vol` : is4h ? 'cross' : '… observing'} · {is4h ? '' : 'cross '}{ago} ago
         </span>
       </span>
       <span style={{ flex: '0 0 auto' }}>
