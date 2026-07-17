@@ -45,21 +45,27 @@ export const TICKFEED = {
 // on the order of cents-to-dollars. Fetches ohlcv-1m (no 5m schema exists)
 // and aggregates 5→1 locally; returns ascending CLOSED bars in our bar-CLOSE
 // convention. Null on failure → callers fall back to Yahoo.
-// Historical availability lags real-time by a few minutes — an `end` past
-// the dataset's available_end 422s. Clamp via metadata.get_dataset_range,
-// memoized for 10 min.
-let dbHistEnd: { endMs: number; at: number } | null = null;
-async function databentoAvailableEnd(authHeader: string): Promise<number | null> {
-  if (dbHistEnd && Date.now() - dbHistEnd.at < 10 * 60_000) return dbHistEnd.endMs;
+// Historical availability lags real-time — an `end` past the AVAILABLE end
+// 422s. Crucially the bound is PER SCHEMA: get_dataset_range's top-level
+// `end` is the max across schemas (mbp-1 is near-real-time) and even reads
+// rounded forward, while ohlcv-1h only rolls forward once an hour — clamping
+// to the top-level end 422'd every chunk of the first 4h pass
+// (`data_schema_not_fully_available`, 2026-07-17). Memoized 10 min per
+// schema.
+const dbHistEnds = new Map<string, { endMs: number; at: number }>();
+async function databentoSchemaEnd(authHeader: string, schema: string): Promise<number | null> {
+  const c = dbHistEnds.get(schema);
+  if (c && Date.now() - c.at < 10 * 60_000) return c.endMs;
   try {
     const res = await fetch('https://hist.databento.com/v0/metadata.get_dataset_range?dataset=EQUS.MINI', {
       headers: { Authorization: authHeader },
     });
     if (!res.ok) return null;
-    const j = await res.json() as { end?: string };
-    const endMs = j?.end ? Date.parse(j.end) : NaN;
+    const j = await res.json() as { end?: string; schema?: Record<string, { end?: string }> };
+    const raw = j?.schema?.[schema]?.end ?? j?.end;
+    const endMs = raw ? Date.parse(raw) : NaN;
     if (!Number.isFinite(endMs)) return null;
-    dbHistEnd = { endMs, at: Date.now() };
+    dbHistEnds.set(schema, { endMs, at: Date.now() });
     return endMs;
   } catch {
     return null;
@@ -82,13 +88,11 @@ async function fetchDatabentoAgg(
   if (!key || symbols.length === 0) return null;
   try {
     const authHeader = 'Basic ' + Buffer.from(`${key}:`).toString('base64');
-    const availEnd = await databentoAvailableEnd(authHeader);
-    // The metadata end is NOT a safe intraday bound — it reads rounded
-    // FORWARD (e.g. "13:00Z" at 12:55) while actual availability lags
-    // real-time by ~2-3 min, so end=min(now, availEnd) can still 422 right
-    // at the race (seen 2026-07-17 on the first 4h pass). Backfill doesn't
-    // care about the last few minutes: keep an unconditional 15-min margin.
-    const endMs = Math.min(Date.now() - 15 * 60_000, availEnd ?? Infinity) - 1_000;
+    const availEnd = await databentoSchemaEnd(authHeader, schema);
+    // Clamp to the schema's own availability (see databentoSchemaEnd). If
+    // the metadata call fails, fall back a full hour — safe for every
+    // schema we use, and backfill never needs the most recent bars.
+    const endMs = Math.min(Date.now() - 60_000, availEnd ?? (Date.now() - 3600_000)) - 1_000;
     const end = new Date(endMs);
     const start = new Date(endMs - spanDays * 86_400_000);
     const params = new URLSearchParams({
