@@ -100,11 +100,21 @@ have no baseline anyway). **Surfacing: dashboard-only by operator choice**
 skipped — unlike 5m; no Telegram/ping until `tier_events meta.tf='4h'` shows
 the real fire rate; expect dozens-to-~100+/day across ~1,500 known runners).
 Verify script → 12 scenarios (S12: 4h config, offset grid, tf stamping).
+**Day-1 fix (the WOK phantom cross):** operator's first check caught our
+WOK "cross" with TV's EMA50 still far above price. Reconstructed from
+bars_4h: our EMA50 2.023 vs TV 2.63 — the 35d backfill ≈ only ~1× the
+EMA50 span, so on names with a big prior trend (WOK's $40→$2 collapse)
+our short-memory EMA50 sat at the recent flat average and a $2.04 poke
+"crossed". Fixed same day: backfill depth 35d→**120d** (~150+ bars → SMA
+seed influence <2%, EMA50 within pennies of TV), retention/boot-seed
+40d→**130d**, skip rule = ≥150 banked bars OR history reaching ≥100d back.
 **Watch:** (a) fire rate + time-of-day clustering after a few days → pick
 Telegram gate (operator deferred: watchlist/screens were the candidates);
 (b) confirm semantics on 4h are untuned first-guesses (sibling 12×4h bars,
-$10k floor) — nomination is the product, confirms are telemetry; (c) first
-boot pays the full ~15-request Databento pass, subsequent boots seed from
+$10k floor) — nomination is the product, confirms are telemetry; nominations
+deliberately have NO notional floor (TV-parity — WOK/WYHG day-1 noms were
+$92/$129 dead-tape pokes; the operator filters manually); (c) first boot
+pays the full ~15-request Databento pass, subsequent boots seed from
 bars_4h.
 
 XINTRA. **📈 intrabar detection — TV-parity, closes the ~5-min lag (2026-07-16,

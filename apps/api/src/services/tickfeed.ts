@@ -325,7 +325,7 @@ class TickFeedService {
       const rows = await getDb()
         .selectFrom('bars_4h')
         .select(['ticker', 'bar_ts', 'close', 'volume'])
-        .where('bar_ts', '>', new Date(Date.now() - 40 * 86_400_000))
+        .where('bar_ts', '>', new Date(Date.now() - 130 * 86_400_000))
         .orderBy('ticker', 'asc')
         .orderBy('bar_ts', 'asc')
         .execute();
@@ -334,7 +334,7 @@ class TickFeedService {
         this.emaCross4h.seedBar(r.ticker, Math.floor(new Date(r.bar_ts).getTime() / 1000), Number(r.close), Number(r.volume));
         syms.add(r.ticker);
       }
-      console.log(`[ema-cross] seeded ${rows.length} closed 4h bars for ${syms.size} symbols (40d)`);
+      console.log(`[ema-cross] seeded ${rows.length} closed 4h bars for ${syms.size} symbols (130d)`);
     } catch (err) {
       console.error('[ema-cross] 4h bar seed failed (continuing unseeded):', err instanceof Error ? err.message : err);
     }
@@ -409,30 +409,42 @@ class TickFeedService {
     }
   }
 
-  // 4h-layer backfill: known runners below the ~50-bar 4h warmup get 35 days
-  // of Databento ohlcv-1h aggregated to the ET-aligned 4h grid — batched 100
-  // symbols/request, so a full first pass is ~15 requests (cents). No Yahoo
-  // fallback here: a name that printed nothing on MINI in 35 days has no
-  // usable sibling baseline anyway (the tracker's dead-tape floor would gate
-  // it). Persists to bars_4h so subsequent boots seed from the DB.
+  // 4h-layer backfill: 120 days of Databento ohlcv-1h aggregated to the
+  // ET-aligned 4h grid — batched 100 symbols/request. Depth matters more
+  // than warmup here (the WOK lesson, 2026-07-17): a 4h EMA50 spans ~50
+  // bars ≈ 5 weeks, so a 35d window made our EMA50 ≈ the recent flat
+  // average (2.02) while TV's — with months of memory — was still way
+  // above (2.63) after WOK's collapse, and a $2.04 uptick "crossed". ~150
+  // bars of history puts the SMA seed's influence under ~2% and our EMA50
+  // within pennies of TV's. Skip a symbol once it has ≥150 banked bars OR
+  // its banked history already reaches back ≥100d (recently-listed names
+  // can never satisfy either — the once/day attempt set bounds their cost).
+  // No Yahoo fallback: a name that printed nothing on MINI has no usable
+  // sibling baseline anyway. Persists to bars_4h (130d retention) so
+  // subsequent boots seed from the DB.
   private async scanBackfill4h(): Promise<void> {
-    const counts = new Map<string, number>();
+    const have = new Map<string, { n: number; earliestMs: number }>();
     const rows = await getDb()
       .selectFrom('bars_4h')
-      .select(['ticker', (eb) => eb.fn.countAll<number>().as('n')])
-      .where('bar_ts', '>', new Date(Date.now() - 40 * 86_400_000))
+      .select(['ticker',
+        (eb) => eb.fn.countAll<number>().as('n'),
+        (eb) => eb.fn.min('bar_ts').as('earliest'),
+      ])
+      .where('bar_ts', '>', new Date(Date.now() - 130 * 86_400_000))
       .groupBy('ticker')
       .execute();
-    for (const r of rows) counts.set(r.ticker, Number(r.n));
+    for (const r of rows) have.set(r.ticker, { n: Number(r.n), earliestMs: new Date(r.earliest as Date).getTime() });
+    const deepEnoughMs = Date.now() - 100 * 86_400_000;
     const targets: string[] = [];
     for (const tk of poller.getKnownRunners()) {
       if (this.backfillAttempted4h.has(tk)) continue;
-      if ((counts.get(tk) ?? 0) >= 50) continue;
+      const h = have.get(tk);
+      if (h && (h.n >= 150 || h.earliestMs <= deepEnoughMs)) continue;
       targets.push(tk);
       if (targets.length >= 1600) break;
     }
     if (targets.length === 0) return;
-    console.log(`[ema-backfill] 4h: ${targets.length} known runners below warmup — Databento ohlcv-1h`);
+    console.log(`[ema-backfill] 4h: ${targets.length} known runners below EMA-convergence depth — Databento ohlcv-1h (120d)`);
     let ok = 0, seeded = 0, persisted = 0;
     const CHUNK = 100;
     const off = etBucketOffsetSec();
@@ -440,7 +452,7 @@ class TickFeedService {
       if (!this.running) return;
       const chunk = targets.slice(i, i + CHUNK);
       chunk.forEach((t) => this.backfillAttempted4h.add(t));
-      const batch = await fetchDatabentoAgg(chunk, 'ohlcv-1h', 35, 14_400, off);
+      const batch = await fetchDatabentoAgg(chunk, 'ohlcv-1h', 120, 14_400, off);
       if (!batch) return; // hist API unavailable — retry next scan
       for (const tk of chunk) {
         const bars = batch.get(tk);
@@ -570,7 +582,7 @@ class TickFeedService {
         .catch(() => { /* retried next midnight */ });
       void getDb()
         .deleteFrom('bars_4h')
-        .where('bar_ts', '<', new Date(Date.now() - 40 * 86_400_000))
+        .where('bar_ts', '<', new Date(Date.now() - 130 * 86_400_000))
         .execute()
         .catch(() => { /* retried next midnight */ });
       // Fresh Databento session for the new day.

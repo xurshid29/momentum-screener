@@ -191,8 +191,13 @@ this layer is a pure detection tool: intrabar nomination the second the 4h
 cross happens, **dashboard-only** (4H badge in the EMA CROSS section, rows
 linger 6h; no Telegram, no ping) until tier_events (`meta.tf='4h'`) shows the
 real fire rate. Warmup needs ~50 closed 4h bars ≈ 2–3 weeks — impossible
-live, so `bars_4h` (40d retention) + a Databento ohlcv-1h backfill (35d,
+live, so `bars_4h` (130d retention) + a Databento ohlcv-1h backfill (120d,
 batched, ET-aligned aggregation, no Yahoo fallback) are load-bearing.
+⚠️ **Depth ≥ warmup (the WOK lesson, day-1):** a 4h EMA50 spans ~5 weeks,
+so the original 35d backfill left our EMA50 at the recent flat average
+(WOK: ours 2.02 vs TV's 2.63 after the collapse) and a $2.04 uptick
+"crossed" — TV-parity needs ~150 bars (~2% residual seed influence), hence
+the 120d depth.
 Context: cross-as-signal was twice measured at chance on 30m/1h — the
 operator's edge claim here lives in their manual filter + tight-stop
 management, explicitly their department; grade the layer on lead time and
