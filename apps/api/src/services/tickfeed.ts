@@ -14,7 +14,7 @@ import { createInterface, type Interface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { TickDetector, type TickBar } from './tick-detect.js';
-import { EmaCrossTracker, EMA_CROSS, EMA_CROSS_4H } from './ema-cross.js';
+import { EmaCrossTracker, EMA_CROSS, EMA_CROSS_4H, adjustSplitHistory, type SeedHistoryBar } from './ema-cross.js';
 import { universe } from './universe.js';
 import { poller } from './poller.js';
 import { getDb } from '../db/index.js';
@@ -314,39 +314,44 @@ class TickFeedService {
   // closes that; the 4h layer can NEVER warm up live (~2-3 weeks of bars),
   // so its replay + the Databento backfill are load-bearing, not resilience.
   private async seedEmaBars(): Promise<void> {
+    await this.seedTrackerFromTable('bars_5m', 48 * 3600_000, this.emaCross, '5m');
+    await this.seedTrackerFromTable('bars_4h', 130 * 86_400_000, this.emaCross4h, '4h');
+  }
+
+  // Replay one table's bars through a tracker, per-symbol and split-adjusted
+  // (DB keeps raw truth; the adjustment is read-side — see
+  // adjustSplitHistory for why raw seed history breaks the EMA scale).
+  private async seedTrackerFromTable(
+    table: 'bars_5m' | 'bars_4h',
+    windowMs: number,
+    tracker: EmaCrossTracker,
+    label: string,
+  ): Promise<void> {
     try {
       const rows = await getDb()
-        .selectFrom('bars_5m')
+        .selectFrom(table)
         .select(['ticker', 'bar_ts', 'close', 'volume'])
-        .where('bar_ts', '>', new Date(Date.now() - 48 * 3600_000))
+        .where('bar_ts', '>', new Date(Date.now() - windowMs))
         .orderBy('ticker', 'asc')
         .orderBy('bar_ts', 'asc')
         .execute();
-      const syms = new Set<string>();
+      let syms = 0;
+      let curTk = '';
+      let buf: SeedHistoryBar[] = [];
+      const flush = () => {
+        if (!curTk || buf.length === 0) return;
+        for (const b of adjustSplitHistory(buf)) tracker.seedBar(curTk, b.closeTs, b.close, b.volume);
+        syms++;
+        buf = [];
+      };
       for (const r of rows) {
-        this.emaCross.seedBar(r.ticker, Math.floor(new Date(r.bar_ts).getTime() / 1000), Number(r.close), Number(r.volume));
-        syms.add(r.ticker);
+        if (r.ticker !== curTk) { flush(); curTk = r.ticker; }
+        buf.push({ closeTs: Math.floor(new Date(r.bar_ts).getTime() / 1000), close: Number(r.close), volume: Number(r.volume) });
       }
-      console.log(`[ema-cross] seeded ${rows.length} closed 5m bars for ${syms.size} symbols (48h) — warmup carried over`);
+      flush();
+      console.log(`[ema-cross] seeded ${rows.length} closed ${label} bars for ${syms} symbols — warmup carried over`);
     } catch (err) {
-      console.error('[ema-cross] bar seed failed (continuing unseeded):', err instanceof Error ? err.message : err);
-    }
-    try {
-      const rows = await getDb()
-        .selectFrom('bars_4h')
-        .select(['ticker', 'bar_ts', 'close', 'volume'])
-        .where('bar_ts', '>', new Date(Date.now() - 130 * 86_400_000))
-        .orderBy('ticker', 'asc')
-        .orderBy('bar_ts', 'asc')
-        .execute();
-      const syms = new Set<string>();
-      for (const r of rows) {
-        this.emaCross4h.seedBar(r.ticker, Math.floor(new Date(r.bar_ts).getTime() / 1000), Number(r.close), Number(r.volume));
-        syms.add(r.ticker);
-      }
-      console.log(`[ema-cross] seeded ${rows.length} closed 4h bars for ${syms.size} symbols (130d)`);
-    } catch (err) {
-      console.error('[ema-cross] 4h bar seed failed (continuing unseeded):', err instanceof Error ? err.message : err);
+      console.error(`[ema-cross] ${label} bar seed failed (continuing unseeded):`, err instanceof Error ? err.message : err);
     }
   }
 
@@ -476,7 +481,7 @@ class TickFeedService {
         if (!bars || bars.length === 0) continue;
         ok++;
         if (this.emaCross4h.canSeed(tk)) {
-          for (const b of bars) this.emaCross4h.seedBar(tk, b.closeTs, b.close, b.volume);
+          for (const b of adjustSplitHistory(bars)) this.emaCross4h.seedBar(tk, b.closeTs, b.close, b.volume);
           seeded++;
         }
         persisted += bars.length;

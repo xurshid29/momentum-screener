@@ -4,7 +4,7 @@
 // confirm), instant-confirm and its notional demotion to nominate, the price
 // hold, the post-expire re-arm cooldown (the TGHL lesson), confirm-ends-the-
 // day, and boot-seed silence. Run: npx tsx scripts/verify-ema-cross.ts
-import { EmaCrossTracker, EMA_CROSS, EMA_CROSS_4H, type EmaCrossConfig, type EmaCrossEvent } from '../src/services/ema-cross.js';
+import { EmaCrossTracker, EMA_CROSS, EMA_CROSS_4H, adjustSplitHistory, type EmaCrossConfig, type EmaCrossEvent } from '../src/services/ema-cross.js';
 
 const T0 = 1_750_000_200; // aligned to a 5m boundary; absolute value irrelevant
 
@@ -237,6 +237,23 @@ console.log('S12 — 4h config: same machine at interval 14400, tf-stamped, offs
   check('events carry tf=4h', nom?.tf === '4h');
   const cf = s.tick(1.4, 50_000, 90);
   check('4h intrabar confirm on accumulated volume', cf?.type === 'confirm' && cf.tf === '4h');
+}
+
+console.log('S13 — split adjustment: reverse splits rescale seed history; real moves untouched');
+{
+  const D = 86_400;
+  const mk = (a: [number, number, number][]) => a.map(([closeTs, close, volume]) => ({ closeTs, close, volume }));
+  // WOK-shaped reverse split: $0.10-0.11 → $2.05 overnight (observed 18.6× → factor 19)
+  const rs = adjustSplitHistory(mk([[0, 0.10, 1000], [14_400, 0.11, 1000], [14_400 + D, 2.05, 50]]));
+  check('pre-split closes rescaled', Math.abs(rs[1].close - 0.11 * 19) < 1e-9 && rs[2].close === 2.05,
+    `${rs[0].close.toFixed(2)}/${rs[1].close.toFixed(2)}/${rs[2].close}`);
+  check('pre-split volumes divided', Math.abs(rs[0].volume - 1000 / 19) < 1e-9);
+  const gap = adjustSplitHistory(mk([[0, 1.0, 1000], [D, 2.3, 5000]]));
+  check('real overnight news gap (2.3×, non-integer) untouched', gap[0].close === 1.0);
+  const crash = adjustSplitHistory(mk([[0, 11.3, 1000], [D, 1.22, 5000]]));
+  check('real overnight crash (-89%) untouched — down-moves are never splits', crash[0].close === 11.3);
+  const intraday = adjustSplitHistory(mk([[0, 0.9, 1000], [14_400, 3.95, 9000]]));
+  check('same-session 4.4× pump untouched', intraday[0].close === 0.9);
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);

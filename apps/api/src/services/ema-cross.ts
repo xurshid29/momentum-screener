@@ -156,6 +156,49 @@ interface SymState {
                          // — live ticks at/before it are already accounted for
 }
 
+export interface SeedHistoryBar { closeTs: number; close: number; volume: number }
+
+// Split-adjust a symbol's SEED history (the WOK lesson, 2026-07-17): TV
+// charts are split-adjusted, Databento serves raw prices — a reverse split
+// inside the seed window leaves the EMA50 computed over two price scales
+// (WOK: pre-split $0.05-1.12 mixed with post-split ~$2 put our EMA50 at
+// 2.00 vs TV's 2.63, and a $2.04 poke "crossed"). Detection is asymmetric
+// by design: reverse splits are UP jumps (nobody forward-splits a $2
+// stock), while big overnight DOWN gaps are real crashes (WOK itself had a
+// genuine -89% overnight dump) — so only up-jumps across an overnight gap
+// qualify: ≥4.85× unconditionally (real overnight gaps that large are
+// effectively nonexistent), 1.94-4.85× only within 2.5% of a whole-number
+// ratio (real news gaps land at 2.3×, 2.7× — not on integers). Earlier
+// closes multiply by the factor, volumes divide (share count scales
+// inversely). The observed boundary ratio embeds that day's real move, so
+// the factor is rounded to the nearest integer — small residual error on
+// old bars, decayed by the EMA.
+export function adjustSplitHistory(bars: SeedHistoryBar[]): SeedHistoryBar[] {
+  if (bars.length < 2) return bars;
+  const factors: { idx: number; f: number }[] = []; // f applies to bars [0, idx)
+  for (let i = 1; i < bars.length; i++) {
+    const prev = bars[i - 1], cur = bars[i];
+    if (cur.closeTs - prev.closeTs < 6 * 3600) continue; // same session — never a split
+    if (!(prev.close > 0) || !(cur.close > 0)) continue;
+    const r = cur.close / prev.close;
+    if (r >= 4.85) {
+      factors.push({ idx: i, f: Math.round(r) });
+    } else if (r >= 1.94) {
+      const n = Math.round(r);
+      if (n >= 2 && Math.abs(r - n) / n <= 0.025) factors.push({ idx: i, f: n });
+    }
+  }
+  if (factors.length === 0) return bars;
+  const out = bars.map((b) => ({ ...b }));
+  let cum = 1;
+  let fi = factors.length - 1;
+  for (let i = out.length - 1; i >= 0; i--) {
+    while (fi >= 0 && factors[fi].idx === i + 1) { cum *= factors[fi].f; fi--; }
+    if (cum !== 1) { out[i].close *= cum; out[i].volume /= cum; }
+  }
+  return out;
+}
+
 function median(xs: number[]): number {
   if (xs.length === 0) return 0;
   const s = [...xs].sort((a, b) => a - b);
