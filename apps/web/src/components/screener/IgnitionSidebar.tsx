@@ -92,6 +92,7 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
     ignitionNewsOnly, setIgnitionNewsOnly,
     hideLiveTicks, setHideLiveTicks,
     hideIgnitionList, setHideIgnitionList,
+    hideNewsRadar, setHideNewsRadar,
   } = useLayout();
   const isWarned = useIsWarned();
   const [catalystModal, setCatalystModal] = useState<{ ticker: string; catalyst: CatalystInfo | null } | null>(null);
@@ -165,6 +166,21 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
             🛰️
           </Button>
         </Tooltip>
+        <Tooltip title={hideNewsRadar ? 'NEWS RADAR hidden (still computing server-side) — click to show' : 'Hide the NEWS RADAR section (display only — alerts keep firing)'}>
+          <Button
+            type="text"
+            size="small"
+            onClick={() => setHideNewsRadar(!hideNewsRadar)}
+            style={{
+              fontSize: 11,
+              padding: '0 6px',
+              color: hideNewsRadar ? '#434343' : '#b37feb',
+              textDecoration: hideNewsRadar ? 'line-through' : undefined,
+            }}
+          >
+            📰
+          </Button>
+        </Tooltip>
         <Tooltip title={hideIgnitionList ? 'Ignition list hidden (still computing server-side) — click to show' : 'Hide the ignition NEW/TOP list (display only — more room for EMA crosses)'}>
           <Button
             type="text"
@@ -233,7 +249,7 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
       )}
 
       {/* News radar — fresh catalyst on a known runner, not moving yet */}
-      {newsRadar.length > 0 && (
+      {!hideNewsRadar && newsRadar.length > 0 && (
         <div
           style={{
             flex: '0 0 auto',
@@ -278,7 +294,7 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
 
       {hideIgnitionList ? (
         <div style={{ flex: '1 1 auto' }} />
-      ) : all.length === 0 && (hideLiveTicks || tickCatches.length === 0) && newsRadar.length === 0 ? (
+      ) : all.length === 0 && (hideLiveTicks || tickCatches.length === 0) && (hideNewsRadar || newsRadar.length === 0) ? (
         <div style={{ flex: '1 1 auto', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}

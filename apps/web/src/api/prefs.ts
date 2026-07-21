@@ -15,6 +15,7 @@ export interface PanelLayout {
   // sections free their space for the EMA-cross lists.
   hide_live_ticks?: boolean;
   hide_ignition_list?: boolean;
+  hide_news_radar?: boolean;
 }
 
 export const prefsApi = {

@@ -26,6 +26,8 @@ interface LayoutContextValue {
   setHideLiveTicks: (v: boolean) => void;
   hideIgnitionList: boolean;
   setHideIgnitionList: (v: boolean) => void;
+  hideNewsRadar: boolean;
+  setHideNewsRadar: (v: boolean) => void;
 }
 
 const LayoutContext = createContext<LayoutContextValue | null>(null);
@@ -36,6 +38,7 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
   const [ignitionNewsOnly, setIgnitionNewsOnlyState] = useState(false);
   const [hideLiveTicks, setHideLiveTicksState] = useState(false);
   const [hideIgnitionList, setHideIgnitionListState] = useState(false);
+  const [hideNewsRadar, setHideNewsRadarState] = useState(false);
   const { data: serverLayout } = useQuery({
     queryKey: ['prefs', 'layout'],
     queryFn: () => prefsApi.getLayout(),
@@ -60,6 +63,9 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
     if (typeof serverLayout?.hide_ignition_list === 'boolean') {
       setHideIgnitionListState(serverLayout.hide_ignition_list);
     }
+    if (typeof serverLayout?.hide_news_radar === 'boolean') {
+      setHideNewsRadarState(serverLayout.hide_news_radar);
+    }
     hydrated.current = true;
   }, [serverLayout]);
 
@@ -71,6 +77,7 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
       ignition_news_only: ignitionNewsOnly,
       hide_live_ticks: hideLiveTicks,
       hide_ignition_list: hideIgnitionList,
+      hide_news_radar: hideNewsRadar,
       ...patch,
     };
     prefsApi.putLayout(next).catch(() => {});
@@ -101,6 +108,11 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
     persist({ hide_ignition_list: v });
   };
 
+  const setHideNewsRadar = (v: boolean) => {
+    setHideNewsRadarState(v);
+    persist({ hide_news_radar: v });
+  };
+
   return (
     <LayoutContext.Provider
       value={{
@@ -114,6 +126,8 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
         setHideLiveTicks,
         hideIgnitionList,
         setHideIgnitionList,
+        hideNewsRadar,
+        setHideNewsRadar,
       }}
     >
       {children}
