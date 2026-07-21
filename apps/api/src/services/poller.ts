@@ -35,6 +35,7 @@ import { getContinuationCandidates, type ContinuationCandidate } from './continu
 import { classifyByRules, type Classification, type ClassifierInput } from './catalyst-rules.js';
 import { recordTierEvent } from './tier-events.js';
 import { classifyByClaude } from './catalyst-claude.js';
+import { fetchAndStoreTickerNews } from './ticker-news.js';
 
 const DEFAULTS: ScreenerFilterSnapshot = {
   // Note: no `sh_float_u50` here. Finviz drops rows with null Float when that
@@ -328,6 +329,13 @@ export interface EmaCrossItem {
   vol_ratio: number;      // latest bar volume / sibling median
   cross_at: string;
   confirmed_at: string | null;
+  // News support (2026-07-22): today's freshest article + its classification,
+  // enriched async after the cross fires (see enrichCrossNews). Null until
+  // the lookup lands or when the ticker has no news today.
+  news_title: string | null;
+  news_url: string | null;
+  news_published_at: string | null;
+  catalyst: CatalystInfo | null;
 }
 
 // HTF cross rows stay visible this long after their last event (both
@@ -580,6 +588,13 @@ class PollerService {
   // 📈 EMA-cross layer entries (observing/confirmed), keyed by ticker.
   // Display-only; graded via tier_events (tier='cross'). Cleared at midnight.
   private emaCrosses = new Map<string, EmaCrossItem & { last_event_ms: number }>();
+  // 📈 cross-row news enrichment cache — per ticker, per news day. A `null`
+  // value means "looked, nothing today" (prevents re-fetching on every cross
+  // event for the same name). Cleared at the 04:00 ET news-day roll.
+  private crossNewsCache = new Map<string, {
+    title: string; url: string; source: NewsSource;
+    published_at: string | null; catalyst: CatalystInfo | null;
+  } | null>();
   // Tickers that have traded in an Ignition pre-market cycle today. Feeds the
   // runner-score's pre-market-exhaustion penalty (a name that already ran in PM
   // gives back into the close). ET-day concept — cleared at midnight.
@@ -717,6 +732,93 @@ class PollerService {
   // nominations for names already in the LIVE TICKS ladder skip display (the
   // ladder outranks them); 4h rows always display — a 4h cross on an
   // igniting name is exactly what the operator wants eyes on.
+  // News support for 📈 cross rows (2026-07-22): most cross tickers aren't
+  // on any screen, so the per-cycle news fan-out never covers them (the
+  // news-ingest scope). Look up the news day's freshest stored article — the
+  // market-wide Benzinga sweep, the radar, and any earlier screen presence
+  // all land in news_articles — and if the DB has nothing, run the on-demand
+  // top-up (fetchAndStoreTickerNews: Finviz+Yahoo per ticker, freshness-
+  // cached) and re-check once. Classification rides the shared URL cache.
+  // Fire-and-forget: rows update on a later payload build; the result is
+  // cached per ticker per news day and applied to EVERY live row of that
+  // ticker (a name can hold 5m + 1h + 4h rows at once).
+  private async enrichCrossNews(ticker: string): Promise<void> {
+    try {
+      if (this.crossNewsCache.has(ticker)) {
+        this.applyCrossNews(ticker);
+        return;
+      }
+      this.crossNewsCache.set(ticker, null); // claim — concurrent crosses don't stampede
+      const newsDay = this.lastNewsDayEt;
+      const latestToday = async () => {
+        const rows = await getDb()
+          .selectFrom('news_ticker_links as l')
+          .innerJoin('news_articles as a', 'a.id', 'l.article_id')
+          .select(['a.source', 'a.url', 'a.title', 'a.published_at'])
+          .where('l.ticker', '=', ticker)
+          .where('a.published_at', '>', new Date(Date.now() - 36 * 3600_000))
+          .orderBy('a.published_at', 'desc')
+          .limit(8)
+          .execute();
+        return rows.find((r) => r.published_at != null
+          && etDateString(new Date(new Date(r.published_at).getTime() - 4 * 3600_000)) === newsDay);
+      };
+      let art = await latestToday();
+      if (!art) {
+        await fetchAndStoreTickerNews(ticker);
+        art = await latestToday();
+      }
+      if (!art || this.lastNewsDayEt !== newsDay) return; // nothing today / day rolled mid-flight
+      let cached = this.classificationCache.get(art.url);
+      if (!cached) {
+        const input: ClassifierInput = {
+          ticker,
+          title: art.title,
+          source: art.source as NewsSource,
+          marketContext: null, // usually not screening — no live float/mcap
+        };
+        const cls = classifyByRules(input);
+        cached = {
+          classification: cls,
+          classifier: 'rules',
+          needsLLM: !!process.env.ANTHROPIC_API_KEY && art.source !== 'sec' && art.source !== 'halt',
+          input,
+        };
+        this.classificationCache.set(art.url, cached);
+      }
+      this.crossNewsCache.set(ticker, {
+        title: art.title,
+        url: art.url,
+        source: art.source as NewsSource,
+        published_at: art.published_at ? new Date(art.published_at).toISOString() : null,
+        catalyst: {
+          score: cached.classification.impact_score,
+          hype: cached.classification.hype_score,
+          urgency: cached.classification.urgency,
+          direction: cached.classification.direction,
+          type: cached.classification.catalyst_type,
+          reason: cached.classification.reason,
+          risk_flags: cached.classification.risk_flags,
+          classifier: cached.classifier,
+        },
+      });
+      this.applyCrossNews(ticker);
+    } catch { /* best-effort — the row simply stays newsless */ }
+  }
+
+  // Stamp the cached news entry onto every live cross row for the ticker.
+  private applyCrossNews(ticker: string): void {
+    const entry = this.crossNewsCache.get(ticker);
+    if (!entry) return;
+    for (const it of this.emaCrosses.values()) {
+      if (it.ticker !== ticker) continue;
+      it.news_title = entry.title;
+      it.news_url = entry.url;
+      it.news_published_at = entry.published_at;
+      it.catalyst = entry.catalyst;
+    }
+  }
+
   onEmaCrossEvent(e: import('./ema-cross.js').EmaCrossEvent): void {
     const nowMs = Date.now();
     const tf = emaCrossTfOf(e.tf);
@@ -749,8 +851,10 @@ class PollerService {
         vol_ratio: e.vol_ratio,
         cross_at: barIso,
         confirmed_at: e.type === 'confirm' ? barIso : null,
+        news_title: null, news_url: null, news_published_at: null, catalyst: null,
         last_event_ms: nowMs,
       });
+      void this.enrichCrossNews(e.ticker);
       return;
     }
     const existing = this.emaCrosses.get(key);
@@ -1203,6 +1307,7 @@ class PollerService {
               vol_ratio: num(m.vol_ratio) ?? 0,
               cross_at: prev?.cross_at ?? iso(atMs),
               confirmed_at: iso(atMs),
+              news_title: null, news_url: null, news_published_at: null, catalyst: null,
               last_event_ms: atMs,
             });
           } else if (r.event === 'nominate' && (m.in_ladder !== true || xtf !== '5m')) {
@@ -1213,7 +1318,9 @@ class PollerService {
               price: num(m.price) ?? 0,
               cross_price: num(m.cross_price) ?? num(m.price) ?? 0,
               vol_ratio: num(m.vol_ratio) ?? 0,
-              cross_at: iso(atMs), confirmed_at: null, last_event_ms: atMs,
+              cross_at: iso(atMs), confirmed_at: null,
+              news_title: null, news_url: null, news_published_at: null, catalyst: null,
+              last_event_ms: atMs,
             });
           } else if (r.event === 'expire') {
             this.emaCrosses.delete(xkey);
@@ -1241,6 +1348,8 @@ class PollerService {
           this.emaCrosses.delete(t);
         }
       }
+      // News enrichment for the reseeded cross rows (DB/cache-first, cheap).
+      for (const xc of this.emaCrosses.values()) void this.enrichCrossNews(xc.ticker);
       console.log(
         `[poller] seeded tier state from today's tier_events (${rows.length} events) — ` +
         `ladder ${this.tickCatches.size}, radar ${this.newsRadar.size}, crosses ${this.emaCrosses.size}; ` +
@@ -1305,6 +1414,7 @@ class PollerService {
     if (newsDayEt !== this.lastNewsDayEt) {
       this.bzHeadlineCache.clear();
       this.classificationCache.clear();
+      this.crossNewsCache.clear();
       this.lastNewsDayEt = newsDayEt;
     }
     if (todayEt !== this.lastEtDate) {
@@ -2238,6 +2348,8 @@ class PollerService {
       emaCrossList.push({
         ticker: xc.ticker, tf: xc.tf, status: xc.status, price: xc.price, cross_price: xc.cross_price,
         vol_ratio: xc.vol_ratio, cross_at: xc.cross_at, confirmed_at: xc.confirmed_at,
+        news_title: xc.news_title, news_url: xc.news_url,
+        news_published_at: xc.news_published_at, catalyst: xc.catalyst,
       });
     }
     emaCrossList.sort((a, b) =>

@@ -187,7 +187,15 @@ moment the provisional EMAs touch, not its close.
 **Surfacing.** Green 📈 sidebar section: dim "…observing" → "✅ N× vol" with a
 soft ping on confirm only. Timestamps are bar-close times; "ago" anchors on
 the cross (matches the TV chart). Names already in the LIVE TICKS ladder skip
-display (logged `in_ladder`). No Telegram until graded.
+display (logged `in_ladder`). No Telegram until graded. **News support
+(2026-07-22):** every cross row is enriched async with the news day's
+freshest article + classification (🔥 CatalystBadge, click → news modal).
+Most cross tickers aren't screening, so the lookup goes DB-first (the
+market-wide Benzinga sweep + radar land articles there) with the on-demand
+per-ticker top-up (`fetchAndStoreTickerNews`) as fallback; cached per
+ticker/news-day (`crossNewsCache`), applied to all of a ticker's live rows
+across timeframes. Grading side: join `tier_events` to `news_articles` on
+(ticker, day) — catalyst-vs-no-catalyst crosses is a first-class cut.
 
 **Timeframe layers (configurable, 2026-07-21).** The tracker is config-driven
 (`EmaCrossConfig`); live layers: **5m** (bespoke — 48h bars_5m replay covers

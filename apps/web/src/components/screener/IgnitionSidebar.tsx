@@ -287,7 +287,13 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
         >
           <SectionHeader label={`📈 EMA ${g.tf.toUpperCase()}`} count={g.items.length} color="#95de64" />
           {g.items.map((x) => (
-            <EmaCrossRow key={`${x.tf}|${x.ticker}`} item={x} selected={x.ticker === selected} onSelect={setSelected} />
+            <EmaCrossRow
+              key={`${x.tf}|${x.ticker}`}
+              item={x}
+              selected={x.ticker === selected}
+              onSelect={setSelected}
+              onOpenCatalyst={() => setCatalystModal({ ticker: x.ticker, catalyst: x.catalyst ?? null })}
+            />
           ))}
         </div>
       ))}
@@ -404,10 +410,11 @@ function TickItem({ tc, selected, onSelect }: { tc: TickCatch; selected: boolean
 // An EMA-cross row — a 10/65 crossover, either under its volume
 // volume observation (dim, "…observing") or volume-confirmed (bright green,
 // shows the expansion multiple). Click to chart it.
-function EmaCrossRow({ item, selected, onSelect }: {
+function EmaCrossRow({ item, selected, onSelect, onOpenCatalyst }: {
   item: EmaCrossItem;
   selected: boolean;
   onSelect: (t: string) => void;
+  onOpenCatalyst: () => void;
 }) {
   const confirmed = item.status === 'confirmed';
   const isHtf = item.tf !== '5m';
@@ -438,6 +445,18 @@ function EmaCrossRow({ item, selected, onSelect }: {
           stopPropagation
           style={{ color: confirmed ? '#95de64' : '#8c9b8c', fontWeight: 600, fontSize: 13 }}
         />
+        {(item.catalyst || item.news_title) && (
+          <span style={{ marginLeft: 4, display: 'inline-flex', verticalAlign: 'middle' }}>
+            <CatalystBadge
+              score={item.catalyst?.score ?? null}
+              hype={item.catalyst?.hype}
+              reason={item.catalyst?.reason}
+              type={item.catalyst?.type}
+              onOpen={onOpenCatalyst}
+              size={12}
+            />
+          </span>
+        )}
         <span style={{ marginLeft: 6, fontSize: 10, color: '#8c8c8c' }}>
           {confirmed ? `✅ ${Math.round(item.vol_ratio)}× vol` : isHtf ? 'cross' : '… observing'} · {isHtf ? '' : 'cross '}{ago} ago
         </span>

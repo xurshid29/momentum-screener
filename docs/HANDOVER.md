@@ -87,6 +87,16 @@ Journal; **attribution join still the open payoff**) · 06-17 tick feed go-live.
 
 ## What shipped this session (newest first, all on prod unless noted)
 
+XNEWS. **📈 cross rows get news support (2026-07-22).** Cross tickers are
+mostly off-screen, so the per-cycle news fan-out never covered them; rows
+now enrich async — DB-first (Benzinga market-wide sweep/radar articles),
+`fetchAndStoreTickerNews` top-up as fallback, shared URL classification
+cache, cached per ticker/news-day, applied across all of a ticker's
+timeframe rows. UI: 🔥 CatalystBadge on the row → news modal. Same day:
+EMAs 6/50→10/65 all layers + 5m cooldown 60→30min (see grading caveat in
+the pending task). Grading cut now available: crosses with vs without
+same-day catalyst (SQL join tier_events↔news_articles).
+
 ALRT. **Per-component Telegram kill switches + 📰 radar toggle (2026-07-21,
 follow-up to EMAX).** Operator asked whether hidden components should stop
 being computed server-side; answer on the record: NO — layers feed each

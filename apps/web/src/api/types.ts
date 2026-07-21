@@ -351,6 +351,12 @@ export interface EmaCrossItem {
   vol_ratio: number;
   cross_at: string;
   confirmed_at: string | null;
+  // Today's freshest article + classification, enriched async server-side
+  // (null until the lookup lands / when the name has no news today).
+  news_title: string | null;
+  news_url: string | null;
+  news_published_at: string | null;
+  catalyst: CatalystInfo | null;
 }
 
 export interface CyclePayload {
