@@ -17,3 +17,4 @@ dist/
 # Database
 db/schema.sql
 data/
+watchlist-*.txt
