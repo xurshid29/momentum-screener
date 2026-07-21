@@ -9,6 +9,40 @@ export function telegramEnabled(): boolean {
   return !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID);
 }
 
+// ── Per-component alert kill switches ─────────────────────────────────────
+// ALERTS_DISABLED env var: comma-separated component slugs whose Telegram
+// pushes are suppressed. Detection, tier_events grading, and the dashboard
+// are NEVER affected — this mutes the phone, nothing else (the architecture:
+// compute always → grade always → alert selectively → display selectively).
+// Dedup sets still mark suppressed alerts, so re-enabling mid-day does not
+// replay the day's backlog. Parsed lazily (env loads after module import).
+export type AlertComponent =
+  | 'momentum'      // fresh-news momentum rows (strong/major catalyst)
+  | 'ignition'      // runner_score ≥ alert line / premium catalyst
+  | 'new_ignition'  // 🆕 recently-appeared ignition building up
+  | 'fresh_burst'   // 🚀 first-sight nano-float burst
+  | 'accum'         // 🤫 sustained accumulation + bullish news
+  | 'tick_watch'    // 👀 price-led watch flag
+  | 'tick_catch'    // 🛰️ volume-confirmed catch
+  | 'radar'         // 📰 news radar (strong/major urgency)
+  | 'dual_signal'   // momentum+ignition dual-signal
+  | 'swing';        // swing-score breakout
+let disabledAlerts: Set<string> | null = null;
+export function alertDisabled(component: AlertComponent): boolean {
+  if (!disabledAlerts) {
+    disabledAlerts = new Set(
+      (process.env.ALERTS_DISABLED ?? '')
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean),
+    );
+    if (disabledAlerts.size > 0) {
+      console.log(`[telegram] ALERTS_DISABLED — muted components: ${[...disabledAlerts].join(', ')}`);
+    }
+  }
+  return disabledAlerts.has(component);
+}
+
 // Escape text for Telegram's HTML parse mode — only & < > are special, and the
 // same escaping makes a URL safe to drop into an <a href="…"> attribute.
 export function escapeHtml(s: string): string {

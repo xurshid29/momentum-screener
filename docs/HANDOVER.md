@@ -82,6 +82,21 @@ Journal; **attribution join still the open payoff**) · 06-17 tick feed go-live.
 
 ## What shipped this session (newest first, all on prod unless noted)
 
+ALRT. **Per-component Telegram kill switches + 📰 radar toggle (2026-07-21,
+follow-up to EMAX).** Operator asked whether hidden components should stop
+being computed server-side; answer on the record: NO — layers feed each
+other (radar arms the detector, accum promotes through 👀, EMA grading
+reads ladder state) and an uncomputed layer is an ungraded layer. The
+architecture is: compute always → grade always → alert selectively →
+display selectively. Shipped the two missing dials: (a) `ALERTS_DISABLED`
+env var (comma-separated slugs: momentum, ignition, new_ignition,
+fresh_burst, accum, tick_watch, tick_catch, radar, dual_signal, swing) —
+checked at all 12 sendTelegram sites in the poller; dedup sets still mark
+suppressed alerts so re-enabling mid-day doesn't replay the backlog;
+muted set logged on first alert. (b) NEWS RADAR joined the hideable
+sidebar sections (📰 toggle, `hide_news_radar`). `/alerts off` remains the
+global mute; `TICKFEED_ENABLED` remains the whole-feed circuit breaker.
+
 EMAX. **📈 EMA-cross layer promoted to first-class citizen (2026-07-21, the
 operator's favorite component).** Four asks, all shipped: (1) **intervals
 are configurable** — tracker refactored around an `htfLayers` list in

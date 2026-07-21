@@ -19,7 +19,7 @@ import { fetchBenzingaDelta } from './benzinga.js';
 import { fetchEdgarFilings, type EdgarFiling } from './edgar.js';
 import { fetchHalts, type TradeHalt } from './halts.js';
 import { broadcast } from './sse.js';
-import { sendTelegram, telegramEnabled, escapeHtml } from './telegram.js';
+import { sendTelegram, telegramEnabled, escapeHtml, alertDisabled } from './telegram.js';
 import { scoreRunner, type RunnerScoreBreakdown } from './runner-score.js';
 import type { TickEvent } from './tick-detect.js';
 import {
@@ -880,7 +880,7 @@ class PollerService {
         !this.alertedNewsRadar.has(tk)
       ) {
         this.alertedNewsRadar.add(tk);
-        void sendTelegram(formatNewsRadarAlert(item));
+        if (!alertDisabled('radar')) void sendTelegram(formatNewsRadarAlert(item));
       }
     }
   }
@@ -2090,7 +2090,7 @@ class PollerService {
         recordTierEvent('tick', 'confirm', t, { via: 'screen', chg, watch_chg: tc.watch_change_pct });
         if (telegramEnabled() && !this.alertsMuted && !this.alertedTickCatch.has(t)) {
           this.alertedTickCatch.add(t);
-          void sendTelegram(formatTickConfirmAlert(
+          if (!alertDisabled('tick_catch')) void sendTelegram(formatTickConfirmAlert(
             t, row.price ?? tc.price, chg, tc.rel_vol, tc.mom_pct, tc.watch_change_pct, 'screen',
           ));
         }
@@ -2632,7 +2632,7 @@ class PollerService {
       if (r.catalyst.direction === 'bearish') continue;
       if (this.alertedUrls.has(r.news_url)) continue;
       this.alertedUrls.add(r.news_url);
-      void sendTelegram(formatTelegramAlert(r));
+      if (!alertDisabled('momentum')) void sendTelegram(formatTelegramAlert(r));
     }
   }
 
@@ -2663,7 +2663,7 @@ class PollerService {
       // later cycle still earns a fresh alert (the second-leg setup).
       if (r.change_pct != null && r.change_pct > IGNITION.alert_entry_chg_max) continue;
       this.alertedIgnition.add(r.ticker);
-      void sendTelegram(formatIgnitionAlert(r));
+      if (!alertDisabled('ignition')) void sendTelegram(formatIgnitionAlert(r));
     }
   }
 
@@ -2686,7 +2686,7 @@ class PollerService {
       if (r.change_pct == null || r.change_pct < NEW_IGNITION.chg_min || r.change_pct > NEW_IGNITION.chg_max) continue;
       if (r.catalyst?.direction === 'bearish') continue;
       this.alertedNewIgnition.add(r.ticker);
-      void sendTelegram(formatNewIgnitionAlert(r, Math.round((nowMs - firstSeen) / 1000)));
+      if (!alertDisabled('new_ignition')) void sendTelegram(formatNewIgnitionAlert(r, Math.round((nowMs - firstSeen) / 1000)));
     }
   }
 
@@ -2744,7 +2744,7 @@ class PollerService {
         !this.alertedAccum.has(r.ticker) && bullishNews
       ) {
         this.alertedAccum.add(r.ticker);
-        void sendTelegram(formatAccumAlert(r, fast, bullishNews));
+        if (!alertDisabled('accum')) void sendTelegram(formatAccumAlert(r, fast, bullishNews));
       }
     }
   }
@@ -2812,7 +2812,7 @@ class PollerService {
         recordTierEvent('accum', 'promote', e.ticker, { via: 'tick', chg: e.change_pct, minutes: mins, pts });
         if (telegramEnabled() && !this.alertsMuted && !this.alertedTickWatch.has(e.ticker)) {
           this.alertedTickWatch.add(e.ticker);
-          void sendTelegram(formatTickWatchAlert(e));
+          if (!alertDisabled('tick_watch')) void sendTelegram(formatTickWatchAlert(e));
         }
         return;
       }
@@ -2876,7 +2876,7 @@ class PollerService {
       });
       if (telegramEnabled() && !this.alertsMuted && !this.alertedTickWatch.has(e.ticker)) {
         this.alertedTickWatch.add(e.ticker);
-        void sendTelegram(formatTickWatchAlert(e));
+        if (!alertDisabled('tick_watch')) void sendTelegram(formatTickWatchAlert(e));
       }
       return;
     }
@@ -2907,7 +2907,7 @@ class PollerService {
       });
       if (telegramEnabled() && !this.alertsMuted && !this.alertedTickCatch.has(e.ticker)) {
         this.alertedTickCatch.add(e.ticker);
-        void sendTelegram(formatTickConfirmAlert(e.ticker, e.price, e.change_pct, e.rel_vol, e.mom_pct, watchChg, e.via ?? 'surge'));
+        if (!alertDisabled('tick_catch')) void sendTelegram(formatTickConfirmAlert(e.ticker, e.price, e.change_pct, e.rel_vol, e.mom_pct, watchChg, e.via ?? 'surge'));
       }
       return;
     }
@@ -2952,7 +2952,7 @@ class PollerService {
         session !== 'premarket' && (r.rel_volume ?? 0) >= FRESH_BURST.rvol_day_min;
       if (fast < FRESH_BURST.rvol_fast_min && !instantDay) continue;
       this.alertedFreshBurst.add(r.ticker);
-      void sendTelegram(formatFreshBurstAlert(r, Math.round((nowMs - firstMs) / 1000)));
+      if (!alertDisabled('fresh_burst')) void sendTelegram(formatFreshBurstAlert(r, Math.round((nowMs - firstMs) / 1000)));
     }
   }
 
@@ -2981,7 +2981,7 @@ class PollerService {
       if (r.catalyst?.direction === 'bearish') continue;
       if (r.change_pct != null && r.change_pct < 0) continue;
       this.alertedDualSignal.add(r.ticker);
-      void sendTelegram(formatDualSignalAlert(r, cont));
+      if (!alertDisabled('dual_signal')) void sendTelegram(formatDualSignalAlert(r, cont));
     }
   }
 
@@ -3008,7 +3008,7 @@ class PollerService {
       // alerted-into-the-parabola failure mode.
       if (!r.setup_flags.broke_out && !r.setup_flags.broke_out_5d && !freshBullishCatalyst) continue;
       this.alertedSwing.add(r.ticker);
-      void sendTelegram(formatSwingAlert(r));
+      if (!alertDisabled('swing')) void sendTelegram(formatSwingAlert(r));
     }
   }
 }
