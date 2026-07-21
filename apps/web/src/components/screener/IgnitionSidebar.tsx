@@ -418,6 +418,11 @@ function EmaCrossRow({ item, selected, onSelect, onOpenCatalyst }: {
 }) {
   const confirmed = item.status === 'confirmed';
   const isHtf = item.tf !== '5m';
+  // Freshly confirmed — pulse the row so the payoff event catches the eye.
+  // Window scales with the timeframe (a 4h confirm stays "new" longer than
+  // a 5m one); same isFreshArrival convention as ignition rows.
+  const FRESH_CONFIRM_SEC = { '5m': 300, '1h': 900, '4h': 1800 } as const;
+  const freshConfirm = confirmed && isFreshArrival(item.confirmed_at, FRESH_CONFIRM_SEC[item.tf]);
   // "ago" always anchors on the CROSS bar so it reads like the TV chart the
   // operator compares against; the ✅ multiple marks the confirmation itself.
   const agoMs = Date.now() - new Date(item.cross_at).getTime();
@@ -427,6 +432,7 @@ function EmaCrossRow({ item, selected, onSelect, onOpenCatalyst }: {
   return (
     <div
       onClick={() => onSelect(item.ticker)}
+      className={freshConfirm ? 'ema-confirm-fresh' : undefined}
       style={{
         display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
         padding: '4px 8px', borderBottom: '1px solid #162b1a', cursor: 'pointer',
@@ -457,7 +463,7 @@ function EmaCrossRow({ item, selected, onSelect, onOpenCatalyst }: {
             />
           </span>
         )}
-        <span style={{ marginLeft: 6, fontSize: 10, color: '#8c8c8c' }}>
+        <span style={{ marginLeft: 6, fontSize: 10, color: freshConfirm ? '#95de64' : '#8c8c8c', fontWeight: freshConfirm ? 600 : undefined }}>
           {confirmed ? `✅ ${Math.round(item.vol_ratio)}× vol` : isHtf ? 'cross' : '… observing'} · {isHtf ? '' : 'cross '}{ago} ago
         </span>
       </span>

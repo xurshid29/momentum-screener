@@ -99,3 +99,16 @@ body {
 .tabs-fill-height .ant-tabs-tabpane {
   height: 100%;
 }
+
+/* Newly volume-confirmed EMA-cross rows — brief green pulse so the payoff
+   event (✅ expansion landed) is noticeable at a glance. Applied while the
+   confirm is fresh (window scales with the row's timeframe); recomputed each
+   SSE render, so it clears within a cycle of expiring. Animations outrank
+   the inline selected-row background — acceptable: fresh wins the eye. */
+@keyframes ema-confirm-pulse {
+  from { background-color: rgba(82, 196, 26, 0.30); }
+  to   { background-color: rgba(82, 196, 26, 0.07); }
+}
+.ema-confirm-fresh {
+  animation: ema-confirm-pulse 1.4s ease-in-out infinite alternate;
+}
