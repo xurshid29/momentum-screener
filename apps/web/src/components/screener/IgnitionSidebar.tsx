@@ -88,7 +88,11 @@ function HiddenList({ tickers, onUnhide }: { tickers: string[]; onUnhide: (t: st
 export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
   const { selected, setSelected } = useSelection();
   const { hidden, hide, unhide } = useHiddenTickers();
-  const { ignitionNewsOnly, setIgnitionNewsOnly } = useLayout();
+  const {
+    ignitionNewsOnly, setIgnitionNewsOnly,
+    hideLiveTicks, setHideLiveTicks,
+    hideIgnitionList, setHideIgnitionList,
+  } = useLayout();
   const isWarned = useIsWarned();
   const [catalystModal, setCatalystModal] = useState<{ ticker: string; catalyst: CatalystInfo | null } | null>(null);
   // Hidden filter always applies; "news only" additionally drops rows with no
@@ -103,8 +107,14 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
   const tickCatches = (payload?.tick_catches ?? []).filter((t) => !hidden.has(t.ticker));
   // News radar — fresh catalysts on known runners that aren't moving yet.
   const newsRadar = (payload?.news_radar ?? []).filter((n) => !hidden.has(n.ticker));
-  // EMA-cross layer — 6/50 5m crossovers under observation / volume-confirmed.
+  // EMA-cross layers, grouped per timeframe (each tf gets its own section).
   const emaCrosses = (payload?.ema_crosses ?? []).filter((x) => !hidden.has(x.ticker));
+  const emaGroups = (['5m', '1h', '4h'] as const)
+    .map((tf) => ({ tf, items: emaCrosses.filter((x) => x.tf === tf) }))
+    .filter((g) => g.items.length > 0);
+  // Hiding LIVE TICKS / the ignition list frees their space for the EMA
+  // sections (display-only — the server keeps computing and alerting).
+  const emaMaxHeight = hideIgnitionList ? undefined : '20%';
   const hiddenList = [...hidden].sort();
 
   const renderRow = (r: IgnitionRow) => (
@@ -140,6 +150,36 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
           <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>{all.length}</Text>
         </span>
         <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+        <Tooltip title={hideLiveTicks ? 'LIVE TICKS hidden (still computing server-side) — click to show' : 'Hide the LIVE TICKS section (display only — alerts keep firing)'}>
+          <Button
+            type="text"
+            size="small"
+            onClick={() => setHideLiveTicks(!hideLiveTicks)}
+            style={{
+              fontSize: 11,
+              padding: '0 6px',
+              color: hideLiveTicks ? '#434343' : '#40a9ff',
+              textDecoration: hideLiveTicks ? 'line-through' : undefined,
+            }}
+          >
+            🛰️
+          </Button>
+        </Tooltip>
+        <Tooltip title={hideIgnitionList ? 'Ignition list hidden (still computing server-side) — click to show' : 'Hide the ignition NEW/TOP list (display only — more room for EMA crosses)'}>
+          <Button
+            type="text"
+            size="small"
+            onClick={() => setHideIgnitionList(!hideIgnitionList)}
+            style={{
+              fontSize: 11,
+              padding: '0 6px',
+              color: hideIgnitionList ? '#434343' : '#fadb14',
+              textDecoration: hideIgnitionList ? 'line-through' : undefined,
+            }}
+          >
+            ⚡
+          </Button>
+        </Tooltip>
         <Tooltip title={ignitionNewsOnly ? 'Showing only rows with news today — click to show all' : 'Show only rows with a catalyst / news today'}>
           <Button
             type="text"
@@ -175,7 +215,7 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
       </div>
 
       {/* Live ticks — caught before the screens; pinned above everything */}
-      {tickCatches.length > 0 && (
+      {!hideLiveTicks && tickCatches.length > 0 && (
         <div
           style={{
             flex: '0 0 auto',
@@ -216,25 +256,29 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
         </div>
       )}
 
-      {/* EMA-cross layer — 6/50 5m crossovers, volume-confirmation pending/done */}
-      {emaCrosses.length > 0 && (
+      {/* EMA-cross layers — one section per timeframe (5M / 1H / 4H). With
+          the ignition list hidden they grow freely into the freed space. */}
+      {emaGroups.map((g) => (
         <div
+          key={g.tf}
           style={{
-            flex: '0 0 auto',
-            maxHeight: '25%',
+            flex: '0 1 auto',
+            maxHeight: emaMaxHeight,
             overflow: 'auto',
             background: '#0f1a12',
             borderBottom: '2px solid #237804',
           }}
         >
-          <SectionHeader label="📈 EMA CROSS" count={emaCrosses.length} color="#95de64" />
-          {emaCrosses.map((x) => (
+          <SectionHeader label={`📈 EMA ${g.tf.toUpperCase()}`} count={g.items.length} color="#95de64" />
+          {g.items.map((x) => (
             <EmaCrossRow key={`${x.tf}|${x.ticker}`} item={x} selected={x.ticker === selected} onSelect={setSelected} />
           ))}
         </div>
-      )}
+      ))}
 
-      {all.length === 0 && tickCatches.length === 0 && newsRadar.length === 0 ? (
+      {hideIgnitionList ? (
+        <div style={{ flex: '1 1 auto' }} />
+      ) : all.length === 0 && (hideLiveTicks || tickCatches.length === 0) && newsRadar.length === 0 ? (
         <div style={{ flex: '1 1 auto', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}
@@ -350,7 +394,7 @@ function EmaCrossRow({ item, selected, onSelect }: {
   onSelect: (t: string) => void;
 }) {
   const confirmed = item.status === 'confirmed';
-  const is4h = item.tf === '4h';
+  const isHtf = item.tf !== '5m';
   // "ago" always anchors on the CROSS bar so it reads like the TV chart the
   // operator compares against; the ✅ multiple marks the confirmation itself.
   const agoMs = Date.now() - new Date(item.cross_at).getTime();
@@ -378,16 +422,8 @@ function EmaCrossRow({ item, selected, onSelect }: {
           stopPropagation
           style={{ color: confirmed ? '#95de64' : '#8c9b8c', fontWeight: 600, fontSize: 13 }}
         />
-        {is4h && (
-          <span style={{
-            marginLeft: 5, fontSize: 9, fontWeight: 700, color: '#b7eb8f',
-            border: '1px solid #3f6600', borderRadius: 3, padding: '0 3px', verticalAlign: 'middle',
-          }}>
-            4H
-          </span>
-        )}
         <span style={{ marginLeft: 6, fontSize: 10, color: '#8c8c8c' }}>
-          {confirmed ? `✅ ${Math.round(item.vol_ratio)}× vol` : is4h ? 'cross' : '… observing'} · {is4h ? '' : 'cross '}{ago} ago
+          {confirmed ? `✅ ${Math.round(item.vol_ratio)}× vol` : isHtf ? 'cross' : '… observing'} · {isHtf ? '' : 'cross '}{ago} ago
         </span>
       </span>
       <span style={{ flex: '0 0 auto' }}>

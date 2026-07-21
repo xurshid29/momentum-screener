@@ -14,7 +14,7 @@ import { createInterface, type Interface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { TickDetector, type TickBar } from './tick-detect.js';
-import { EmaCrossTracker, EMA_CROSS, EMA_CROSS_4H, adjustSplitHistory, type SeedHistoryBar } from './ema-cross.js';
+import { EmaCrossTracker, EMA_CROSS, EMA_CROSS_1H, EMA_CROSS_4H, adjustSplitHistory, type SeedHistoryBar } from './ema-cross.js';
 import { universe } from './universe.js';
 import { poller } from './poller.js';
 import { getDb } from '../db/index.js';
@@ -197,6 +197,45 @@ function etDate(d = new Date()): string {
   }).format(d);
 }
 
+// One higher-timeframe (HTF) EMA-cross layer: tracker + its persistence
+// table + Databento backfill parameters. Adding/removing an interval =
+// one entry here + its bars_* migration; everything else (boot seed, live
+// feed, persistence, retention, backfill, /health) loops this list. The 5m
+// layer stays bespoke: its warmup fits inside bars_5m's 48h replay and it
+// has a Yahoo per-symbol fallback the HTF layers don't need.
+interface HtfLayer {
+  cfg: import('./ema-cross.js').EmaCrossConfig;
+  tracker: EmaCrossTracker;
+  table: 'bars_1h' | 'bars_4h';
+  buffer: { ticker: string; bar_ts: Date; close: number; volume: number }[];
+  attempted: Set<string>;    // backfill attempted this ET day
+  spanDays: number;          // backfill fetch depth (EMA-convergence, not warmup)
+  retentionDays: number;     // table retention = boot-seed window
+  minBars: number;           // banked bars that count as "converged"
+  deepDays: number;          // or banked history reaching this far back
+  offset: () => number;      // bucket anchor (recomputed at midnight for DST)
+}
+
+function makeHtfLayer(
+  cfg: import('./ema-cross.js').EmaCrossConfig,
+  table: HtfLayer['table'],
+  opts: { spanDays: number; retentionDays: number; deepDays: number; offset: () => number },
+): HtfLayer {
+  const layer: HtfLayer = {
+    cfg, table, buffer: [], attempted: new Set(),
+    spanDays: opts.spanDays, retentionDays: opts.retentionDays,
+    minBars: 150, deepDays: opts.deepDays, offset: opts.offset,
+    tracker: null as unknown as EmaCrossTracker,
+  };
+  layer.tracker = new EmaCrossTracker(
+    { ...cfg, bucket_offset_sec: opts.offset() },
+    (ticker, closeTs, close, volume) => {
+      layer.buffer.push({ ticker, bar_ts: new Date(closeTs * 1000), close, volume });
+    },
+  );
+  return layer;
+}
+
 class TickFeedService {
   private detector = new TickDetector();
   // 📈 EMA 6/50 cross layer on 5m bars, known runners only — see ema-cross.ts.
@@ -205,18 +244,15 @@ class TickFeedService {
   private emaCross = new EmaCrossTracker(EMA_CROSS, (ticker, closeTs, close, volume) => {
     this.barBuffer.push({ ticker, bar_ts: new Date(closeTs * 1000), close, volume });
   });
-  // 📈 4h variant (2026-07-17) — the operator's swing-timing tool: same
-  // tracker at interval 14400 with ET-session-aligned buckets, warmed from
-  // bars_4h + a Databento ohlcv-1h backfill. Dashboard-only.
-  private emaCross4h = new EmaCrossTracker(
-    { ...EMA_CROSS_4H, bucket_offset_sec: etBucketOffsetSec() },
-    (ticker, closeTs, close, volume) => {
-      this.bar4hBuffer.push({ ticker, bar_ts: new Date(closeTs * 1000), close, volume });
-    },
-  );
+  // 📈 higher-timeframe layers (1h 2026-07-21, 4h 2026-07-17): the
+  // operator's swing-timing tools. Dashboard-only; nomination is the
+  // product. 1h buckets are hour-aligned everywhere (offset 0); 4h anchors
+  // to the ET session grid.
+  private htfLayers: HtfLayer[] = [
+    makeHtfLayer(EMA_CROSS_1H, 'bars_1h', { spanDays: 30, retentionDays: 35, deepDays: 25, offset: () => 0 }),
+    makeHtfLayer(EMA_CROSS_4H, 'bars_4h', { spanDays: 120, retentionDays: 130, deepDays: 100, offset: etBucketOffsetSec }),
+  ];
   private barBuffer: { ticker: string; bar_ts: Date; close: number; volume: number }[] = [];
-  private bar4hBuffer: { ticker: string; bar_ts: Date; close: number; volume: number }[] = [];
-  private backfillAttempted4h = new Set<string>();
   private barFlushTimer: NodeJS.Timeout | null = null;
   private barsPersisted = 0;
   private lastBarDbErrorMs = 0;
@@ -253,7 +289,7 @@ class TickFeedService {
       running: this.running,
       symbols_tracked: this.detector.symbolsTracked(),
       ema_cross_tracked: this.emaCross.symbolsTracked(),
-      ema_cross_4h_tracked: this.emaCross4h.symbolsTracked(),
+      ...Object.fromEntries(this.htfLayers.map((l) => [`ema_cross_${l.cfg.tf}_tracked`, l.tracker.symbolsTracked()])),
       ema_bars_persisted: this.barsPersisted,
       ema_backfilled: this.backfilledOk,
       bars_seen: this.barsSeen,
@@ -315,14 +351,29 @@ class TickFeedService {
   // so its replay + the Databento backfill are load-bearing, not resilience.
   private async seedEmaBars(): Promise<void> {
     await this.seedTrackerFromTable('bars_5m', 48 * 3600_000, this.emaCross, '5m');
-    await this.seedTrackerFromTable('bars_4h', 130 * 86_400_000, this.emaCross4h, '4h');
+    for (const l of this.htfLayers) {
+      await this.seedTrackerFromTable(l.table, l.retentionDays * 86_400_000, l.tracker, l.cfg.tf);
+    }
+  }
+
+  // Live EMA state per timeframe for one symbol — the /ema-debug endpoint's
+  // backing data (compare against the TV chart when a detection looks off).
+  emaSnapshot(ticker: string): Array<NonNullable<ReturnType<EmaCrossTracker['snapshot']>>> {
+    const out = [];
+    const s5 = this.emaCross.snapshot(ticker);
+    if (s5) out.push(s5);
+    for (const l of this.htfLayers) {
+      const s = l.tracker.snapshot(ticker);
+      if (s) out.push(s);
+    }
+    return out;
   }
 
   // Replay one table's bars through a tracker, per-symbol and split-adjusted
   // (DB keeps raw truth; the adjustment is read-side — see
   // adjustSplitHistory for why raw seed history breaks the EMA scale).
   private async seedTrackerFromTable(
-    table: 'bars_5m' | 'bars_4h',
+    table: 'bars_5m' | 'bars_1h' | 'bars_4h',
     windowMs: number,
     tracker: EmaCrossTracker,
     label: string,
@@ -416,7 +467,7 @@ class TickFeedService {
         this.backfilledOk += ok;
         console.log(`[ema-backfill] done — ${ok}/${targets.length} backfilled (${viaYahoo} via Yahoo), ${seeded} tracker-seeded, ${persisted} bars persisted`);
       }
-      await this.scanBackfill4h();
+      for (const l of this.htfLayers) await this.scanBackfillHtf(l);
     } catch (err) {
       console.error('[ema-backfill] scan failed (continuing):', err instanceof Error ? err.message : err);
     } finally {
@@ -424,69 +475,66 @@ class TickFeedService {
     }
   }
 
-  // 4h-layer backfill: 120 days of Databento ohlcv-1h aggregated to the
-  // ET-aligned 4h grid — batched 100 symbols/request. Depth matters more
-  // than warmup here (the WOK lesson, 2026-07-17): a 4h EMA50 spans ~50
-  // bars ≈ 5 weeks, so a 35d window made our EMA50 ≈ the recent flat
-  // average (2.02) while TV's — with months of memory — was still way
-  // above (2.63) after WOK's collapse, and a $2.04 uptick "crossed". ~150
-  // bars of history puts the SMA seed's influence under ~2% and our EMA50
-  // within pennies of TV's. Skip a symbol once it has ≥150 banked bars OR
-  // its banked history already reaches back ≥100d (recently-listed names
-  // can never satisfy either — the once/day attempt set bounds their cost).
-  // No Yahoo fallback: a name that printed nothing on MINI has no usable
-  // sibling baseline anyway. Persists to bars_4h (130d retention) so
-  // subsequent boots seed from the DB.
-  private async scanBackfill4h(): Promise<void> {
+  // HTF-layer backfill: `spanDays` of Databento ohlcv-1h re-bucketed to the
+  // layer's grid — batched 100 symbols/request. Depth matters more than
+  // warmup here (the WOK lesson, 2026-07-17): an EMA50 needs ~150 banked
+  // bars for the SMA seed's influence to drop under ~2% and match TV within
+  // pennies; a window ≈1× the EMA span leaves it at the recent average and
+  // any poke "crosses". Skip a symbol once it has ≥minBars banked OR its
+  // banked history reaches back ≥deepDays (recently-listed names can never
+  // satisfy either — the once/day attempt set bounds their cost). No Yahoo
+  // fallback: a name that printed nothing on MINI has no usable sibling
+  // baseline anyway. Persists to the layer's table so boots seed from DB.
+  private async scanBackfillHtf(l: HtfLayer): Promise<void> {
     const have = new Map<string, { n: number; earliestMs: number }>();
     const rows = await getDb()
-      .selectFrom('bars_4h')
+      .selectFrom(l.table)
       .select(['ticker',
         (eb) => eb.fn.countAll<number>().as('n'),
         (eb) => eb.fn.min('bar_ts').as('earliest'),
       ])
-      .where('bar_ts', '>', new Date(Date.now() - 130 * 86_400_000))
+      .where('bar_ts', '>', new Date(Date.now() - l.retentionDays * 86_400_000))
       .groupBy('ticker')
       .execute();
     for (const r of rows) have.set(r.ticker, { n: Number(r.n), earliestMs: new Date(r.earliest as Date).getTime() });
-    const deepEnoughMs = Date.now() - 100 * 86_400_000;
+    const deepEnoughMs = Date.now() - l.deepDays * 86_400_000;
     const targets: string[] = [];
     for (const tk of poller.getKnownRunners()) {
-      if (this.backfillAttempted4h.has(tk)) continue;
+      if (l.attempted.has(tk)) continue;
       const h = have.get(tk);
-      if (h && (h.n >= 150 || h.earliestMs <= deepEnoughMs)) continue;
+      if (h && (h.n >= l.minBars || h.earliestMs <= deepEnoughMs)) continue;
       targets.push(tk);
       if (targets.length >= 1600) break;
     }
     if (targets.length === 0) return;
-    console.log(`[ema-backfill] 4h: ${targets.length} known runners below EMA-convergence depth — Databento ohlcv-1h (120d)`);
+    console.log(`[ema-backfill] ${l.cfg.tf}: ${targets.length} known runners below EMA-convergence depth — Databento ohlcv-1h (${l.spanDays}d)`);
     let ok = 0, seeded = 0, persisted = 0;
     const CHUNK = 100;
-    const off = etBucketOffsetSec();
+    const off = l.offset();
     for (let i = 0; i < targets.length; i += CHUNK) {
       if (!this.running) return;
       const chunk = targets.slice(i, i + CHUNK);
-      chunk.forEach((t) => this.backfillAttempted4h.add(t));
-      const batch = await fetchDatabentoAgg(chunk, 'ohlcv-1h', 120, 14_400, off);
+      chunk.forEach((t) => l.attempted.add(t));
+      const batch = await fetchDatabentoAgg(chunk, 'ohlcv-1h', l.spanDays, l.cfg.interval_sec, off);
       if (!batch) {
         // One failed chunk must not starve the rest of the fleet (the first
         // live pass aborted entirely on a transient 422). These symbols
-        // retry on the next 4h rescan.
-        chunk.forEach((t) => this.backfillAttempted4h.delete(t));
-        console.error(`[ema-backfill] 4h chunk failed (${chunk[0]}…${chunk[chunk.length - 1]}) — will retry next scan`);
+        // retry on the next rescan.
+        chunk.forEach((t) => l.attempted.delete(t));
+        console.error(`[ema-backfill] ${l.cfg.tf} chunk failed (${chunk[0]}…${chunk[chunk.length - 1]}) — will retry next scan`);
         continue;
       }
       for (const tk of chunk) {
         const bars = batch.get(tk);
         if (!bars || bars.length === 0) continue;
         ok++;
-        if (this.emaCross4h.canSeed(tk)) {
-          for (const b of adjustSplitHistory(bars)) this.emaCross4h.seedBar(tk, b.closeTs, b.close, b.volume);
+        if (l.tracker.canSeed(tk)) {
+          for (const b of adjustSplitHistory(bars)) l.tracker.seedBar(tk, b.closeTs, b.close, b.volume);
           seeded++;
         }
         persisted += bars.length;
         void getDb()
-          .insertInto('bars_4h')
+          .insertInto(l.table)
           .values(bars.map((b) => ({ ticker: tk, bar_ts: new Date(b.closeTs * 1000), close: b.close, volume: b.volume })))
           .onConflict((oc) => oc.columns(['ticker', 'bar_ts']).doNothing())
           .execute()
@@ -494,7 +542,7 @@ class TickFeedService {
       }
       await new Promise((r) => setTimeout(r, 500));
     }
-    console.log(`[ema-backfill] 4h done — ${ok}/${targets.length} backfilled, ${seeded} tracker-seeded, ${persisted} bars persisted`);
+    console.log(`[ema-backfill] ${l.cfg.tf} done — ${ok}/${targets.length} backfilled, ${seeded} tracker-seeded, ${persisted} bars persisted`);
   }
 
   // Apply fetched history for one symbol: direct-seed the tracker only while
@@ -535,10 +583,11 @@ class TickFeedService {
           }
         });
     }
-    if (this.bar4hBuffer.length > 0) {
-      const rows = this.bar4hBuffer.splice(0);
+    for (const l of this.htfLayers) {
+      if (l.buffer.length === 0) continue;
+      const rows = l.buffer.splice(0);
       void getDb()
-        .insertInto('bars_4h')
+        .insertInto(l.table)
         .values(rows)
         .onConflict((oc) => oc.columns(['ticker', 'bar_ts']).doNothing())
         .execute()
@@ -591,22 +640,24 @@ class TickFeedService {
       this.etDate = today;
       this.detector.reset();
       this.emaCross.resetDaily();
-      this.emaCross4h.resetDaily();
-      this.emaCross4h.setBucketOffset(etBucketOffsetSec()); // DST roll-over safe
       this.extraSubs.clear();
       this.backfillAttempted.clear();
-      this.backfillAttempted4h.clear();
       // Prune persisted bars beyond their seed windows (fire-and-forget).
       void getDb()
         .deleteFrom('bars_5m')
         .where('bar_ts', '<', new Date(Date.now() - 3 * 86_400_000))
         .execute()
         .catch(() => { /* retried next midnight */ });
-      void getDb()
-        .deleteFrom('bars_4h')
-        .where('bar_ts', '<', new Date(Date.now() - 130 * 86_400_000))
-        .execute()
-        .catch(() => { /* retried next midnight */ });
+      for (const l of this.htfLayers) {
+        l.tracker.resetDaily();
+        l.tracker.setBucketOffset(l.offset()); // DST roll-over safe
+        l.attempted.clear();
+        void getDb()
+          .deleteFrom(l.table)
+          .where('bar_ts', '<', new Date(Date.now() - l.retentionDays * 86_400_000))
+          .execute()
+          .catch(() => { /* retried next midnight */ });
+      }
       // Fresh Databento session for the new day.
       this.child?.kill();
       console.log('[tickfeed] midnight ET — detector reset, sidecar will respawn');
@@ -710,14 +761,16 @@ class TickFeedService {
       else this.fades++;
       poller.onTickEvent(ev);
     }
-    // 📈 EMA-cross layers (5m + 4h) — known runners only (the operator's
+    // 📈 EMA-cross layers (5m + HTF) — known runners only (the operator's
     // spec: "check our momentum tickers of our database"), everything else
     // skips the trackers.
     if (poller.isKnownRunner(m.s)) {
       const xev = this.emaCross.addBar(m.s, m.t, m.c, m.v);
       if (xev) poller.onEmaCrossEvent(xev);
-      const xev4 = this.emaCross4h.addBar(m.s, m.t, m.c, m.v);
-      if (xev4) poller.onEmaCrossEvent(xev4);
+      for (const l of this.htfLayers) {
+        const hev = l.tracker.addBar(m.s, m.t, m.c, m.v);
+        if (hev) poller.onEmaCrossEvent(hev);
+      }
     }
     // Surface near-miss reasons (gapped vs which gate) so the rollout is
     // debuggable — why a moving name didn't fire.

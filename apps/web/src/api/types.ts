@@ -344,7 +344,7 @@ export interface NewsRadarItem {
 // tool — rows linger ~6h, the nomination itself is the signal).
 export interface EmaCrossItem {
   ticker: string;
-  tf: '5m' | '4h';
+  tf: '5m' | '1h' | '4h';
   status: 'observing' | 'confirmed';
   price: number;
   cross_price: number;

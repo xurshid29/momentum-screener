@@ -4,7 +4,7 @@
 // confirm), instant-confirm and its notional demotion to nominate, the price
 // hold, the post-expire re-arm cooldown (the TGHL lesson), confirm-ends-the-
 // day, and boot-seed silence. Run: npx tsx scripts/verify-ema-cross.ts
-import { EmaCrossTracker, EMA_CROSS, EMA_CROSS_4H, adjustSplitHistory, type EmaCrossConfig, type EmaCrossEvent } from '../src/services/ema-cross.js';
+import { EmaCrossTracker, EMA_CROSS, EMA_CROSS_1H, EMA_CROSS_4H, adjustSplitHistory, type EmaCrossConfig, type EmaCrossEvent } from '../src/services/ema-cross.js';
 
 const T0 = 1_750_000_200; // aligned to a 5m boundary; absolute value irrelevant
 
@@ -254,6 +254,52 @@ console.log('S13 — split adjustment: reverse splits rescale seed history; real
   check('real overnight crash (-89%) untouched — down-moves are never splits', crash[0].close === 11.3);
   const intraday = adjustSplitHistory(mk([[0, 0.9, 1000], [14_400, 3.95, 9000]]));
   check('same-session 4.4× pump untouched', intraday[0].close === 0.9);
+}
+
+console.log('S14 — golden reference: tracker EMAs match an independent implementation exactly');
+{
+  // Deterministic pseudo-random walk (LCG) — 400 bars of jittery prices and
+  // volumes, fed tick-by-tick; the tracker's internal EMA state must equal a
+  // straightforward EMA computed over the same CLOSED bar sequence.
+  let x = 42;
+  const rnd = () => ((x = (x * 1103515245 + 12345) % 2147483648) / 2147483648);
+  const s = new Sim();
+  const closes: number[] = [];
+  let price = 2.0;
+  for (let i = 0; i < 400; i++) {
+    price = Math.max(0.2, price * (1 + (rnd() - 0.5) * 0.06));
+    const vol = Math.round(500 + rnd() * 20_000);
+    closes.push(price);
+    s.bar(price, vol);
+  }
+  // The last fed bar is still open — the reference covers the closed 399.
+  const closed = closes.slice(0, -1);
+  const ref = (len: number): number => {
+    let e = 0, seed = 0;
+    closed.forEach((c, i) => {
+      const n = i + 1;
+      if (n <= len) { seed += c; if (n === len) e = seed / len; }
+      else e = c * (2 / (len + 1)) + e * (1 - 2 / (len + 1));
+    });
+    return e;
+  };
+  const snap = s.tracker.snapshot('TEST')!;
+  check('bars counted', snap.bars === closed.length, `${snap.bars} vs ${closed.length}`);
+  check('EMA6 exact', Math.abs((snap.ema_fast ?? 0) - ref(6)) < 1e-9,
+    `${snap.ema_fast} vs ${ref(6)}`);
+  check('EMA50 exact', Math.abs((snap.ema_slow ?? 0) - ref(50)) < 1e-9,
+    `${snap.ema_slow} vs ${ref(50)}`);
+}
+
+console.log('S15 — 1h config: same machine at interval 3600, tf-stamped');
+{
+  const s = new Sim('TEST', EMA_CROSS_1H);
+  warmDipped(s, 1.0, 10_000);
+  s.bar(0.95, 1_000);
+  const nom = s.tick(1.35, 4_000);
+  check('1h intrabar nomination fires with tf=1h', nom?.type === 'nominate' && nom.tf === '1h' && nom.intrabar === true);
+  const cf = s.tick(1.4, 50_000, 90);
+  check('1h intrabar confirm on accumulated volume', cf?.type === 'confirm' && cf.tf === '1h');
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);

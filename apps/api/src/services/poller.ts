@@ -317,9 +317,11 @@ export interface NewsRadarItem {
 // 'confirmed' when volume expands vs its sibling candles with price holding
 // (the operator's manual TV loop, automated). Unconfirmed nominations are
 // pruned silently. See services/ema-cross.ts + onEmaCrossEvent.
+export type EmaCrossTf = '5m' | '1h' | '4h';
+
 export interface EmaCrossItem {
   ticker: string;
-  tf: '5m' | '4h';        // which timeframe layer fired
+  tf: EmaCrossTf;         // which timeframe layer fired
   status: 'observing' | 'confirmed';
   price: number;
   cross_price: number;
@@ -328,10 +330,19 @@ export interface EmaCrossItem {
   confirmed_at: string | null;
 }
 
-// 4h cross rows stay visible this long after their last event (both
-// statuses) — the nomination is the operator's working set on that layer,
-// unlike 5m where unconfirmed rows prune fast.
-const CROSS_4H_DISPLAY_MS = 6 * 3600 * 1000;
+// HTF cross rows stay visible this long after their last event (both
+// statuses) — the nomination is the operator's working set on those layers,
+// unlike 5m where unconfirmed rows prune fast. Per-tf display caps keep one
+// noisy timeframe from crowding out the others in the payload.
+const CROSS_DISPLAY_MS: Record<Exclude<EmaCrossTf, '5m'>, number> = {
+  '1h': 3 * 3600 * 1000,
+  '4h': 6 * 3600 * 1000,
+};
+const CROSS_DISPLAY_CAP: Record<EmaCrossTf, number> = { '5m': 10, '1h': 8, '4h': 8 };
+
+function emaCrossTfOf(v: unknown): EmaCrossTf {
+  return v === '4h' ? '4h' : v === '1h' ? '1h' : '5m';
+}
 
 export interface CyclePayload {
   cycle_id: string;
@@ -708,9 +719,9 @@ class PollerService {
   // igniting name is exactly what the operator wants eyes on.
   onEmaCrossEvent(e: import('./ema-cross.js').EmaCrossEvent): void {
     const nowMs = Date.now();
-    const tf: EmaCrossItem['tf'] = e.tf === '4h' ? '4h' : '5m';
+    const tf = emaCrossTfOf(e.tf);
     const key = `${tf}|${e.ticker}`;
-    const tfTag = tf === '4h' ? ' (4h)' : '';
+    const tfTag = tf === '5m' ? '' : ` (${tf})`;
     if (e.type === 'nominate' || (e.type === 'confirm' && !this.emaCrosses.has(key))) {
       const inLadder = this.tickCatches.has(e.ticker);
       recordTierEvent('cross', e.type, e.ticker, {
@@ -1179,7 +1190,7 @@ class PollerService {
             this.newsRadar.delete(t);
           }
         } else if (r.tier === 'cross') {
-          const xtf: EmaCrossItem['tf'] = m.tf === '4h' ? '4h' : '5m';
+          const xtf = emaCrossTfOf(m.tf);
           const xkey = `${xtf}|${t}`;
           if (r.event === 'confirm') {
             const prev = this.emaCrosses.get(xkey);
@@ -1194,7 +1205,7 @@ class PollerService {
               confirmed_at: iso(atMs),
               last_event_ms: atMs,
             });
-          } else if (r.event === 'nominate' && (m.in_ladder !== true || xtf === '4h')) {
+          } else if (r.event === 'nominate' && (m.in_ladder !== true || xtf !== '5m')) {
             // Track for cross_at continuity only — pruned below unless a
             // confirm follows (the old process's observation died with it).
             this.emaCrosses.set(xkey, {
@@ -1222,10 +1233,10 @@ class PollerService {
       }
       for (const [t, xc] of this.emaCrosses) {
         // 5m observing rows drop (their tracker observation died with the
-        // old process); 4h rows survive within the display window — the
-        // nomination itself is the operator's product on that layer.
-        if (xc.tf === '4h') {
-          if (nowMs - xc.last_event_ms > CROSS_4H_DISPLAY_MS) this.emaCrosses.delete(t);
+        // old process); HTF rows survive within their display windows — the
+        // nomination itself is the operator's product on those layers.
+        if (xc.tf !== '5m') {
+          if (nowMs - xc.last_event_ms > CROSS_DISPLAY_MS[xc.tf]) this.emaCrosses.delete(t);
         } else if (xc.status === 'observing' || nowMs - xc.last_event_ms > 30 * 60 * 1000) {
           this.emaCrosses.delete(t);
         }
@@ -2211,13 +2222,14 @@ class PollerService {
 
     // 📈 EMA-cross layers — the tracker expires observations by BAR count,
     // but a sparse tape can stall bars; safety-prune on wall clock too. 5m:
-    // confirmed shows 30 min, observing 45 min. 4h: both statuses show 6h —
-    // the nomination is the operator's working set on that layer.
+    // confirmed shows 30 min, observing 45 min. HTF (1h/4h): both statuses
+    // show their display window — the nomination is the operator's working
+    // set there. One payload list, capped per tf (the UI groups by tf).
     const CROSS_OBSERVE_SAFETY_MS = 45 * 60 * 1000;
     const CROSS_CONFIRMED_TTL_MS = 30 * 60 * 1000;
     const emaCrossList: EmaCrossItem[] = [];
     for (const [t, xc] of this.emaCrosses) {
-      const ttl = xc.tf === '4h' ? CROSS_4H_DISPLAY_MS
+      const ttl = xc.tf !== '5m' ? CROSS_DISPLAY_MS[xc.tf]
         : xc.status === 'confirmed' ? CROSS_CONFIRMED_TTL_MS : CROSS_OBSERVE_SAFETY_MS;
       if (nowMsTick - xc.last_event_ms > ttl) {
         this.emaCrosses.delete(t);
@@ -2231,7 +2243,8 @@ class PollerService {
     emaCrossList.sort((a, b) =>
       (a.status === 'confirmed' ? 0 : 1) - (b.status === 'confirmed' ? 0 : 1)
       || (b.confirmed_at ?? b.cross_at).localeCompare(a.confirmed_at ?? a.cross_at));
-    const emaCrossDisplay = emaCrossList.slice(0, 16);
+    const crossTfCount: Record<EmaCrossTf, number> = { '5m': 0, '1h': 0, '4h': 0 };
+    const emaCrossDisplay = emaCrossList.filter((x) => ++crossTfCount[x.tf] <= CROSS_DISPLAY_CAP[x.tf]);
 
     // After-hours: re-impose a volume gate on the momentum list. Finviz drops
     // its relvol filter at the close, so names that ticked >5% on a few AH

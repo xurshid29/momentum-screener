@@ -88,6 +88,27 @@ export const EMA_CROSS: EmaCrossConfig = {
   bucket_offset_sec: 0,
 };
 
+// The 1h layer (2026-07-21): the middle timeframe, added when the operator
+// asked for configurable intervals. Same machinery; 1h buckets align to
+// hour boundaries in every timezone, so the anchor offset is always 0.
+export const EMA_CROSS_1H: EmaCrossConfig = {
+  tf: '1h',
+  interval_sec: 3_600,
+  fast: 6,
+  slow: 50,
+  warmup_bars: 50,          // ~3-8 trading days of ETH bars
+  sibling_bars: 12,         // ~a trading day of volume context
+  sibling_min_sh: 50,
+  observe_bars: 6,          // ~6h observation
+  confirm_vol_x: 3,
+  confirm_price_ext: 0.005,
+  instant_vol_x: 5,
+  confirm_min_notional: 10_000,
+  renominate_cooldown_sec: 7_200, // two bars
+  intrabar_detect: true,
+  bucket_offset_sec: 0,
+};
+
 // The 4h layer (2026-07-17): the operator's swing-timing loop — same 6/50
 // cross, 4-hour ETH bars, detected intrabar the second it happens. They keep
 // the entry filter and the exit; this is a pure detection tool (dashboard
@@ -227,6 +248,33 @@ export class EmaCrossTracker {
   // change at the midnight roll — no buckets are open then.
   setBucketOffset(sec: number): void {
     this.bucketOff = sec;
+  }
+
+  // Read-only debug view of a symbol's live EMA state — powers the
+  // /ema-debug endpoint so the operator can compare our EMAs against the
+  // same symbol's TV chart whenever a detection looks off (the WOK class).
+  snapshot(ticker: string): {
+    tf: string; bars: number; ema_fast: number | null; ema_slow: number | null;
+    prev_diff: number | null; sib_median: number; observing: boolean;
+    confirmed_today: boolean; locked_until: number; open_bucket_ts: number | null;
+    open_bucket_close: number | null; open_bucket_vol: number | null;
+  } | null {
+    const st = this.state.get(ticker);
+    if (!st) return null;
+    return {
+      tf: this.cfg.tf,
+      bars: st.bars,
+      ema_fast: st.emaF,
+      ema_slow: st.emaS,
+      prev_diff: st.prevDiff,
+      sib_median: median(st.sibVols),
+      observing: st.watch != null,
+      confirmed_today: st.confirmedToday,
+      locked_until: st.lockedUntil,
+      open_bucket_ts: st.bucketStart === -1 ? null : st.bucketStart,
+      open_bucket_close: st.bucketStart === -1 ? null : st.bucketClose,
+      open_bucket_vol: st.bucketStart === -1 ? null : st.bucketVol,
+    };
   }
 
   // True when historical bars may still be seeded for this symbol — i.e. it

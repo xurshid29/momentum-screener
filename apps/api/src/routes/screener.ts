@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
 import { authService } from '../services/auth.js';
 import { poller } from '../services/poller.js';
+import { tickfeed } from '../services/tickfeed.js';
 import { dailyBars, getRecentBars } from '../services/daily-bars.js';
 import { addClient } from '../services/sse.js';
 import { getDb } from '../db/index.js';
@@ -17,6 +18,17 @@ router.get('/latest', authMiddleware, (_req, res) => {
     return res.json({ data: { rows: [], polled_at: null, config: poller.getConfig(), banners: { new_with_catalyst: [], fresh_news: [] }, fresh_news: [] } });
   }
   res.json({ data: p });
+});
+
+// GET /api/screener/ema-debug?ticker=X — live EMA-cross tracker state for
+// one symbol across every timeframe layer. The "is it working correctly?"
+// tool: pull this while looking at the same symbol's TV chart and the
+// ema_fast/ema_slow values should match TV's EMA 6/50 within pennies
+// (residual gap = bar-set differences). Timestamps are epoch seconds.
+router.get('/ema-debug', authMiddleware, (req, res) => {
+  const ticker = typeof req.query.ticker === 'string' ? req.query.ticker.toUpperCase() : null;
+  if (!ticker) return res.status(400).json({ error: 'ticker required' });
+  res.json({ data: { ticker, layers: tickfeed.emaSnapshot(ticker) } });
 });
 
 // GET /api/screener/cycles — paginated history.

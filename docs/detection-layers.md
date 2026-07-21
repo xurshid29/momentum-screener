@@ -183,10 +183,22 @@ soft ping on confirm only. Timestamps are bar-close times; "ago" anchors on
 the cross (matches the TV chart). Names already in the LIVE TICKS ladder skip
 display (logged `in_ladder`). No Telegram until graded.
 
-**4h variant (2026-07-17, operator's swing-timing tool).** Same tracker at
-`interval_sec: 14400` (`EMA_CROSS_4H`), buckets anchored to the ET session
+**Timeframe layers (configurable, 2026-07-21).** The tracker is config-driven
+(`EmaCrossConfig`); live layers: **5m** (bespoke — 48h bars_5m replay covers
+its warmup, Yahoo fallback) plus the **HTF list** in `tickfeed.ts`
+(`htfLayers`): **1h** (`EMA_CROSS_1H`, bars_1h, 30d backfill / 35d retention)
+and **4h** (`EMA_CROSS_4H`, bars_4h, 120d/130d). Adding/removing an interval
+= one `makeHtfLayer` entry + its bars_* migration; boot seed, live feed,
+persistence, retention, backfill and /health all loop the list. The UI shows
+one section per timeframe (📈 EMA 5M / 1H / 4H), payload capped per tf.
+**Live-state audit tool:** `GET /api/screener/ema-debug?ticker=X` returns
+every layer's current EMA6/EMA50/bar-count/sibling-median for that symbol —
+compare against the TV chart whenever a detection looks off (the WOK class).
+A golden-reference test (S14) pins the EMA math to an independent
+implementation exactly.
+4h buckets anchor to the ET session
 grid (04:00/08:00/12:00/16:00 ET — TV's ETH 4h bars; EDT offset 0, EST 3600,
-recomputed at midnight). The operator keeps the entry filter and the exit —
+recomputed at midnight); 1h buckets are hour-aligned everywhere. The operator keeps the entry filter and the exit —
 this layer is a pure detection tool: intrabar nomination the second the 4h
 cross happens, **dashboard-only** (4H badge in the EMA CROSS section, rows
 linger 6h; no Telegram, no ping) until tier_events (`meta.tf='4h'`) shows the

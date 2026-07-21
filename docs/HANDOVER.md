@@ -31,7 +31,9 @@ cost — `watch_suppressed reason='low_evidence'` tickers that later confirmed;
 ≥+20pts) + whether the news-gated 🤫 Telegram picks winners; (d) radar
 precision by catalyst type. Then promote/demote Telegram gates accordingly.
 
-**Recent focus trail** (each has a dated entry below): 07-17 X4H (📈 4h
+**Recent focus trail** (each has a dated entry below): 07-21 EMAX (📈
+configurable intervals + 1h layer, per-tf UI sections, hideable LIVE
+TICKS/ignition, golden EMA test + ema-debug endpoint) · 07-17 X4H (📈 4h
 cross layer — operator's swing-timing tool, dashboard-only) · 07-16 XINTRA
 (📈 intrabar TV-parity — the ~5-min lag closed) + XMETA (📈 hardening:
 Databento backfill, cooldown re-arm, notional floor, gradable meta) · 07-15
@@ -79,6 +81,28 @@ Journal; **attribution join still the open payoff**) · 06-17 tick feed go-live.
 ---
 
 ## What shipped this session (newest first, all on prod unless noted)
+
+EMAX. **📈 EMA-cross layer promoted to first-class citizen (2026-07-21, the
+operator's favorite component).** Four asks, all shipped: (1) **intervals
+are configurable** — tracker refactored around an `htfLayers` list in
+tickfeed (`makeHtfLayer(cfg, table, {spanDays, retentionDays, deepDays,
+offset})`); **1h added** (`EMA_CROSS_1H`, migration `20260721130000_bars_1h`,
+30d Databento backfill / 35d retention, 2-bar cooldown); adding/removing an
+interval = one entry + one migration. (2) **UI groups crosses per
+timeframe** — 📈 EMA 5M / 1H / 4H sections, payload capped per tf (10/8/8),
+HTF display windows 3h/6h. (3) **LIVE TICKS + ignition NEW/TOP list are
+hideable** — new header toggles (🛰️/⚡, strikethrough when off), persisted
+per-user in `user_panel_layout` (`hide_live_ticks`/`hide_ignition_list`);
+DISPLAY-ONLY: poller/alerts/tier_events untouched, re-enable is instant;
+hiding the ignition list uncaps the EMA sections' heights. (4)
+**calculation review** — golden-reference test (S14: tracker EMAs equal an
+independent implementation to 1e-9 over a 400-bar random walk) + new
+`GET /api/screener/ema-debug?ticker=X` returning each layer's live
+EMA6/EMA50/bars/sibling-median (+ observation state) for TV-chart
+comparison; verify script now 15 scenarios. Audit found no defects in the
+closed-bar/intrabar math beyond the already-fixed WOK classes; known
+remaining approximations documented in detection-layers.md (session-blind
+sibling window at the open, bars-not-minutes observation).
 
 X4H. **📈 4h EMA-cross layer — the operator's swing-timing tool (2026-07-17).**
 Operator showed 4 charts (KYTX/SHPH/CODX/CNTX) of 4h 6/50 crosses preceding

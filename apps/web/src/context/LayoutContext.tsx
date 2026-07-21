@@ -20,6 +20,12 @@ interface LayoutContextValue {
   setMomentumNewsOnly: (v: boolean) => void;
   ignitionNewsOnly: boolean;
   setIgnitionNewsOnly: (v: boolean) => void;
+  // Sidebar section visibility — display-only hiding (server keeps
+  // computing/alerting/grading); toggled from the sidebar header, persisted.
+  hideLiveTicks: boolean;
+  setHideLiveTicks: (v: boolean) => void;
+  hideIgnitionList: boolean;
+  setHideIgnitionList: (v: boolean) => void;
 }
 
 const LayoutContext = createContext<LayoutContextValue | null>(null);
@@ -28,6 +34,8 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
   const [chartCount, setChartCountState] = useState<ChartCount>(DEFAULT_CHART_COUNT);
   const [momentumNewsOnly, setMomentumNewsOnlyState] = useState(false);
   const [ignitionNewsOnly, setIgnitionNewsOnlyState] = useState(false);
+  const [hideLiveTicks, setHideLiveTicksState] = useState(false);
+  const [hideIgnitionList, setHideIgnitionListState] = useState(false);
   const { data: serverLayout } = useQuery({
     queryKey: ['prefs', 'layout'],
     queryFn: () => prefsApi.getLayout(),
@@ -46,6 +54,12 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
     if (typeof serverLayout?.ignition_news_only === 'boolean') {
       setIgnitionNewsOnlyState(serverLayout.ignition_news_only);
     }
+    if (typeof serverLayout?.hide_live_ticks === 'boolean') {
+      setHideLiveTicksState(serverLayout.hide_live_ticks);
+    }
+    if (typeof serverLayout?.hide_ignition_list === 'boolean') {
+      setHideIgnitionListState(serverLayout.hide_ignition_list);
+    }
     hydrated.current = true;
   }, [serverLayout]);
 
@@ -55,6 +69,8 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
       chart_count: chartCount,
       momentum_news_only: momentumNewsOnly,
       ignition_news_only: ignitionNewsOnly,
+      hide_live_ticks: hideLiveTicks,
+      hide_ignition_list: hideIgnitionList,
       ...patch,
     };
     prefsApi.putLayout(next).catch(() => {});
@@ -75,6 +91,16 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
     persist({ ignition_news_only: v });
   };
 
+  const setHideLiveTicks = (v: boolean) => {
+    setHideLiveTicksState(v);
+    persist({ hide_live_ticks: v });
+  };
+
+  const setHideIgnitionList = (v: boolean) => {
+    setHideIgnitionListState(v);
+    persist({ hide_ignition_list: v });
+  };
+
   return (
     <LayoutContext.Provider
       value={{
@@ -84,6 +110,10 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
         setMomentumNewsOnly,
         ignitionNewsOnly,
         setIgnitionNewsOnly,
+        hideLiveTicks,
+        setHideLiveTicks,
+        hideIgnitionList,
+        setHideIgnitionList,
       }}
     >
       {children}

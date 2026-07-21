@@ -10,6 +10,11 @@ export interface PanelLayout {
   momentum_news_only?: boolean;
   // Same display filter for the Ignition sidebar.
   ignition_news_only?: boolean;
+  // Sidebar section visibility — display-only (the server keeps computing,
+  // alerting, and grading everything; re-enabling is instant). Hidden
+  // sections free their space for the EMA-cross lists.
+  hide_live_ticks?: boolean;
+  hide_ignition_list?: boolean;
 }
 
 export const prefsApi = {
