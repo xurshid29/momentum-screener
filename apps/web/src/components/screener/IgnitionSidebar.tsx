@@ -401,7 +401,7 @@ function TickItem({ tc, selected, onSelect }: { tc: TickCatch; selected: boolean
   );
 }
 
-// An EMA-cross row — a 6/50 crossover on 5m bars, either under its ~30-min
+// An EMA-cross row — a 10/65 crossover, either under its volume
 // volume observation (dim, "…observing") or volume-confirmed (bright green,
 // shows the expansion multiple). Click to chart it.
 function EmaCrossRow({ item, selected, onSelect }: {

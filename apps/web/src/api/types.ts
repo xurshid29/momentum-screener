@@ -337,7 +337,7 @@ export interface NewsRadarItem {
   escalated_via: 'tick' | 'screen' | null;
 }
 
-// 📈 EMA-cross layer — a 6/50 bullish cross nominated a known runner
+// 📈 EMA-cross layer — a 10/65 bullish cross nominated a known runner
 // ('observing'); volume expansion vs sibling candles with price holding
 // flips it to 'confirmed'. Two timeframes share the section: 5m (intraday;
 // unconfirmed entries vanish fast) and 4h (the operator's swing-timing

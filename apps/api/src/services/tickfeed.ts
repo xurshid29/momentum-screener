@@ -224,7 +224,9 @@ function makeHtfLayer(
   const layer: HtfLayer = {
     cfg, table, buffer: [], attempted: new Set(),
     spanDays: opts.spanDays, retentionDays: opts.retentionDays,
-    minBars: 150, deepDays: opts.deepDays, offset: opts.offset,
+    // EMA(65) needs ~190 banked bars for the SMA seed's influence to drop
+    // under ~2% (was 150 for EMA50) — round up for margin.
+    minBars: 200, deepDays: opts.deepDays, offset: opts.offset,
     tracker: null as unknown as EmaCrossTracker,
   };
   layer.tracker = new EmaCrossTracker(
@@ -238,9 +240,9 @@ function makeHtfLayer(
 
 class TickFeedService {
   private detector = new TickDetector();
-  // 📈 EMA 6/50 cross layer on 5m bars, known runners only — see ema-cross.ts.
-  // Every LIVE closed bar is buffered for persistence (bars_5m) so the
-  // ~50-bar warmup survives deploys; boot replays the last 48h.
+  // 📈 EMA cross layer (10/65) on 5m bars, known runners only — see
+  // ema-cross.ts. Every LIVE closed bar is buffered for persistence
+  // (bars_5m) so the warmup survives deploys; boot replays the last 48h.
   private emaCross = new EmaCrossTracker(EMA_CROSS, (ticker, closeTs, close, volume) => {
     this.barBuffer.push({ ticker, bar_ts: new Date(closeTs * 1000), close, volume });
   });
@@ -344,7 +346,7 @@ class TickFeedService {
     this.child = null;
   }
 
-  // Replay persisted bars through the trackers so the EMA(6/50) warmups
+  // Replay persisted bars through the trackers so the EMA-cross warmups
   // survive deploys — 5m from bars_5m (48h), 4h from bars_4h (40d). Three
   // deploys on 2026-07-14 left the 5m layer silent all of 07-15 — this
   // closes that; the 4h layer can NEVER warm up live (~2-3 weeks of bars),
@@ -433,7 +435,7 @@ class TickFeedService {
       const targets: string[] = [];
       for (const tk of poller.getKnownRunners()) {
         if (this.backfillAttempted.has(tk)) continue;
-        if ((counts.get(tk) ?? 0) >= 50) continue;
+        if ((counts.get(tk) ?? 0) >= EMA_CROSS.warmup_bars) continue;
         targets.push(tk);
         if (targets.length >= 800) break;
       }

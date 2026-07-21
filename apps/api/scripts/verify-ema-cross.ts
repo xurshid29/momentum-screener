@@ -54,21 +54,22 @@ class Sim {
   }
 }
 
-// Warm the EMAs into a below-zero diff: flat, then a dip. 55 closed bars —
-// past warmup_bars(50), with EMA6 well under EMA50, ready to cross on a rally.
+// Warm the EMAs into a below-zero diff: flat, then a dip. 80 closed bars —
+// past warmup_bars(65), with the fast EMA well under the slow one, ready to
+// cross on a rally.
 function warmDipped(s: Sim, price: number, vol: number): void {
-  s.bars(40, price, vol);
-  s.bars(15, price * 0.9, vol);
+  s.bars(55, price, vol);
+  s.bars(25, price * 0.9, vol);
 }
 
 // ---------------------------------------------------------------------------
 console.log('S1 — no events inside warmup');
 {
   const s = new Sim();
-  s.bars(20, 1.0, 10_000);
-  s.bars(10, 0.9, 10_000);
-  s.bars(15, 1.2, 60_000); // a violent cross pattern, but only 45 closed bars
-  check('silent under 50 bars', s.events.length === 0, `${s.events.length} events`);
+  s.bars(25, 1.0, 10_000);
+  s.bars(15, 0.9, 10_000);
+  s.bars(20, 1.2, 60_000); // a violent cross pattern, but only 60 closed bars
+  check('silent under warmup bars', s.events.length === 0, `${s.events.length} events`);
 }
 
 console.log('S2 — nominate, then volume-expansion confirm; confirm ends the day');
@@ -165,8 +166,8 @@ console.log('S8 — boot-seeded bars are silent but count toward warmup');
 {
   const s = new Sim();
   check('fresh symbol is seedable', s.tracker.canSeed('TEST'));
-  for (let k = 0; k < 40; k++) s.seed(1.0, 10_000);
-  for (let k = 0; k < 15; k++) s.seed(0.9, 10_000);
+  for (let k = 0; k < 55; k++) s.seed(1.0, 10_000);
+  for (let k = 0; k < 25; k++) s.seed(0.9, 10_000);
   check('seeded symbol no longer seedable', !s.tracker.canSeed('TEST'));
   check('seeding emitted nothing', s.events.length === 0 && s.liveClosed === 0);
   s.bars(5, 1.2, 10_000); // live rally right after boot — warmup carried over
@@ -285,10 +286,10 @@ console.log('S14 — golden reference: tracker EMAs match an independent impleme
   };
   const snap = s.tracker.snapshot('TEST')!;
   check('bars counted', snap.bars === closed.length, `${snap.bars} vs ${closed.length}`);
-  check('EMA6 exact', Math.abs((snap.ema_fast ?? 0) - ref(6)) < 1e-9,
-    `${snap.ema_fast} vs ${ref(6)}`);
-  check('EMA50 exact', Math.abs((snap.ema_slow ?? 0) - ref(50)) < 1e-9,
-    `${snap.ema_slow} vs ${ref(50)}`);
+  check('fast EMA exact', Math.abs((snap.ema_fast ?? 0) - ref(EMA_CROSS.fast)) < 1e-9,
+    `${snap.ema_fast} vs ${ref(EMA_CROSS.fast)}`);
+  check('slow EMA exact', Math.abs((snap.ema_slow ?? 0) - ref(EMA_CROSS.slow)) < 1e-9,
+    `${snap.ema_slow} vs ${ref(EMA_CROSS.slow)}`);
 }
 
 console.log('S15 — 1h config: same machine at interval 3600, tf-stamped');

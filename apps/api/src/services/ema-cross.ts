@@ -1,5 +1,6 @@
 // EMA-cross layer (📈, 2026-07-10) — the operator's manual TradingView loop,
-// automated: an EMA(6) over EMA(50) bullish crossover on 5-minute bars
+// automated: an EMA(fast) over EMA(slow) bullish crossover — 6/50 at launch,
+// 10/65 since 2026-07-22, the operator's evolved TV setup — on 5-minute bars
 // NOMINATES a known runner for a ~30-minute observation window; it CONFIRMS
 // only if volume expands vs its sibling candles (the prior hour's bars) with
 // price holding above the cross — otherwise it silently expires. The cross by
@@ -58,9 +59,9 @@ export interface EmaCrossConfig {
 export const EMA_CROSS: EmaCrossConfig = {
   tf: '5m',
   interval_sec: 300,   // 5-minute bars (the operator trades this TF on TV)
-  fast: 6,
-  slow: 50,
-  warmup_bars: 50,     // no crosses until the slow EMA has real shape
+  fast: 10,
+  slow: 65,
+  warmup_bars: 65,     // no crosses until the slow EMA has real shape
   sibling_bars: 12,    // volume baseline = median of the prior hour's closed bars
   sibling_min_sh: 50,  // dead-tape floor — a median below this can't "expand" meaningfully
   observe_bars: 6,     // ~30 min of post-cross observation
@@ -81,7 +82,11 @@ export const EMA_CROSS: EmaCrossConfig = {
   // (6.7×, ran +20%) would have been locked out — it only fired because a
   // deploy happened to reset the tracker. A CONFIRMED cross still ends the
   // symbol's day (it's already surfaced); an expired one re-arms after this.
-  renominate_cooldown_sec: 3600,
+  // 60→30 min 2026-07-22: tier_events showed late rallies re-cross a median
+  // ~4.5h after the first (dud) cross — the re-arm path carries 27% of all
+  // 5m confirms — and a 60-min lock suppressed re-crosses in the 30-59 min
+  // band. Operator chose the tighter lock over a longer observation window.
+  renominate_cooldown_sec: 1800,
   // TV-parity live evaluation (see header). Kill switch only — flip to false
   // if the fast path misbehaves live; detection reverts to bar-close-only.
   intrabar_detect: true,
@@ -94,9 +99,9 @@ export const EMA_CROSS: EmaCrossConfig = {
 export const EMA_CROSS_1H: EmaCrossConfig = {
   tf: '1h',
   interval_sec: 3_600,
-  fast: 6,
-  slow: 50,
-  warmup_bars: 50,          // ~3-8 trading days of ETH bars
+  fast: 10,
+  slow: 65,
+  warmup_bars: 65,          // ~4-10 trading days of ETH bars
   sibling_bars: 12,         // ~a trading day of volume context
   sibling_min_sh: 50,
   observe_bars: 6,          // ~6h observation
@@ -109,17 +114,17 @@ export const EMA_CROSS_1H: EmaCrossConfig = {
   bucket_offset_sec: 0,
 };
 
-// The 4h layer (2026-07-17): the operator's swing-timing loop — same 6/50
-// cross, 4-hour ETH bars, detected intrabar the second it happens. They keep
+// The 4h layer (2026-07-17): the operator's swing-timing loop — the same
+// cross on 4-hour ETH bars, detected intrabar the second it happens. They keep
 // the entry filter and the exit; this is a pure detection tool (dashboard
 // only, no Telegram until tier_events shows the real fire rate). Confirm
 // machinery runs identically for grading, but the NOMINATION is the product.
 export const EMA_CROSS_4H: EmaCrossConfig = {
   tf: '4h',
   interval_sec: 14_400,
-  fast: 6,
-  slow: 50,
-  warmup_bars: 50,          // ~2-3 weeks of tape — needs the bars_4h backfill
+  fast: 10,
+  slow: 65,
+  warmup_bars: 65,          // ~3-4 weeks of tape — needs the bars_4h backfill
   sibling_bars: 12,         // ~2 trading days of volume context
   sibling_min_sh: 50,
   observe_bars: 6,          // ~24h observation

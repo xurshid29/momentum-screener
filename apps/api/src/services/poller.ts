@@ -312,7 +312,7 @@ export interface NewsRadarItem {
   prior_close: number | null;
 }
 
-// 📈 EMA-cross layer — an EMA(6/50) bullish crossover on 5m bars nominated a
+// 📈 EMA-cross layer — an EMA(10/65) bullish crossover on 5m bars nominated a
 // known runner; it shows as 'observing' for the ~30-min window and flips to
 // 'confirmed' when volume expands vs its sibling candles with price holding
 // (the operator's manual TV loop, automated). Unconfirmed nominations are
@@ -708,7 +708,7 @@ class PollerService {
     return this.radarHistory;
   }
 
-  // 📈 EMA-cross layer events (see services/ema-cross.ts): a 6/50 bullish
+  // 📈 EMA-cross layer events (see services/ema-cross.ts): a 10/65 bullish
   // cross nominates a known runner for an observation; volume expansion vs
   // sibling candles confirms it; no expansion → silent prune. Two timeframes
   // share this handler — 5m (the intraday layer) and 4h (the operator's

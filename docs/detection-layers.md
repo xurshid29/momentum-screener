@@ -144,8 +144,10 @@ promote (via, minutes, pts) vs expire (peak_pts).
 
 ## 📈 EMA-cross layer (`ema-cross.ts`; **TRIAL**)
 
-**What/why.** The operator's manual TV loop, automated: an EMA(6/50) bullish
-crossover on 5-minute bars **nominates** a known runner; volume expansion vs
+**What/why.** The operator's manual TV loop, automated: an EMA bullish
+crossover — **10/65 since 2026-07-22** (6/50 at launch; ⚠️ a different
+signal — segment ALL cross grading at that date, every timeframe) — on
+5-minute bars **nominates** a known runner; volume expansion vs
 its sibling candles **confirms**. Both prior studies say the cross alone has
 zero selection power (≈0.9× random; +0.0pts paired as an entry trigger) — so
 it is strictly a nominator; the volume stage carries the precision.
@@ -162,9 +164,13 @@ closed bar with volume ≥3× the anchored sibling median AND close ≥ cross ×
 a dead-tape "3×" can be a few hundred dollars; an instant-confirm that fails
 it demotes to a normal nomination). No expansion → silent expire (peak
 telemetry). **Re-fire rules (2026-07-16):** a confirm ends the symbol's day;
-an expired observation re-arms after a 60-min cooldown
+an expired observation re-arms after a cooldown
 (`renominate_cooldown_sec` — the TGHL lesson: a weak 0.4× morning cross must
-not lock out the real 6.7× afternoon one).
+not lock out the real 6.7× afternoon one). 5m cooldown 60→**30 min**
+(2026-07-22): measured — late rallies re-cross a median ~4.5h after the dud
+cross and the re-arm path carries 27% of 5m confirms, so the observation
+window stays 30 min and the lock got tighter instead (1h/4h cooldowns
+unchanged: 2 bars / 1 bar).
 **Intrabar detection (2026-07-16, the DXST/EHGO lag report):** TV alerts
 evaluate the cross on the LIVE forming bar (the operator's alerts fired
 42–75s into the bar; bar-close-only evaluation was ~4–5 min behind). Every

@@ -25,7 +25,12 @@ sessions of tier_events):** (a) keep/kill the 📈 cross layer — nominate→co
 rate, confirmed-cross forward outcomes, overlap with 🤫/👀 (day-1 2026-07-14:
 37 nominations → 13 confirms / 14 expires; ⚠️ semantics changed 2026-07-16 —
 cooldown re-arm + confirm notional floor, see entry XMETA — segment at the
-date and count the funnel per observation, not per ticker); (b) audit the 👀 evidence gate's
+date and count the funnel per observation, not per ticker; ⚠️ EMA params
+changed 6/50→**10/65** on 2026-07-22 (operator's evolved TV setup, all
+timeframes; warmup 50→65 bars, HTF convergence target 150→200; 5m re-arm
+cooldown also 60→30 min same day, measured: re-arm carries 27% of confirms,
+late rallies re-cross median ~4.5h later) — a DIFFERENT signal, segment all
+cross grading again at 07-22); (b) audit the 👀 evidence gate's
 cost — `watch_suppressed reason='low_evidence'` tickers that later confirmed;
 (c) re-check accum v2 precision (persistence gate promised ~65% promote / 24%
 ≥+20pts) + whether the news-gated 🤫 Telegram picks winners; (d) radar

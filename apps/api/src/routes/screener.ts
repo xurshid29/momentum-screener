@@ -23,7 +23,7 @@ router.get('/latest', authMiddleware, (_req, res) => {
 // GET /api/screener/ema-debug?ticker=X — live EMA-cross tracker state for
 // one symbol across every timeframe layer. The "is it working correctly?"
 // tool: pull this while looking at the same symbol's TV chart and the
-// ema_fast/ema_slow values should match TV's EMA 6/50 within pennies
+// ema_fast/ema_slow values should match TV's EMA 10/65 within pennies
 // (residual gap = bar-set differences). Timestamps are epoch seconds.
 router.get('/ema-debug', authMiddleware, (req, res) => {
   const ticker = typeof req.query.ticker === 'string' ? req.query.ticker.toUpperCase() : null;
