@@ -466,6 +466,11 @@ function EmaCrossRow({ item, selected, onSelect, onOpenCatalyst }: {
         <span style={{ marginLeft: 6, fontSize: 10, color: freshConfirm ? '#95de64' : '#8c8c8c', fontWeight: freshConfirm ? 600 : undefined }}>
           {confirmed ? `✅ ${Math.round(item.vol_ratio)}× vol` : isHtf ? 'cross' : '… observing'} · {isHtf ? '' : 'cross '}{ago} ago
         </span>
+        {item.thin_tape && (
+          <Tooltip title="Thin tape on our feed — our EMAs may diverge from TV's here; verify the cross on the chart">
+            <span style={{ marginLeft: 4, fontSize: 10, cursor: 'help' }}>⚠️</span>
+          </Tooltip>
+        )}
       </span>
       <span style={{ flex: '0 0 auto' }}>
         <Text type="secondary" style={{ fontSize: 11 }}>{fmtPrice(item.price)}</Text>

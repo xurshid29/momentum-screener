@@ -351,6 +351,9 @@ export interface EmaCrossItem {
   vol_ratio: number;
   cross_at: string;
   confirmed_at: string | null;
+  // Our feed sees a sliver of this name's tape (sibling-median notional at
+  // the cross < ~$5k) — the EMAs may legitimately diverge from TV's. ⚠️.
+  thin_tape: boolean;
   // Today's freshest article + classification, enriched async server-side
   // (null until the lookup lands / when the name has no news today).
   news_title: string | null;

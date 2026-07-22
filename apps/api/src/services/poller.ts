@@ -329,6 +329,12 @@ export interface EmaCrossItem {
   vol_ratio: number;      // latest bar volume / sibling median
   cross_at: string;
   confirmed_at: string | null;
+  // Thin-tape honesty marker (2026-07-22, the SKYQ divergence): true when
+  // the sibling-median notional at the cross was under ~$5k — our MINI feed
+  // sees a sliver of this name's tape, so our EMAs can legitimately diverge
+  // from TV's consolidated-tape EMAs at near-tangent moments. UI shows ⚠️:
+  // "verify on the chart".
+  thin_tape: boolean;
   // News support (2026-07-22): today's freshest article + its classification,
   // enriched async after the cross fires (see enrichCrossNews). Null until
   // the lookup lands or when the ticker has no news today.
@@ -337,6 +343,8 @@ export interface EmaCrossItem {
   news_published_at: string | null;
   catalyst: CatalystInfo | null;
 }
+
+const CROSS_THIN_TAPE_NOTIONAL = 5_000;
 
 // HTF cross rows stay visible this long after their last event (both
 // statuses) — the nomination is the operator's working set on those layers,
@@ -871,6 +879,7 @@ class PollerService {
         vol_ratio: e.vol_ratio,
         cross_at: barIso,
         confirmed_at: e.type === 'confirm' ? barIso : null,
+        thin_tape: e.sib_median * e.cross_price < CROSS_THIN_TAPE_NOTIONAL,
         news_title: null, news_url: null, news_published_at: null, catalyst: null,
         last_event_ms: nowMs,
       });
@@ -1329,6 +1338,7 @@ class PollerService {
               vol_ratio: num(m.vol_ratio) ?? 0,
               cross_at: prev?.cross_at ?? iso(atMs),
               confirmed_at: iso(atMs),
+              thin_tape: (num(m.sib_median) ?? 1e9) * (num(m.cross_price) ?? 0) < CROSS_THIN_TAPE_NOTIONAL,
               news_title: null, news_url: null, news_published_at: null, catalyst: null,
               last_event_ms: atMs,
             });
@@ -1341,6 +1351,7 @@ class PollerService {
               cross_price: num(m.cross_price) ?? num(m.price) ?? 0,
               vol_ratio: num(m.vol_ratio) ?? 0,
               cross_at: iso(atMs), confirmed_at: null,
+              thin_tape: (num(m.sib_median) ?? 1e9) * (num(m.cross_price) ?? 0) < CROSS_THIN_TAPE_NOTIONAL,
               news_title: null, news_url: null, news_published_at: null, catalyst: null,
               last_event_ms: atMs,
             });
@@ -2371,6 +2382,7 @@ class PollerService {
       emaCrossList.push({
         ticker: xc.ticker, tf: xc.tf, status: xc.status, price: xc.price, cross_price: xc.cross_price,
         vol_ratio: xc.vol_ratio, cross_at: xc.cross_at, confirmed_at: xc.confirmed_at,
+        thin_tape: xc.thin_tape,
         news_title: xc.news_title, news_url: xc.news_url,
         news_published_at: xc.news_published_at, catalyst: xc.catalyst,
       });
