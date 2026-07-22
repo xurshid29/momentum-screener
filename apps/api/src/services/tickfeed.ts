@@ -242,7 +242,8 @@ class TickFeedService {
   private detector = new TickDetector();
   // 📈 EMA cross layer (10/65) on 5m bars, known runners only — see
   // ema-cross.ts. Every LIVE closed bar is buffered for persistence
-  // (bars_5m) so the warmup survives deploys; boot replays the last 48h.
+  // (bars_5m) so the warmup survives deploys; boot replays the last 5 days
+  // (48h originally — too short for ultra-thin tapes, the LICN case).
   private emaCross = new EmaCrossTracker(EMA_CROSS, (ticker, closeTs, close, volume) => {
     this.barBuffer.push({ ticker, bar_ts: new Date(closeTs * 1000), close, volume });
   });
@@ -347,12 +348,12 @@ class TickFeedService {
   }
 
   // Replay persisted bars through the trackers so the EMA-cross warmups
-  // survive deploys — 5m from bars_5m (48h), 4h from bars_4h (40d). Three
+  // survive deploys — 5m from bars_5m (5d), HTF from their tables. Three
   // deploys on 2026-07-14 left the 5m layer silent all of 07-15 — this
   // closes that; the 4h layer can NEVER warm up live (~2-3 weeks of bars),
   // so its replay + the Databento backfill are load-bearing, not resilience.
   private async seedEmaBars(): Promise<void> {
-    await this.seedTrackerFromTable('bars_5m', 48 * 3600_000, this.emaCross, '5m');
+    await this.seedTrackerFromTable('bars_5m', 5 * 86_400_000, this.emaCross, '5m');
     for (const l of this.htfLayers) {
       await this.seedTrackerFromTable(l.table, l.retentionDays * 86_400_000, l.tracker, l.cfg.tf);
     }
@@ -451,12 +452,20 @@ class TickFeedService {
           for (const tk of chunk) {
             if (!this.running) return;
             let bars = batch?.get(tk) ?? null;
-            if (!bars || bars.length === 0) {
-              // Batch failed, or this symbol printed nothing on MINI in 3d —
-              // try Yahoo (consolidated tape sees more of the thin names).
-              bars = await fetchYahoo5m(tk);
+            if (!bars || bars.length < EMA_CROSS.warmup_bars) {
+              // MINI history too sparse to warm the EMAs — not just empty.
+              // The LICN lesson (2026-07-22): 16 five-minute bars in 3 days
+              // on MINI while Yahoo's consolidated tape had 167 over 5d; the
+              // slow EMA never seeded and a textbook 5m cross at +40% was
+              // structurally invisible. Take whichever series is longer.
+              // Consolidated volumes skew the sibling window (ratios read
+              // LOW — misses, never false confirms) and self-heal live.
+              const yahoo = await fetchYahoo5m(tk);
               await new Promise((r) => setTimeout(r, 1_500));
-              if (bars && bars.length > 0) viaYahoo++;
+              if (yahoo && yahoo.length > (bars?.length ?? 0)) {
+                bars = yahoo;
+                viaYahoo++;
+              }
             }
             if (!bars || bars.length === 0) continue;
             ok++;
@@ -553,10 +562,10 @@ class TickFeedService {
   private applyBackfillBars(tk: string, bars: Array<{ closeTs: number; close: number; volume: number }>): { seeded: number; persisted: number } {
     let seeded = 0;
     if (this.emaCross.canSeed(tk)) {
-      for (const b of bars.slice(-120)) this.emaCross.seedBar(tk, b.closeTs, b.close, b.volume);
+      for (const b of bars.slice(-200)) this.emaCross.seedBar(tk, b.closeTs, b.close, b.volume);
       seeded = 1;
     }
-    const recent = bars.filter((b) => b.closeTs * 1000 > Date.now() - 72 * 3600_000);
+    const recent = bars.filter((b) => b.closeTs * 1000 > Date.now() - 5 * 86_400_000);
     if (recent.length > 0) {
       void getDb()
         .insertInto('bars_5m')
@@ -647,7 +656,7 @@ class TickFeedService {
       // Prune persisted bars beyond their seed windows (fire-and-forget).
       void getDb()
         .deleteFrom('bars_5m')
-        .where('bar_ts', '<', new Date(Date.now() - 3 * 86_400_000))
+        .where('bar_ts', '<', new Date(Date.now() - 6 * 86_400_000))
         .execute()
         .catch(() => { /* retried next midnight */ });
       for (const l of this.htfLayers) {
