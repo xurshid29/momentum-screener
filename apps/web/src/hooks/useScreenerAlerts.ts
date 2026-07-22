@@ -10,6 +10,24 @@ import type { CyclePayload } from '../api/types';
 // already-seen (ticker, tier) pairs so a catch (which persists ~15 min) pings
 // once per tier — a real runner gives exactly two pings: flag, then confirm.
 
+// Dashboard alert kill switches (2026-07-22, operator's call) — mirrors the
+// server-side ALERTS_DISABLED: everything muted except EMA-cross
+// confirmations. Disabled, not deleted: the sections/data are untouched and
+// the seen-set bookkeeping below keeps marking events while muted, so
+// flipping a flag back on never back-blasts the day's backlog.
+const DASHBOARD_ALERTS: Record<
+  'ema_cross' | 'news_radar' | 'tick_confirmed' | 'tick_watch' | 'accum' | 'new_with_catalyst' | 'fresh_news',
+  boolean
+> = {
+  ema_cross: true,
+  news_radar: false,
+  tick_confirmed: false,
+  tick_watch: false,
+  accum: false,
+  new_with_catalyst: false,
+  fresh_news: false,
+};
+
 let audioCtx: AudioContext | null = null;
 function ctx(): AudioContext {
   if (!audioCtx) audioCtx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
@@ -147,7 +165,7 @@ export function useScreenerAlerts(payload: CyclePayload | null) {
 
     const newCrosses = crossKeys.filter((x) => !seenTicks.current.has(x.key));
     newCrosses.forEach((x) => seenTicks.current.add(x.key));
-    if (newCrosses.length > 0) {
+    if (DASHBOARD_ALERTS.ema_cross && newCrosses.length > 0) {
       try { watchPing(); } catch { /* audio context not unlocked */ }
       notify(
         '📈 EMA cross confirmed — volume expanding',
@@ -160,7 +178,7 @@ export function useScreenerAlerts(payload: CyclePayload | null) {
     // them fire their own, stronger alerts.
     const newRadar = radarKeys.filter((n) => !seenRadar.current.has(n.key));
     newRadar.forEach((n) => seenRadar.current.add(n.key));
-    if (newRadar.length > 0) {
+    if (DASHBOARD_ALERTS.news_radar && newRadar.length > 0) {
       try { newsRadarPing(); } catch { /* audio context not unlocked */ }
       notify(
         '📰 News radar — fresh catalyst, not moving yet',
@@ -176,19 +194,19 @@ export function useScreenerAlerts(payload: CyclePayload | null) {
     const newConfirmed = newTicks.filter((t) => t.status === 'confirmed').map((t) => t.ticker);
     const newWatches = newTicks.filter((t) => t.status === 'watch').map((t) => t.ticker);
     const newAccums = newTicks.filter((t) => t.status === 'accum').map((t) => t.ticker);
-    if (newConfirmed.length > 0) {
+    if (DASHBOARD_ALERTS.tick_confirmed && newConfirmed.length > 0) {
       try { radarPing(); } catch { /* audio context not unlocked */ }
       notify(
         '🛰️ Live tick confirmed',
         newConfirmed.length <= 3 ? newConfirmed.join(', ') : `${newConfirmed.length} confirmed live ticks`,
       );
-    } else if (newWatches.length > 0) {
+    } else if (DASHBOARD_ALERTS.tick_watch && newWatches.length > 0) {
       try { watchPing(); } catch { /* audio context not unlocked */ }
       notify(
         '👀 Tick watch — confirmation pending',
         newWatches.length <= 3 ? newWatches.join(', ') : `${newWatches.length} new tick watches`,
       );
-    } else if (newAccums.length > 0) {
+    } else if (DASHBOARD_ALERTS.accum && newAccums.length > 0) {
       try { accumPing(); } catch { /* audio context not unlocked */ }
       notify(
         '🤫 Quiet accumulation — volume before price',
@@ -198,7 +216,7 @@ export function useScreenerAlerts(payload: CyclePayload | null) {
 
     const { new_with_catalyst, fresh_news } = payload.banners;
 
-    if (new_with_catalyst.length > 0) {
+    if (DASHBOARD_ALERTS.new_with_catalyst && new_with_catalyst.length > 0) {
       try { dingDing(); } catch { /* audio context not unlocked */ }
       notify(
         '🆕 New entrant with catalyst',
@@ -206,7 +224,7 @@ export function useScreenerAlerts(payload: CyclePayload | null) {
           ? new_with_catalyst.join(', ')
           : `${new_with_catalyst.length} new gainers with news`,
       );
-    } else if (fresh_news.length > 0) {
+    } else if (DASHBOARD_ALERTS.fresh_news && fresh_news.length > 0) {
       try { chime(); } catch { /* audio context not unlocked */ }
       notify(
         '🚨 Fresh news',
