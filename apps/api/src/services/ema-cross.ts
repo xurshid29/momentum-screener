@@ -55,6 +55,16 @@ export interface EmaCrossConfig {
   // the public tape can't nominate alone. A real burst accumulates this in
   // seconds and fires then.
   nominate_min_notional: number;
+  // Stale-EMA guard (the SKYQ case, 2026-07-22): a thin name can go hours
+  // without printing on OUR feed while the consolidated tape keeps trading —
+  // the committed EMAs freeze, and the first resume tick "crosses" EMAs that
+  // are hours old (TV's cross happened long ago). If a symbol's last closed
+  // bar is more than this many intervals of IN-SESSION time behind the
+  // current tick, intrabar nominations are suppressed until a fresh bucket
+  // closes (the closed-bar path still fires — at most one bar late).
+  // Session-open resumes are exempt: overnight gaps are symmetric across
+  // feeds (TV fires intrabar at the open, and so do we).
+  stale_gap_bars: number;
   renominate_cooldown_sec: number;
   intrabar_detect: boolean;
   // Bucket anchor offset in seconds. 5m buckets divide the hour so 0 always
@@ -85,6 +95,7 @@ export const EMA_CROSS: EmaCrossConfig = {
   // notional now recorded in tier_events meta.
   confirm_min_notional: 10_000,
   nominate_min_notional: 2_000,
+  stale_gap_bars: 3,
   // Re-arm cooldown after an EXPIRED observation. Nominations were originally
   // once/ticker/day, but TGHL 2026-07-15 showed why that's wrong: a weak
   // 0.4× morning cross burned the slot and expired, and the REAL 16:25 cross
@@ -119,6 +130,7 @@ export const EMA_CROSS_1H: EmaCrossConfig = {
   instant_vol_x: 5,
   confirm_min_notional: 10_000,
   nominate_min_notional: 2_000,
+  stale_gap_bars: 3,
   renominate_cooldown_sec: 7_200, // two bars
   intrabar_detect: true,
   bucket_offset_sec: 0,
@@ -143,6 +155,7 @@ export const EMA_CROSS_4H: EmaCrossConfig = {
   instant_vol_x: 5,
   confirm_min_notional: 10_000,
   nominate_min_notional: 2_000,
+  stale_gap_bars: 3,
   renominate_cooldown_sec: 14_400, // one bar — a dud re-arms next bar
   intrabar_detect: true,
   bucket_offset_sec: 0,     // set live by the tick feed (EDT 0 / EST 3600)
@@ -184,6 +197,7 @@ interface SymState {
   seedSumF: number;
   seedSumS: number;
   bars: number;          // closed bars seen (live + boot-seeded)
+  lastCloseTs: number;   // close time of the newest committed bar (0 = none)
   prevDiff: number | null; // emaF - emaS at the previous closed bar
   sibVols: number[];     // ring: volumes of the last sibling_bars CLOSED bars
   watch: Observation | null;
@@ -266,6 +280,14 @@ export class EmaCrossTracker {
     this.bucketOff = sec;
   }
 
+  // Epoch seconds of the most recent 04:00 ET session open — the anchor for
+  // the stale-EMA guard (in-session gap only; overnight gaps are exempt).
+  // Pushed by the tick feed on its sync cadence; 0 disables the guard.
+  private sessionOpenTs = 0;
+  setSessionOpen(tsSec: number): void {
+    this.sessionOpenTs = tsSec;
+  }
+
   // Read-only debug view of a symbol's live EMA state — powers the
   // /ema-debug endpoint so the operator can compare our EMAs against the
   // same symbol's TV chart whenever a detection looks off (the WOK class).
@@ -328,7 +350,7 @@ export class EmaCrossTracker {
       st = {
         bucketStart: -1, bucketClose: 0, bucketVol: 0,
         emaF: null, emaS: null, seedSumF: 0, seedSumS: 0,
-        bars: 0, prevDiff: null, sibVols: [], watch: null, confirmedToday: false, lockedUntil: 0,
+        bars: 0, lastCloseTs: 0, prevDiff: null, sibVols: [], watch: null, confirmedToday: false, lockedUntil: 0,
         seededUpTo: -1,
       };
       this.state.set(ticker, st);
@@ -414,6 +436,14 @@ export class EmaCrossTracker {
     // consumed on rejection — a later tick in the same bucket re-evaluates
     // as volume accumulates, so a genuine burst fires seconds later.
     if (c * st.bucketVol < this.cfg.nominate_min_notional) return null;
+    // Stale-EMA guard (the SKYQ case — see EmaCrossConfig.stale_gap_bars):
+    // after a long IN-SESSION gap on our feed, the committed EMAs are hours
+    // old; the resume tick must not nominate against them. The bucket closes
+    // first (committing fresh prices), then the closed-bar path decides.
+    if (this.sessionOpenTs > 0 && st.lastCloseTs > 0) {
+      const anchor = Math.max(st.lastCloseTs, this.sessionOpenTs);
+      if (tsSec - anchor > this.cfg.stale_gap_bars * this.cfg.interval_sec) return null;
+    }
     const ratio = st.bucketVol / sibMedian;
     if (ratio >= this.cfg.instant_vol_x && c * st.bucketVol >= this.cfg.confirm_min_notional) {
       st.confirmedToday = true;
@@ -439,6 +469,7 @@ export class EmaCrossTracker {
 
   private processClosedBar(ticker: string, st: SymState, closeTs: number, c: number, v: number, silent: boolean): EmaCrossEvent | null {
     st.bars++;
+    st.lastCloseTs = closeTs;
 
     // EMA update — SMA seed over the first `length` closed bars, recursive after.
     if (st.bars <= this.cfg.fast) {

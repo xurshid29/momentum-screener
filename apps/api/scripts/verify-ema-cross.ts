@@ -39,6 +39,13 @@ class Sim {
   bars(n: number, close: number, vol: number): void {
     for (let k = 0; k < n; k++) this.bar(close, vol);
   }
+  // Advance time without feeding — an on-feed silence gap (no buckets form).
+  skip(n: number): void {
+    this.i += n;
+  }
+  now(): number {
+    return T0 + this.i * this.iv;
+  }
   // Feed a tick INSIDE the currently open bucket (the one the last bar()
   // call opened) — exercises the intrabar TV-parity path.
   tick(close: number, vol: number, offsetSec = 42): EmaCrossEvent | null {
@@ -314,6 +321,30 @@ console.log('S16 — junk-print phantom (LBTYK): an $11 odd-lot print cannot nom
   s.bars(5, 0.9, 10_000); // the consumed cross re-arms via a genuine re-dip…
   s.bars(3, 1.1, 10_000); // …and a real-dollar re-cross still fires
   check('real re-cross still nominates', s.count('nominate') === 1);
+}
+
+console.log('S17 — stale-EMA guard (SKYQ): long in-session gaps cannot nominate intrabar');
+{
+  const s = new Sim();
+  s.tracker.setSessionOpen(T0); // everything in this sim is "in-session"
+  warmDipped(s, 1.0, 10_000);
+  s.skip(30); // 30 bar-intervals of feed silence while the EMAs sit stale
+  const resume = s.bar(1.35, 10_000); // gap-resume tick provisionally crosses…
+  check('gap-resume tick suppressed intrabar', resume == null);
+  const closed = s.bar(1.36, 10_000); // …but only after the resume bucket commits
+  check('nomination fires once fresh data is committed (≤1 bar late)',
+    closed?.type === 'nominate', `got ${closed?.type ?? 'nothing'}`);
+}
+
+console.log('S18 — stale guard exempts the session open (overnight gaps are symmetric)');
+{
+  const s = new Sim();
+  warmDipped(s, 1.0, 10_000);
+  s.skip(96); // "overnight": no bars for 8h of wall clock
+  s.tracker.setSessionOpen(s.now() - 60); // the session just re-opened
+  const openTick = s.bar(1.35, 10_000); // first tick after the open
+  check('session-open resume may nominate intrabar', openTick?.type === 'nominate' && openTick.intrabar === true,
+    `got ${openTick?.type ?? 'nothing'}`);
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);

@@ -166,7 +166,13 @@ it demotes to a normal nomination). Nominations need ≥$2k of bucket/bar
 dollars (`nominate_min_notional`, 2026-07-22 — the LBTYK phantom: a lone
 1-share odd-lot print at +10% "crossed" our MINI-fed EMAs; the SIP tape
 excludes odd lots so TV never saw the trade — the floor is TV-parity, and
-intrabar rejection consumes no state, so real bursts fire seconds later). No expansion → silent expire (peak
+intrabar rejection consumes no state, so real bursts fire seconds later).
+**Stale-EMA guard** (`stale_gap_bars`, same day — the SKYQ case): a thin name
+silent on OUR feed for >3 intervals of in-session time can't nominate
+intrabar off its frozen EMAs (TV's cross happened hours earlier on the
+consolidated tape) — the resume bucket must close first, so the nomination
+comes ≤1 bar late with fresh prices committed; session-open resumes are
+exempt (overnight gaps are symmetric across feeds). No expansion → silent expire (peak
 telemetry). **Re-fire rules (2026-07-16):** a confirm ends the symbol's day;
 an expired observation re-arms after a cooldown
 (`renominate_cooldown_sec` — the TGHL lesson: a weak 0.4× morning cross must

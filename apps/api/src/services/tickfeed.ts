@@ -149,13 +149,25 @@ async function fetchDatabentoAgg(
 // Anchor offset for the 4h bucket grid so bars land on 04:00/08:00/12:00/
 // 16:00 ET like TV's ETH 4h bars. Under EDT (UTC-4) the plain UTC 4h grid
 // already matches (04:00 ET = 08:00 UTC); under EST (UTC-5) shift one hour.
-function etBucketOffsetSec(): number {
+function etUtcOffsetHours(): number {
   const now = new Date();
   const etH = Number(new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/New_York', hour: '2-digit', hourCycle: 'h23',
   }).format(now));
-  const diff = ((now.getUTCHours() - etH) + 24) % 24; // 4 (EDT) or 5 (EST)
-  return diff === 5 ? 3600 : 0;
+  return ((now.getUTCHours() - etH) + 24) % 24; // 4 (EDT) or 5 (EST)
+}
+
+function etBucketOffsetSec(): number {
+  return etUtcOffsetHours() === 5 ? 3600 : 0;
+}
+
+// Epoch seconds of the most recent 04:00 ET session open — the EMA trackers'
+// stale-guard anchor (see EmaCrossConfig.stale_gap_bars).
+function lastSessionOpenSec(): number {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const openMod = (((4 + etUtcOffsetHours()) % 24) * 3600); // 04:00 ET in UTC seconds-of-day
+  const rem = ((nowSec % 86_400) - openMod + 86_400) % 86_400;
+  return nowSec - rem;
 }
 
 // Yahoo 5m history for one symbol — the FALLBACK backfill source (free, no
@@ -673,6 +685,10 @@ class TickFeedService {
       this.child?.kill();
       console.log('[tickfeed] midnight ET — detector reset, sidecar will respawn');
     }
+    // Refresh the EMA trackers' stale-guard anchor (most recent 04:00 ET).
+    const sessionOpen = lastSessionOpenSec();
+    this.emaCross.setSessionOpen(sessionOpen);
+    for (const l of this.htfLayers) l.tracker.setSessionOpen(sessionOpen);
     const priors = universe.getPriorCloses();
     for (const [t, c] of priors) this.detector.setPriorClose(t, c);
     const syms = Array.from(new Set([...universe.getUniverse(), ...this.extraSubs]));
