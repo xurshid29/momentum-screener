@@ -858,14 +858,16 @@ class PollerService {
         vol: e.volume, sib_median: e.sib_median, notional: Math.round(e.price * e.volume),
         bars: e.bars_since_cross, in_ladder: inLadder, intrabar: e.intrabar ?? false,
       });
-      const skipDisplay = inLadder && tf === '5m';
+      // Every event displays. The old "in-ladder names skip 5m display" rule
+      // died 2026-07-22 (the LABT confusion): the Telegram fired but the row
+      // hid inside a ladder section the operator now HIDES — alert and row
+      // must always match. in_ladder stays in meta for the grading overlap cut.
       console.log(
         `[ema-cross] ${e.type === 'confirm' ? '📈✅ instant-confirm' : '📈 nominate'} ${e.ticker}${tfTag} ` +
         `$${e.price.toFixed(2)} · ${e.vol_ratio}x sibling vol` +
-        `${e.intrabar ? ' · intrabar' : ''}${skipDisplay ? ' · (in ladder — display skipped)' : ''}`,
+        `${e.intrabar ? ' · intrabar' : ''}${inLadder ? ' · in ladder' : ''}`,
       );
       if (e.type === 'confirm') this.pushCrossAlert(e, tf);
-      if (skipDisplay) return;
       // Timestamps use the BAR's close time (intrabar: the tick's time), not
       // processing wall-clock, so the row's "ago" matches what the operator
       // sees on a TV chart (2026-07-15, the OPTX confusion).
@@ -1342,7 +1344,7 @@ class PollerService {
               news_title: null, news_url: null, news_published_at: null, catalyst: null,
               last_event_ms: atMs,
             });
-          } else if (r.event === 'nominate' && (m.in_ladder !== true || xtf !== '5m')) {
+          } else if (r.event === 'nominate') {
             // Track for cross_at continuity only — pruned below unless a
             // confirm follows (the old process's observation died with it).
             this.emaCrosses.set(xkey, {
