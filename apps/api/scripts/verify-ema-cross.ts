@@ -347,5 +347,34 @@ console.log('S18 — stale guard exempts the session open (overnight gaps are sy
     `got ${openTick?.type ?? 'nothing'}`);
 }
 
+console.log('S19 — seed/live continuity: a deploy-style split changes nothing');
+{
+  // The same pseudo-random series run two ways: (A) fully live, (B) first
+  // 137 bars boot-seeded + the rest live — the EMA state must be IDENTICAL.
+  // This is the invariant that makes deploy-heavy days mathematically safe.
+  let x = 7;
+  const rnd = () => ((x = (x * 1103515245 + 12345) % 2147483648) / 2147483648);
+  const series: Array<{ c: number; v: number }> = [];
+  let p = 3.0;
+  for (let i = 0; i < 300; i++) {
+    p = Math.max(0.5, p * (1 + (rnd() - 0.5) * 0.05));
+    series.push({ c: p, v: Math.round(1_000 + rnd() * 20_000) });
+  }
+  const a = new Sim();
+  series.forEach((bb) => a.bar(bb.c, bb.v));
+  const b = new Sim();
+  series.slice(0, 137).forEach((bb) => b.seed(bb.c, bb.v));
+  series.slice(137).forEach((bb) => b.bar(bb.c, bb.v));
+  const sa = a.tracker.snapshot('TEST')!;
+  const sb = b.tracker.snapshot('TEST')!;
+  check('bars identical', sa.bars === sb.bars, `${sa.bars} vs ${sb.bars}`);
+  check('fast EMA identical', Math.abs((sa.ema_fast ?? 0) - (sb.ema_fast ?? 0)) < 1e-12,
+    `${sa.ema_fast} vs ${sb.ema_fast}`);
+  check('slow EMA identical', Math.abs((sa.ema_slow ?? 0) - (sb.ema_slow ?? 0)) < 1e-12,
+    `${sa.ema_slow} vs ${sb.ema_slow}`);
+  check('sibling median identical', sa.sib_median === sb.sib_median);
+  check('prev diff identical', Math.abs((sa.prev_diff ?? 0) - (sb.prev_diff ?? 0)) < 1e-12);
+}
+
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

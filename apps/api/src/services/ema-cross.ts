@@ -53,7 +53,10 @@ export interface EmaCrossConfig {
   // consolidated tape EXCLUDES odd lots, so TV never even saw that trade —
   // this floor is TV-parity, not a departure from it: prints too small for
   // the public tape can't nominate alone. A real burst accumulates this in
-  // seconds and fires then.
+  // seconds and fires then. Calibrated same day from 3d of tier_events
+  // notional meta: every observed phantom was <$400 while the $500-2k band
+  // (24% of nominations) held real thin-tape crosses (BANL $683, ALP $1.6k)
+  // — hence $500, not the first-guess $2k.
   nominate_min_notional: number;
   // Stale-EMA guard (the SKYQ case, 2026-07-22): a thin name can go hours
   // without printing on OUR feed while the consolidated tape keeps trading —
@@ -94,7 +97,7 @@ export const EMA_CROSS: EmaCrossConfig = {
   // ⚠️ Feed-visible (EQUS.MINI) dollars, first guess — recalibrate from the
   // notional now recorded in tier_events meta.
   confirm_min_notional: 10_000,
-  nominate_min_notional: 2_000,
+  nominate_min_notional: 500,
   stale_gap_bars: 3,
   // Re-arm cooldown after an EXPIRED observation. Nominations were originally
   // once/ticker/day, but TGHL 2026-07-15 showed why that's wrong: a weak
@@ -129,7 +132,7 @@ export const EMA_CROSS_1H: EmaCrossConfig = {
   confirm_price_ext: 0.005,
   instant_vol_x: 5,
   confirm_min_notional: 10_000,
-  nominate_min_notional: 2_000,
+  nominate_min_notional: 500,
   stale_gap_bars: 3,
   renominate_cooldown_sec: 7_200, // two bars
   intrabar_detect: true,
@@ -154,7 +157,7 @@ export const EMA_CROSS_4H: EmaCrossConfig = {
   confirm_price_ext: 0.005,
   instant_vol_x: 5,
   confirm_min_notional: 10_000,
-  nominate_min_notional: 2_000,
+  nominate_min_notional: 500,
   stale_gap_bars: 3,
   renominate_cooldown_sec: 14_400, // one bar — a dud re-arms next bar
   intrabar_detect: true,
@@ -561,9 +564,14 @@ export class EmaCrossTracker {
     ) {
       const diff = st.emaF - st.emaS;
       if (st.prevDiff <= 0 && diff > 0 && sibMedian >= this.cfg.sibling_min_sh
+        && c * v < this.cfg.nominate_min_notional) {
         // Junk-print guard: a bar whose entire notional is a stray micro-print
-        // (LBTYK: 1 share, $11) doesn't nominate — the cross is consumed
-        // silently and a genuine re-cross re-fires.
+        // (LBTYK: 1 share, $11) doesn't nominate — the cross is consumed and
+        // a genuine re-cross re-fires. Logged (not tier_events — too chatty)
+        // so "why didn't X nominate" is answerable from `grep consumed`.
+        console.log(`[ema-cross] cross consumed — junk bar $${Math.round(c * v)} ${ticker} (${this.cfg.tf})`);
+      }
+      if (st.prevDiff <= 0 && diff > 0 && sibMedian >= this.cfg.sibling_min_sh
         && c * v >= this.cfg.nominate_min_notional
       ) {
         const ratio = v / sibMedian;

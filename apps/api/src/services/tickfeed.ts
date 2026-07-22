@@ -203,6 +203,48 @@ async function fetchYahoo5m(ticker: string): Promise<Array<{ closeTs: number; cl
   }
 }
 
+// Yahoo 1h history re-bucketed to an HTF grid — the HTF layers' consolidated
+// fallback (2026-07-22, the TV-log audit): six of eleven TV-alerted 1h
+// crosses were invisible because those names print (almost) nothing on MINI
+// and the HTF backfill had no Yahoo path — their bars_1h series were 12-22h
+// stale and the EMAs never saw the day's move. Same volume-scale caveat as
+// the 5m fallback: consolidated volumes read sibling ratios LOW (misses,
+// never false confirms).
+async function fetchYahoo1hAgg(
+  ticker: string,
+  bucketSec: number,
+  offsetSec: number,
+): Promise<Array<{ closeTs: number; close: number; volume: number }> | null> {
+  try {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1h&range=60d&includePrePost=true`;
+    const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    if (!res.ok) return null;
+    const json = await res.json() as {
+      chart?: { result?: Array<{ timestamp?: number[]; indicators?: { quote?: Array<{ close?: Array<number | null>; volume?: Array<number | null> }> } }> };
+    };
+    const r0 = json?.chart?.result?.[0];
+    const ts = r0?.timestamp ?? [];
+    const q = r0?.indicators?.quote?.[0];
+    if (ts.length === 0 || !q) return null;
+    const nowSec = Math.floor(Date.now() / 1000);
+    const buckets = new Map<number, { close: number; volume: number }>();
+    for (let i = 0; i < ts.length; i++) {
+      const c = q.close?.[i];
+      if (c == null || !(c > 0)) continue;
+      const bStart = Math.floor((ts[i] - offsetSec) / bucketSec) * bucketSec + offsetSec;
+      if (bStart + bucketSec > nowSec - 30) continue; // still-open bucket
+      const b = buckets.get(bStart);
+      const v = q.volume?.[i] ?? 0;
+      if (b) { b.close = c; b.volume += v; } // timestamps ascend → last close wins
+      else buckets.set(bStart, { close: c, volume: v });
+    }
+    return [...buckets.entries()].sort((a, b) => a[0] - b[0])
+      .map(([bs, b]) => ({ closeTs: bs + bucketSec, close: b.close, volume: b.volume }));
+  } catch {
+    return null;
+  }
+}
+
 function etDate(d = new Date()): string {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
@@ -213,14 +255,13 @@ function etDate(d = new Date()): string {
 // table + Databento backfill parameters. Adding/removing an interval =
 // one entry here + its bars_* migration; everything else (boot seed, live
 // feed, persistence, retention, backfill, /health) loops this list. The 5m
-// layer stays bespoke: its warmup fits inside bars_5m's 48h replay and it
-// has a Yahoo per-symbol fallback the HTF layers don't need.
+// layer stays bespoke: its warmup fits inside bars_5m's replay window.
 interface HtfLayer {
   cfg: import('./ema-cross.js').EmaCrossConfig;
   tracker: EmaCrossTracker;
   table: 'bars_1h' | 'bars_4h';
   buffer: { ticker: string; bar_ts: Date; close: number; volume: number }[];
-  attempted: Set<string>;    // backfill attempted this ET day
+  attempted: Map<string, number>; // last backfill attempt (ms) — retry after ATTEMPT_RETRY_MS
   spanDays: number;          // backfill fetch depth (EMA-convergence, not warmup)
   retentionDays: number;     // table retention = boot-seed window
   minBars: number;           // banked bars that count as "converged"
@@ -228,13 +269,18 @@ interface HtfLayer {
   offset: () => number;      // bucket anchor (recomputed at midnight for DST)
 }
 
+// Minimum spacing between backfill attempts for one symbol on an HTF layer.
+// Two hours: stale MINI-quiet names get a few consolidated top-ups per
+// session without hammering Yahoo (they are the bulk of the target list).
+const ATTEMPT_RETRY_MS = 2 * 3600_000;
+
 function makeHtfLayer(
   cfg: import('./ema-cross.js').EmaCrossConfig,
   table: HtfLayer['table'],
   opts: { spanDays: number; retentionDays: number; deepDays: number; offset: () => number },
 ): HtfLayer {
   const layer: HtfLayer = {
-    cfg, table, buffer: [], attempted: new Set(),
+    cfg, table, buffer: [], attempted: new Map(),
     spanDays: opts.spanDays, retentionDays: opts.retentionDays,
     // EMA(65) needs ~190 banked bars for the SMA seed's influence to drop
     // under ~2% (was 150 for EMA50) — round up for margin.
@@ -339,7 +385,12 @@ class TickFeedService {
       // (the DB seed above has already run, so the scan sees what's missing),
       // then re-scan periodically for symbols that entered the set mid-day.
       setTimeout(() => void this.scanBackfill(), 120_000);
-      this.backfillTimer = setInterval(() => void this.scanBackfill(), 4 * 3600_000);
+      // Hourly since 2026-07-22 (was 4h): the staleness criterion needs a
+      // tight loop — MINI-quiet names are often still seedable mid-session
+      // (they haven't printed since boot), so an hourly Yahoo top-up gets
+      // their consolidated bars into the tracker the same day, not tomorrow.
+      // Per-symbol retry windows (ATTEMPT_RETRY_MS) bound the fetch volume.
+      this.backfillTimer = setInterval(() => void this.scanBackfill(), 3600_000);
     });
   }
 
@@ -505,39 +556,54 @@ class TickFeedService {
   // pennies; a window ≈1× the EMA span leaves it at the recent average and
   // any poke "crosses". Skip a symbol once it has ≥minBars banked OR its
   // banked history reaches back ≥deepDays (recently-listed names can never
-  // satisfy either — the once/day attempt set bounds their cost). No Yahoo
-  // fallback: a name that printed nothing on MINI has no usable sibling
-  // baseline anyway. Persists to the layer's table so boots seed from DB.
+  // satisfy either — the per-symbol retry window bounds their cost). Yahoo
+  // (consolidated) fallback since 2026-07-22 for sparse/stale MINI series —
+  // the TV-log audit: six of eleven TV 1h crosses were on names whose MINI
+  // tape had been silent 12-22h. Persists to the layer's table so boots
+  // seed from DB.
   private async scanBackfillHtf(l: HtfLayer): Promise<void> {
-    const have = new Map<string, { n: number; earliestMs: number }>();
+    const have = new Map<string, { n: number; earliestMs: number; latestMs: number }>();
     const rows = await getDb()
       .selectFrom(l.table)
       .select(['ticker',
         (eb) => eb.fn.countAll<number>().as('n'),
         (eb) => eb.fn.min('bar_ts').as('earliest'),
+        (eb) => eb.fn.max('bar_ts').as('latest'),
       ])
       .where('bar_ts', '>', new Date(Date.now() - l.retentionDays * 86_400_000))
       .groupBy('ticker')
       .execute();
-    for (const r of rows) have.set(r.ticker, { n: Number(r.n), earliestMs: new Date(r.earliest as Date).getTime() });
+    for (const r of rows) {
+      have.set(r.ticker, {
+        n: Number(r.n),
+        earliestMs: new Date(r.earliest as Date).getTime(),
+        latestMs: new Date(r.latest as Date).getTime(),
+      });
+    }
     const deepEnoughMs = Date.now() - l.deepDays * 86_400_000;
+    // Staleness criterion (2026-07-22, the TV-log audit): TMDE had 98 banked
+    // bars (past warmup) but its NEWEST bar was 22h old — depth-only skip
+    // rules never re-fetched it, and its TV crosses were invisible. A banked
+    // series counts as healthy only if it is also fresh.
+    const freshEnoughMs = Date.now() - 12 * 3600_000;
     const targets: string[] = [];
     for (const tk of poller.getKnownRunners()) {
-      if (l.attempted.has(tk)) continue;
+      const lastTry = l.attempted.get(tk) ?? 0;
+      if (Date.now() - lastTry < ATTEMPT_RETRY_MS) continue;
       const h = have.get(tk);
-      if (h && (h.n >= l.minBars || h.earliestMs <= deepEnoughMs)) continue;
+      if (h && (h.n >= l.minBars || h.earliestMs <= deepEnoughMs) && h.latestMs >= freshEnoughMs) continue;
       targets.push(tk);
       if (targets.length >= 1600) break;
     }
     if (targets.length === 0) return;
-    console.log(`[ema-backfill] ${l.cfg.tf}: ${targets.length} known runners below EMA-convergence depth — Databento ohlcv-1h (${l.spanDays}d)`);
-    let ok = 0, seeded = 0, persisted = 0;
+    console.log(`[ema-backfill] ${l.cfg.tf}: ${targets.length} known runners below convergence depth or stale — Databento ohlcv-1h (${l.spanDays}d), Yahoo fallback`);
+    let ok = 0, seeded = 0, persisted = 0, viaYahoo = 0;
     const CHUNK = 100;
     const off = l.offset();
     for (let i = 0; i < targets.length; i += CHUNK) {
       if (!this.running) return;
       const chunk = targets.slice(i, i + CHUNK);
-      chunk.forEach((t) => l.attempted.add(t));
+      chunk.forEach((t) => l.attempted.set(t, Date.now()));
       const batch = await fetchDatabentoAgg(chunk, 'ohlcv-1h', l.spanDays, l.cfg.interval_sec, off);
       if (!batch) {
         // One failed chunk must not starve the rest of the fleet (the first
@@ -548,7 +614,22 @@ class TickFeedService {
         continue;
       }
       for (const tk of chunk) {
-        const bars = batch.get(tk);
+        if (!this.running) return;
+        let bars = batch.get(tk) ?? null;
+        // Consolidated fallback: MINI-quiet names (sparse OR stale series)
+        // get Yahoo's tape — the ELPW/CRIS/MASK/TMDE class, where the MINI
+        // series lagged the day's move so far behind that the EMAs never
+        // crossed. Take whichever series is longer/fresher.
+        const dbLatest = bars?.length ? bars[bars.length - 1].closeTs * 1000 : 0;
+        if (!bars || bars.length < l.cfg.warmup_bars || dbLatest < freshEnoughMs) {
+          const y = await fetchYahoo1hAgg(tk, l.cfg.interval_sec, off);
+          await new Promise((r) => setTimeout(r, 1_500));
+          const yLatest = y?.length ? y[y.length - 1].closeTs * 1000 : 0;
+          if (y && y.length > 0 && (y.length > (bars?.length ?? 0) || yLatest > dbLatest)) {
+            bars = y;
+            viaYahoo++;
+          }
+        }
         if (!bars || bars.length === 0) continue;
         ok++;
         if (l.tracker.canSeed(tk)) {
@@ -565,7 +646,7 @@ class TickFeedService {
       }
       await new Promise((r) => setTimeout(r, 500));
     }
-    console.log(`[ema-backfill] ${l.cfg.tf} done — ${ok}/${targets.length} backfilled, ${seeded} tracker-seeded, ${persisted} bars persisted`);
+    console.log(`[ema-backfill] ${l.cfg.tf} done — ${ok}/${targets.length} backfilled (${viaYahoo} via Yahoo), ${seeded} tracker-seeded, ${persisted} bars persisted`);
   }
 
   // Apply fetched history for one symbol: direct-seed the tracker only while
