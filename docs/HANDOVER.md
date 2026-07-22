@@ -188,9 +188,14 @@ series: adjusted EMA50 2.742 ≈ TV's 2.63, cross condition flips false.
 **Watch:** (a) fire rate + time-of-day clustering after a few days → pick
 Telegram gate (operator deferred: watchlist/screens were the candidates);
 (b) confirm semantics on 4h are untuned first-guesses (sibling 12×4h bars,
-$10k floor) — nomination is the product, confirms are telemetry; nominations
-deliberately have NO notional floor (TV-parity — WOK/WYHG day-1 noms were
-$92/$129 dead-tape pokes; the operator filters manually); (c) first boot
+$10k floor) — nomination is the product, confirms are telemetry;
+~~nominations deliberately have NO notional floor~~ **superseded
+2026-07-22 (the LBTYK phantom):** a single 1-share odd-lot print at $10.99
+vs a $9.97 market ($11 notional!) provisionally "crossed" and nominated —
+a print the SIP tape excludes, so TV never saw it. Nominations now need
+`nominate_min_notional` $2k of bucket/bar dollars (junk-print guard, all
+timeframes; no state consumed on intrabar rejection — real bursts fire
+seconds later once dollars accumulate); (c) first boot
 pays the full ~15-request Databento pass, subsequent boots seed from
 bars_4h.
 

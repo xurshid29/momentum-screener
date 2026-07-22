@@ -88,17 +88,17 @@ console.log('S2 — nominate, then volume-expansion confirm; confirm ends the da
   check('no re-nomination after a confirm', s.count('nominate') === 1 && s.count('confirm') === 1);
 }
 
-console.log('S3 — dead tape: 3× ratio without dollars must NOT confirm');
+console.log('S3 — thin tape: 3× ratio without confirm-grade dollars must NOT confirm');
 {
   const s = new Sim();
-  warmDipped(s, 0.5, 100); // sibling median 100 sh ≥ sibling_min_sh(50)
-  s.bars(5, 0.6, 100);
+  warmDipped(s, 0.25, 10_000); // nominate floor passes ($3k bucket), confirm floor won't
+  s.bars(5, 0.3, 10_000);
   check('nominated', s.count('nominate') === 1);
-  s.bar(0.62, 350); // 3.5× the median and price holds — but only ~$217
-  s.bars(6, 0.6, 100); // run the window out
+  s.bar(0.31, 32_000); // 3.2× the median and price holds — but ~$9.9k < $10k
+  s.bars(8, 0.3, 10_000); // run the window out
   const ex = s.events.find((e) => e.type === 'expire');
   check('no confirm below the notional floor', s.count('confirm') === 0);
-  check('expired with the 3.5× peak recorded', !!ex && (ex.peak_ratio ?? 0) >= 3.4, `peak ${ex?.peak_ratio}`);
+  check('expired with the 3.2× peak recorded', !!ex && (ex.peak_ratio ?? 0) >= 3.1, `peak ${ex?.peak_ratio}`);
 }
 
 console.log('S4 — instant confirm: cross bar itself ≥5× with real dollars');
@@ -111,11 +111,11 @@ console.log('S4 — instant confirm: cross bar itself ≥5× with real dollars')
     `first event ${first?.type}, bars ${first?.bars_since_cross}`);
 }
 
-console.log('S5 — instant path demotes to nominate when dollars are missing');
+console.log('S5 — instant path demotes to nominate when confirm-grade dollars are missing');
 {
   const s = new Sim();
-  warmDipped(s, 0.5, 100);
-  s.bars(4, 0.6, 600); // 6× the median but ~$360 notional
+  warmDipped(s, 0.5, 2_000);
+  s.bars(4, 0.6, 12_000); // 6× the median, ~$7.2k — above nominate floor, below confirm floor
   const first = s.events[0];
   check('nominated instead of instant-confirm', first?.type === 'nominate' && first.vol_ratio >= 5,
     `first event ${first?.type} at ${first?.vol_ratio}x`);
@@ -205,22 +205,22 @@ console.log('S10 — intrabar cross bar can only instant-confirm (5×); 3× wait
     `got ${cf?.type ?? 'nothing'}, bars ${cf?.bars_since_cross}`);
 }
 
-console.log('S11 — intrabar respects the floors: dead-tape dollars and the cooldown');
+console.log('S11 — intrabar respects the floors: thin-tape dollars and the cooldown');
 {
   const s = new Sim();
-  warmDipped(s, 0.5, 100);
-  s.bar(0.48, 50);
-  const nom = s.tick(0.62, 600); // 6× accumulated but ~$370 — demotes to nominate
-  check('intrabar 6× without dollars only nominates', nom?.type === 'nominate' && nom.intrabar === true);
-  s.tick(0.63, 350, 120); // more junk volume — still far below $10k
+  warmDipped(s, 0.5, 2_000);
+  s.bar(0.48, 200);
+  const nom = s.tick(0.62, 12_000); // ~6× accumulated, ~$7.6k — above nominate floor, below confirm
+  check('intrabar 6× without confirm dollars only nominates', nom?.type === 'nominate' && nom.intrabar === true);
+  s.tick(0.63, 2_000, 120); // more volume — bucket still below $10k
   check('still no confirm', s.count('confirm') === 0);
-  s.bars(8, 0.6, 100); // run the window out
+  s.bars(8, 0.5, 2_000); // run the window out (price below the hold line)
   check('expired', s.count('expire') === 1);
   const ex = s.events.find((e) => e.type === 'expire');
   const locked = (ex?.ts_sec ?? 0) + EMA_CROSS.renominate_cooldown_sec;
-  s.bars(3, 0.45, 100);
-  s.bar(0.62, 100);
-  const early = s.tick(0.65, 100, 60); // re-cross poke inside the cooldown
+  s.bars(3, 0.4, 2_000);
+  s.bar(0.55, 2_000);
+  const early = s.tick(0.58, 2_000, 60); // re-cross poke inside the cooldown
   check('intrabar re-cross blocked inside the cooldown',
     early == null && !s.events.some((e) => e.type === 'nominate' && e.ts_sec > (ex?.ts_sec ?? 0) && e.ts_sec < locked));
 }
@@ -301,6 +301,19 @@ console.log('S15 — 1h config: same machine at interval 3600, tf-stamped');
   check('1h intrabar nomination fires with tf=1h', nom?.type === 'nominate' && nom.tf === '1h' && nom.intrabar === true);
   const cf = s.tick(1.4, 50_000, 90);
   check('1h intrabar confirm on accumulated volume', cf?.type === 'confirm' && cf.tf === '1h');
+}
+
+console.log('S16 — junk-print phantom (LBTYK): an $11 odd-lot print cannot nominate');
+{
+  const s = new Sim();
+  s.bars(70, 1.0, 10_000); // flat tape: EMAs equal, prevDiff 0 (≤0 qualifies for a cross)
+  const ev = s.bar(1.1, 1); // lone 1-share print 10% above market opens a bucket
+  check('phantom tick blocked intrabar', ev == null);
+  s.bar(1.0, 10_000); // closes the 1-share bar — the closed path must skip it too
+  check('phantom bar blocked at close', s.count('nominate') === 0 && s.count('confirm') === 0);
+  s.bars(5, 0.9, 10_000); // the consumed cross re-arms via a genuine re-dip…
+  s.bars(3, 1.1, 10_000); // …and a real-dollar re-cross still fires
+  check('real re-cross still nominates', s.count('nominate') === 1);
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);

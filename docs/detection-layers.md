@@ -162,7 +162,11 @@ closed bar with volume ≥3× the anchored sibling median AND close ≥ cross ×
 1.005. Every confirm path also needs ≥$10k on the confirming bar
 (`confirm_min_notional`, feed-visible $ — the sibling floor is 50 SHARES, so
 a dead-tape "3×" can be a few hundred dollars; an instant-confirm that fails
-it demotes to a normal nomination). No expansion → silent expire (peak
+it demotes to a normal nomination). Nominations need ≥$2k of bucket/bar
+dollars (`nominate_min_notional`, 2026-07-22 — the LBTYK phantom: a lone
+1-share odd-lot print at +10% "crossed" our MINI-fed EMAs; the SIP tape
+excludes odd lots so TV never saw the trade — the floor is TV-parity, and
+intrabar rejection consumes no state, so real bursts fire seconds later). No expansion → silent expire (peak
 telemetry). **Re-fire rules (2026-07-16):** a confirm ends the symbol's day;
 an expired observation re-arms after a cooldown
 (`renominate_cooldown_sec` — the TGHL lesson: a weak 0.4× morning cross must

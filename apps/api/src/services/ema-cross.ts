@@ -47,6 +47,14 @@ export interface EmaCrossConfig {
   confirm_price_ext: number;
   instant_vol_x: number;
   confirm_min_notional: number;
+  // Junk floor on NOMINATIONS (bucket/bar notional $). Added 2026-07-22, the
+  // LBTYK lesson: a single 1-share odd-lot print at $10.99 (vs a $9.97
+  // market — $11 of notional) provisionally "crossed" and nominated. The SIP
+  // consolidated tape EXCLUDES odd lots, so TV never even saw that trade —
+  // this floor is TV-parity, not a departure from it: prints too small for
+  // the public tape can't nominate alone. A real burst accumulates this in
+  // seconds and fires then.
+  nominate_min_notional: number;
   renominate_cooldown_sec: number;
   intrabar_detect: boolean;
   // Bucket anchor offset in seconds. 5m buckets divide the hour so 0 always
@@ -76,6 +84,7 @@ export const EMA_CROSS: EmaCrossConfig = {
   // ⚠️ Feed-visible (EQUS.MINI) dollars, first guess — recalibrate from the
   // notional now recorded in tier_events meta.
   confirm_min_notional: 10_000,
+  nominate_min_notional: 2_000,
   // Re-arm cooldown after an EXPIRED observation. Nominations were originally
   // once/ticker/day, but TGHL 2026-07-15 showed why that's wrong: a weak
   // 0.4× morning cross burned the slot and expired, and the REAL 16:25 cross
@@ -109,6 +118,7 @@ export const EMA_CROSS_1H: EmaCrossConfig = {
   confirm_price_ext: 0.005,
   instant_vol_x: 5,
   confirm_min_notional: 10_000,
+  nominate_min_notional: 2_000,
   renominate_cooldown_sec: 7_200, // two bars
   intrabar_detect: true,
   bucket_offset_sec: 0,
@@ -132,6 +142,7 @@ export const EMA_CROSS_4H: EmaCrossConfig = {
   confirm_price_ext: 0.005,
   instant_vol_x: 5,
   confirm_min_notional: 10_000,
+  nominate_min_notional: 2_000,
   renominate_cooldown_sec: 14_400, // one bar — a dud re-arms next bar
   intrabar_detect: true,
   bucket_offset_sec: 0,     // set live by the tick feed (EDT 0 / EST 3600)
@@ -398,6 +409,11 @@ export class EmaCrossTracker {
     if (pDiff <= 0) return null;
     const sibMedian = median(st.sibVols);
     if (sibMedian < this.cfg.sibling_min_sh) return null;
+    // Junk-print guard (the LBTYK phantom): the bucket's accumulated dollars
+    // must be real before a provisional cross may nominate. No state is
+    // consumed on rejection — a later tick in the same bucket re-evaluates
+    // as volume accumulates, so a genuine burst fires seconds later.
+    if (c * st.bucketVol < this.cfg.nominate_min_notional) return null;
     const ratio = st.bucketVol / sibMedian;
     if (ratio >= this.cfg.instant_vol_x && c * st.bucketVol >= this.cfg.confirm_min_notional) {
       st.confirmedToday = true;
@@ -513,7 +529,12 @@ export class EmaCrossTracker {
       !st.watch && !st.confirmedToday && closeTs >= st.lockedUntil
     ) {
       const diff = st.emaF - st.emaS;
-      if (st.prevDiff <= 0 && diff > 0 && sibMedian >= this.cfg.sibling_min_sh) {
+      if (st.prevDiff <= 0 && diff > 0 && sibMedian >= this.cfg.sibling_min_sh
+        // Junk-print guard: a bar whose entire notional is a stray micro-print
+        // (LBTYK: 1 share, $11) doesn't nominate — the cross is consumed
+        // silently and a genuine re-cross re-fires.
+        && c * v >= this.cfg.nominate_min_notional
+      ) {
         const ratio = v / sibMedian;
         if (ratio >= this.cfg.instant_vol_x && c * v >= this.cfg.confirm_min_notional) {
           // The cross bar itself arrived on expanded volume — the operator's
