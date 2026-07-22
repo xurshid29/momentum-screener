@@ -58,6 +58,16 @@ export interface EmaCrossConfig {
   // (24% of nominations) held real thin-tape crosses (BANL $683, ALP $1.6k)
   // — hence $500, not the first-guess $2k.
   nominate_min_notional: number;
+  // Splits junk-bar crosses into two fates (the ZBAO vs LBTYK distinction,
+  // 2026-07-22): a junk-dollar cross bar whose close moved MORE than this
+  // fraction vs the previous close is a phantom print (LBTYK: +10% on $11 —
+  // a trade the SIP tape never carried) → discarded. A junk-dollar cross
+  // bar at a coherent price (ZBAO: +1% on $162 — a real quiet curl) →
+  // PENDING: it converts to a nomination when real dollars arrive while the
+  // fast EMA still sits above the slow (ZBAO's volume came 1.5h after the
+  // 18:25 cross; the old behavior consumed the cross and stayed silent
+  // through a +40% run).
+  junk_outlier_pct: number;
   // Stale-EMA guard (the SKYQ case, 2026-07-22): a thin name can go hours
   // without printing on OUR feed while the consolidated tape keeps trading —
   // the committed EMAs freeze, and the first resume tick "crosses" EMAs that
@@ -98,6 +108,7 @@ export const EMA_CROSS: EmaCrossConfig = {
   // notional now recorded in tier_events meta.
   confirm_min_notional: 10_000,
   nominate_min_notional: 500,
+  junk_outlier_pct: 0.05,
   stale_gap_bars: 3,
   // Re-arm cooldown after an EXPIRED observation. Nominations were originally
   // once/ticker/day, but TGHL 2026-07-15 showed why that's wrong: a weak
@@ -133,6 +144,7 @@ export const EMA_CROSS_1H: EmaCrossConfig = {
   instant_vol_x: 5,
   confirm_min_notional: 10_000,
   nominate_min_notional: 500,
+  junk_outlier_pct: 0.05,
   stale_gap_bars: 3,
   renominate_cooldown_sec: 7_200, // two bars
   intrabar_detect: true,
@@ -158,6 +170,7 @@ export const EMA_CROSS_4H: EmaCrossConfig = {
   instant_vol_x: 5,
   confirm_min_notional: 10_000,
   nominate_min_notional: 500,
+  junk_outlier_pct: 0.05,
   stale_gap_bars: 3,
   renominate_cooldown_sec: 14_400, // one bar — a dud re-arms next bar
   intrabar_detect: true,
@@ -176,6 +189,8 @@ export interface EmaCrossEvent {
   sib_median: number;    // the sibling median the ratio was computed against
   bars_since_cross: number;
   intrabar?: boolean;    // fired mid-bar by the TV-parity live check
+  cross_ts_sec?: number; // pending conversions: the ORIGINAL cross bar's close
+                         // time — display anchors "cross X ago" here, honestly
   peak_ratio?: number;   // expire telemetry: best vol ratio seen in the window
   peak_price?: number;   // expire telemetry: best close seen in the window
 }
@@ -201,6 +216,12 @@ interface SymState {
   seedSumS: number;
   bars: number;          // closed bars seen (live + boot-seeded)
   lastCloseTs: number;   // close time of the newest committed bar (0 = none)
+  lastClose: number;     // close of the newest committed bar (0 = none)
+  // Pending cross (the ZBAO mechanism, 2026-07-22): a price-coherent cross
+  // on a junk-dollar bar isn't consumed — it parks here and converts to a
+  // nomination when real dollars arrive while the fast EMA is still above
+  // the slow. Cleared when the cross dies (diff ≤ 0) or at the day roll.
+  pending: { crossTs: number; crossPrice: number } | null;
   prevDiff: number | null; // emaF - emaS at the previous closed bar
   sibVols: number[];     // ring: volumes of the last sibling_bars CLOSED bars
   watch: Observation | null;
@@ -297,6 +318,7 @@ export class EmaCrossTracker {
   snapshot(ticker: string): {
     tf: string; bars: number; ema_fast: number | null; ema_slow: number | null;
     prev_diff: number | null; sib_median: number; observing: boolean;
+    pending: boolean;
     confirmed_today: boolean; locked_until: number; open_bucket_ts: number | null;
     open_bucket_close: number | null; open_bucket_vol: number | null;
   } | null {
@@ -310,6 +332,7 @@ export class EmaCrossTracker {
       prev_diff: st.prevDiff,
       sib_median: median(st.sibVols),
       observing: st.watch != null,
+      pending: st.pending != null,
       confirmed_today: st.confirmedToday,
       locked_until: st.lockedUntil,
       open_bucket_ts: st.bucketStart === -1 ? null : st.bucketStart,
@@ -344,6 +367,7 @@ export class EmaCrossTracker {
       st.confirmedToday = false;
       st.lockedUntil = 0;
       st.watch = null;
+      st.pending = null;
     }
   }
 
@@ -353,7 +377,8 @@ export class EmaCrossTracker {
       st = {
         bucketStart: -1, bucketClose: 0, bucketVol: 0,
         emaF: null, emaS: null, seedSumF: 0, seedSumS: 0,
-        bars: 0, lastCloseTs: 0, prevDiff: null, sibVols: [], watch: null, confirmedToday: false, lockedUntil: 0,
+        bars: 0, lastCloseTs: 0, lastClose: 0, pending: null,
+        prevDiff: null, sibVols: [], watch: null, confirmedToday: false, lockedUntil: 0,
         seededUpTo: -1,
       };
       this.state.set(ticker, st);
@@ -473,6 +498,8 @@ export class EmaCrossTracker {
   private processClosedBar(ticker: string, st: SymState, closeTs: number, c: number, v: number, silent: boolean): EmaCrossEvent | null {
     st.bars++;
     st.lastCloseTs = closeTs;
+    const prevClose = st.lastClose; // previous bar's close — the outlier reference
+    st.lastClose = c;
 
     // EMA update — SMA seed over the first `length` closed bars, recursive after.
     if (st.bars <= this.cfg.fast) {
@@ -552,6 +579,52 @@ export class EmaCrossTracker {
       }
     }
 
+    // 1.5) Pending-cross management (the ZBAO mechanism). A price-coherent
+    // cross that happened on a junk-dollar bar sits here until real dollars
+    // arrive WHILE the fast EMA still rides above the slow — then it
+    // converts to a nomination anchored at the ORIGINAL cross. Dies silently
+    // if the cross geometry dies first.
+    if (!silent && st.pending && st.emaF != null && st.emaS != null) {
+      if (st.emaF - st.emaS <= 0) {
+        st.pending = null; // the cross died before dollars ever arrived
+      } else if (
+        out == null && !st.watch && !st.confirmedToday &&
+        c * v >= this.cfg.nominate_min_notional
+      ) {
+        const p = st.pending;
+        st.pending = null;
+        const ratio = sibMedian > 0 ? v / sibMedian : 0;
+        const barsSince = Math.max(1, Math.round((closeTs - p.crossTs) / this.cfg.interval_sec));
+        console.log(`[ema-cross] pending cross converted after ${Math.round((closeTs - p.crossTs) / 60)}m ${ticker} (${this.cfg.tf})`);
+        if (
+          ratio >= this.cfg.instant_vol_x &&
+          c >= p.crossPrice &&
+          c * v >= this.cfg.confirm_min_notional
+        ) {
+          // Dollars arrived violently — confirm outright (ZBAO's 20:25 class).
+          st.confirmedToday = true;
+          out = {
+            type: 'confirm', ticker, tf: this.cfg.tf, ts_sec: closeTs, price: c,
+            cross_price: p.crossPrice, vol_ratio: +ratio.toFixed(1),
+            volume: v, sib_median: sibMedian, bars_since_cross: barsSince,
+            cross_ts_sec: p.crossTs,
+          };
+        } else {
+          st.watch = {
+            crossTs: p.crossTs, crossPrice: p.crossPrice, sibMedian,
+            barsSeen: 0, peakRatio: +ratio.toFixed(1), peakPrice: c,
+            crossBucket: -1, // the cross bar closed long ago
+          };
+          out = {
+            type: 'nominate', ticker, tf: this.cfg.tf, ts_sec: closeTs, price: c,
+            cross_price: p.crossPrice, vol_ratio: +ratio.toFixed(1),
+            volume: v, sib_median: sibMedian, bars_since_cross: barsSince,
+            cross_ts_sec: p.crossTs,
+          };
+        }
+      }
+    }
+
     // 2) Cross detection — only with warmed EMAs, a usable sibling baseline,
     // no confirm yet today, and outside the post-expire re-arm cooldown.
     if (
@@ -565,11 +638,17 @@ export class EmaCrossTracker {
       const diff = st.emaF - st.emaS;
       if (st.prevDiff <= 0 && diff > 0 && sibMedian >= this.cfg.sibling_min_sh
         && c * v < this.cfg.nominate_min_notional) {
-        // Junk-print guard: a bar whose entire notional is a stray micro-print
-        // (LBTYK: 1 share, $11) doesn't nominate — the cross is consumed and
-        // a genuine re-cross re-fires. Logged (not tier_events — too chatty)
-        // so "why didn't X nominate" is answerable from `grep consumed`.
-        console.log(`[ema-cross] cross consumed — junk bar $${Math.round(c * v)} ${ticker} (${this.cfg.tf})`);
+        // Junk-dollar cross bar. Two fates (the ZBAO vs LBTYK distinction):
+        // an OUTLIER price on junk dollars is a phantom print the SIP tape
+        // never carried → discarded outright; a COHERENT price on junk
+        // dollars is a real quiet curl → parked as pending (block 1.5).
+        const outlier = prevClose > 0 && Math.abs(c / prevClose - 1) > this.cfg.junk_outlier_pct;
+        if (outlier) {
+          console.log(`[ema-cross] cross discarded — outlier junk print $${Math.round(c * v)} ${ticker} (${this.cfg.tf})`);
+        } else {
+          st.pending = { crossTs: closeTs, crossPrice: c };
+          console.log(`[ema-cross] cross pending — junk bar $${Math.round(c * v)} ${ticker} (${this.cfg.tf}) awaiting dollars`);
+        }
       }
       if (st.prevDiff <= 0 && diff > 0 && sibMedian >= this.cfg.sibling_min_sh
         && c * v >= this.cfg.nominate_min_notional

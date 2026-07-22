@@ -376,5 +376,42 @@ console.log('S19 — seed/live continuity: a deploy-style split changes nothing'
   check('prev diff identical', Math.abs((sa.prev_diff ?? 0) - (sb.prev_diff ?? 0)) < 1e-12);
 }
 
+console.log('S20 — pending cross (ZBAO): a quiet-curl cross waits for dollars, then fires');
+{
+  const s = new Sim();
+  s.bars(70, 1.0, 10_000); // flat: EMAs equal, prevDiff 0
+  s.bar(1.01, 300);        // price-coherent cross bar on junk dollars (~$300)
+  s.bar(1.012, 250);       // closes the cross bar → pending (no event)
+  s.bars(6, 1.015, 300);   // quiet drift, still junk dollars, cross alive
+  check('no event while dollars are missing', s.events.length === 0, `${s.events.length} events`);
+  check('tracker reports pending', s.tracker.snapshot('TEST')?.pending === true);
+  s.bar(1.05, 8_000);      // dollars arrive ($8.4k) while fast still above slow
+  s.bar(1.05, 8_000);      // closes the converting bar
+  const nom = s.events.find((e) => e.type === 'nominate');
+  check('converted to nomination', !!nom, `${s.events.length} events`);
+  check('anchored at the ORIGINAL cross', !!nom && nom.cross_ts_sec != null && nom.cross_ts_sec < nom.ts_sec - 5 * 300,
+    `cross_ts ${nom?.cross_ts_sec} vs ts ${nom?.ts_sec}`);
+  check('pending cleared after conversion', s.tracker.snapshot('TEST')?.pending === false);
+}
+
+console.log('S21 — pending dies with the cross; outlier phantoms never pend (LBTYK safe)');
+{
+  const s = new Sim();
+  s.bars(70, 1.0, 10_000);
+  s.bar(1.01, 300);
+  s.bar(1.005, 250); // pending set on the coherent junk cross
+  s.bars(8, 0.9, 10_000); // cross geometry dies before dollars arrive
+  check('pending cleared when the cross dies', s.tracker.snapshot('TEST')?.pending === false);
+  check('no events from the dead pending', s.events.length === 0);
+
+  const t = new Sim();
+  t.bars(70, 1.0, 10_000);
+  t.bar(1.1, 1);       // the LBTYK phantom: +10% outlier on $1.1
+  t.bar(1.0, 10_000);  // closes it — outlier junk is DISCARDED, not pended
+  check('outlier phantom never pends', t.tracker.snapshot('TEST')?.pending === false);
+  t.bars(4, 1.0, 10_000); // normal tape continues — a pended phantom would convert here
+  check('phantom stays silent on normal tape', t.count('nominate') === 0 && t.count('confirm') === 0);
+}
+
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

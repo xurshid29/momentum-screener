@@ -857,6 +857,9 @@ class PollerService {
         tf, price: e.price, cross_price: e.cross_price, vol_ratio: e.vol_ratio,
         vol: e.volume, sib_median: e.sib_median, notional: Math.round(e.price * e.volume),
         bars: e.bars_since_cross, in_ladder: inLadder, intrabar: e.intrabar ?? false,
+        // Pending conversions (the ZBAO mechanism): how long the cross waited
+        // for dollars — a first-class grading cut.
+        pending_min: e.cross_ts_sec ? Math.round((e.ts_sec - e.cross_ts_sec) / 60) : null,
       });
       // Every event displays. The old "in-ladder names skip 5m display" rule
       // died 2026-07-22 (the LABT confusion): the Telegram fired but the row
@@ -870,8 +873,10 @@ class PollerService {
       if (e.type === 'confirm') this.pushCrossAlert(e, tf);
       // Timestamps use the BAR's close time (intrabar: the tick's time), not
       // processing wall-clock, so the row's "ago" matches what the operator
-      // sees on a TV chart (2026-07-15, the OPTX confusion).
-      const barIso = new Date(e.ts_sec * 1000).toISOString();
+      // sees on a TV chart (2026-07-15, the OPTX confusion). Pending
+      // conversions anchor on the ORIGINAL cross bar (cross_ts_sec) — a
+      // ZBAO row honestly reads "cross 1.5h ago", not "cross now".
+      const barIso = new Date((e.cross_ts_sec ?? e.ts_sec) * 1000).toISOString();
       this.emaCrosses.set(key, {
         ticker: e.ticker,
         tf,
@@ -880,7 +885,7 @@ class PollerService {
         cross_price: e.cross_price,
         vol_ratio: e.vol_ratio,
         cross_at: barIso,
-        confirmed_at: e.type === 'confirm' ? barIso : null,
+        confirmed_at: e.type === 'confirm' ? new Date(e.ts_sec * 1000).toISOString() : null,
         thin_tape: e.sib_median * e.cross_price < CROSS_THIN_TAPE_NOTIONAL,
         news_title: null, news_url: null, news_published_at: null, catalyst: null,
         last_event_ms: nowMs,
