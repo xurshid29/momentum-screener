@@ -1,4 +1,4 @@
-# Session Handover — updated 2026-07-16
+# Session Handover — updated 2026-07-22
 
 A running handover so a fresh session can continue without re-deriving context.
 **Read `docs/web-dashboard.md` first** (the canonical status doc); this file is
@@ -86,6 +86,38 @@ Journal; **attribution join still the open payoff**) · 06-17 tick feed go-live.
 ---
 
 ## What shipped this session (newest first, all on prod unless noted)
+
+XTAPE. **The thin-tape day (2026-07-22 afternoon): the operator stress-tested
+the EMA layer against TV all day; every miss traced to ONE root — EQUS.MINI
+is a subset tape — and each manifestation got its mechanism.** The chain:
+(1) **LBTYK phantom** — 1-share $11 odd-lot print +10% off market nominated;
+SIP excludes odd lots so TV never saw it → `nominate_min_notional` junk
+floor, calibrated $500 from meta (all measured phantoms <$400; the $500-2k
+band held real thin crosses — BANL/ALP). (2) **SKYQ stale-cross-as-fresh** —
+MINI silent 2.5h while consolidated traded; frozen EMAs "crossed" on the
+resume tick → `stale_gap_bars` guard (intrabar suppressed after >3 intervals
+in-session silence; session-open exempt). (3) **thin-tape ⚠️** on rows with
+sibling notional <$5k at cross ("verify on chart"). (4) **in-ladder 5m
+display skip REMOVED** (LABT: Telegram fired, row hidden in a section the
+operator hides — alert and row must match). (5) **TV-log audit**: 11 TV 1h
+alerts vs our 1 — all misses = sparse/stale MINI 1h series → HTF backfill
+gains Yahoo consolidated fallback + staleness targeting (newest bar >12h) +
+hourly rescan w/ 2h per-symbol retry; verified live (TMDE 98 stale bars →
+948 fresh). (6) **FAC anatomy** — 11-min lag fully explained by a 25-min
+MINI print gap; led to the feed decision: **operator chose to STAY on
+EQUS.MINI** (SIP/PLUS upgrade path documented in tick_feed_scoping memory).
+(7) **ZBAO pending-cross mechanism** — a price-coherent cross on a junk bar
+(the quiet curl, the operator's core thesis) is PENDED, not consumed;
+converts to nomination/confirm when dollars arrive while fast>slow, anchored
+at the ORIGINAL cross (`cross_ts_sec`, meta `pending_min`); outlier junk
+(LBTYK class, `junk_outlier_pct` 5%) still discarded. (8) **Calculation
+audit**: S14 golden EMA (1e-9), S19 seed/live bit-identity, backfill-1h ==
+live-5m closes join (8/8 exact), `/ema-debug` endpoint; suite = 21
+scenarios. Alert surface (phone+sounds+title) is EMA-only per XALRT + web
+kill-switch maps in useScreenerAlerts/useTabTitleFlash (observe=soft E5,
+confirm=B5→F#6 pair). ⚠️ Grading: cross semantics changed repeatedly TODAY
+(floors 11:05, floor $500 + guards ~13:50-15:20, pending-cross ~16:30 UTC) —
+the clean 10/65 segment effectively starts 2026-07-23.
 
 XALRT. **📈 cross-confirm Telegram + everything else muted (2026-07-22,
 operator's call).** New `ema_cross` alert component: 📈✅ push on every
