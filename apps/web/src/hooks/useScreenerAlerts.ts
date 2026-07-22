@@ -16,10 +16,11 @@ import type { CyclePayload } from '../api/types';
 // the seen-set bookkeeping below keeps marking events while muted, so
 // flipping a flag back on never back-blasts the day's backlog.
 const DASHBOARD_ALERTS: Record<
-  'ema_cross' | 'news_radar' | 'tick_confirmed' | 'tick_watch' | 'accum' | 'new_with_catalyst' | 'fresh_news',
+  'ema_cross_confirm' | 'ema_cross_observe' | 'news_radar' | 'tick_confirmed' | 'tick_watch' | 'accum' | 'new_with_catalyst' | 'fresh_news',
   boolean
 > = {
-  ema_cross: true,
+  ema_cross_confirm: true,  // ✅ volume confirmed — bright two-tone + notification
+  ema_cross_observe: true,  // 📈 new cross appeared — soft single tone
   news_radar: false,
   tick_confirmed: false,
   tick_watch: false,
@@ -110,6 +111,19 @@ function accumPing() {
   beep(523, 200, 0, 0.28);     // C5
 }
 
+function crossObservePing() {
+  // 📈 a new EMA cross appeared (observing) — single soft mid tone. A
+  // heads-up to glance at the chart; deliberately quieter than the confirm.
+  beep(659, 220, 0, 0.34);     // E5
+}
+
+function crossConfirmPing() {
+  // 📈✅ volume confirmed the cross — bright ascending pair, THE alert sound
+  // of the dashboard now that everything else is muted (2026-07-22).
+  beep(988, 170, 0, 0.5);      // B5
+  beep(1480, 240, 0.18, 0.5);  // F#6
+}
+
 export function requestNotificationPermission() {
   if ('Notification' in window && Notification.permission === 'default') {
     void Notification.requestPermission();
@@ -148,29 +162,41 @@ export function useScreenerAlerts(payload: CyclePayload | null) {
       .map((t) => ({ key: `${t.ticker}:${t.status ?? 'confirmed'}`, ticker: t.ticker, status: t.status ?? 'confirmed' }));
     const radarKeys = (payload.news_radar ?? [])
       .map((n) => ({ key: `${n.ticker}:${n.url}`, ticker: n.ticker }));
-    // EMA-cross layer: ping only on volume CONFIRMATION (nominations are
-    // silent — the whole point is the system does the 30-min watching).
-    const crossKeys = (payload.ema_crosses ?? [])
+    // EMA-cross layer: two distinct sounds — a soft tone when a NEW cross
+    // appears (observing; the nomination itself is the operator's cue on the
+    // HTF layers) and a bright pair when volume CONFIRMS.
+    const crossConfirmKeys = (payload.ema_crosses ?? [])
       .filter((x) => x.status === 'confirmed')
-      .map((x) => ({ key: `${x.ticker}:${x.confirmed_at}`, ticker: x.ticker }));
+      .map((x) => ({ key: `${x.tf}|${x.ticker}:${x.confirmed_at}`, ticker: x.ticker }));
+    const crossObserveKeys = (payload.ema_crosses ?? [])
+      .map((x) => ({ key: `${x.tf}|${x.ticker}:${x.cross_at}`, ticker: x.ticker, confirmed: x.status === 'confirmed' }));
 
     if (!seenFirst.current) {
       seenFirst.current = true;
       // Seed seen ticks so catches already on screen at load don't all ping.
       tickKeys.forEach((t) => seenTicks.current.add(t.key));
       radarKeys.forEach((n) => seenRadar.current.add(n.key));
-      crossKeys.forEach((x) => seenTicks.current.add(x.key));
+      crossConfirmKeys.forEach((x) => seenTicks.current.add(x.key));
+      crossObserveKeys.forEach((x) => seenTicks.current.add(x.key));
       return;
     }
 
-    const newCrosses = crossKeys.filter((x) => !seenTicks.current.has(x.key));
-    newCrosses.forEach((x) => seenTicks.current.add(x.key));
-    if (DASHBOARD_ALERTS.ema_cross && newCrosses.length > 0) {
-      try { watchPing(); } catch { /* audio context not unlocked */ }
+    const newConfirmedCrosses = crossConfirmKeys.filter((x) => !seenTicks.current.has(x.key));
+    newConfirmedCrosses.forEach((x) => seenTicks.current.add(x.key));
+    // A row that arrives already confirmed (instant confirm) only plays the
+    // confirm sound — mark its cross key as seen without the observe tone.
+    const newObserving = crossObserveKeys.filter((x) => !seenTicks.current.has(x.key));
+    newObserving.forEach((x) => seenTicks.current.add(x.key));
+    const newObservingOnly = newObserving.filter((x) => !x.confirmed);
+
+    if (DASHBOARD_ALERTS.ema_cross_confirm && newConfirmedCrosses.length > 0) {
+      try { crossConfirmPing(); } catch { /* audio context not unlocked */ }
       notify(
-        '📈 EMA cross confirmed — volume expanding',
-        newCrosses.length <= 3 ? newCrosses.map((x) => x.ticker).join(', ') : `${newCrosses.length} confirmed crosses`,
+        '📈✅ EMA cross confirmed — volume expanding',
+        newConfirmedCrosses.length <= 3 ? newConfirmedCrosses.map((x) => x.ticker).join(', ') : `${newConfirmedCrosses.length} confirmed crosses`,
       );
+    } else if (DASHBOARD_ALERTS.ema_cross_observe && newObservingOnly.length > 0) {
+      try { crossObservePing(); } catch { /* audio context not unlocked */ }
     }
 
     // News radar — soft ping for each new entry (a fresh catalyst on a known
