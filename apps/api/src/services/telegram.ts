@@ -26,7 +26,8 @@ export type AlertComponent =
   | 'tick_catch'    // 🛰️ volume-confirmed catch
   | 'radar'         // 📰 news radar (strong/major urgency)
   | 'dual_signal'   // momentum+ignition dual-signal
-  | 'swing';        // swing-score breakout
+  | 'swing'         // swing-score breakout
+  | 'ema_cross';    // 📈 volume-confirmed EMA cross (any timeframe)
 let disabledAlerts: Set<string> | null = null;
 export function alertDisabled(component: AlertComponent): boolean {
   if (!disabledAlerts) {

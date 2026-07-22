@@ -87,6 +87,19 @@ Journal; **attribution join still the open payoff**) · 06-17 tick feed go-live.
 
 ## What shipped this session (newest first, all on prod unless noted)
 
+XALRT. **📈 cross-confirm Telegram + everything else muted (2026-07-22,
+operator's call).** New `ema_cross` alert component: 📈✅ push on every
+volume-confirmed cross (any timeframe; once per ticker+tf/ET-day, dedup
+reseeded from tier_events on boot so deploys don't re-ping; message carries
+tf, expansion multiple, cross price + extension, intrabar flag, and the
+day's catalyst when the news enrichment has landed). Simultaneously the
+droplet's `.env` sets `ALERTS_DISABLED` to ALL other components (momentum,
+ignition, new_ignition, fresh_burst, accum, tick_watch, tick_catch, radar,
+dual_signal, swing) — detection/grading/dashboard unaffected, re-enable by
+editing the env + `up -d api`. The phone now speaks only when a cross
+confirms. ⚠️ The muted components' alert *quality* can no longer be judged
+from Telegram history — tier_events remains the only grading source.
+
 XNEWS. **📈 cross rows get news support (2026-07-22).** Cross tickers are
 mostly off-screen, so the per-cycle news fan-out never covered them; rows
 now enrich async — DB-first (Benzinga market-wide sweep/radar articles),

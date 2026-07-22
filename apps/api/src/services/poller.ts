@@ -588,6 +588,9 @@ class PollerService {
   // 📈 EMA-cross layer entries (observing/confirmed), keyed by ticker.
   // Display-only; graded via tier_events (tier='cross'). Cleared at midnight.
   private emaCrosses = new Map<string, EmaCrossItem & { last_event_ms: number }>();
+  // 📈 cross-confirm Telegram dedup — once per ticker+tf per ET day; rebuilt
+  // from tier_events on boot so a mid-session deploy doesn't re-ping.
+  private alertedCross = new Set<string>();
   // 📈 cross-row news enrichment cache — per ticker, per news day. A `null`
   // value means "looked, nothing today" (prevents re-fetching on every cross
   // event for the same name). Cleared at the 04:00 ET news-day roll.
@@ -806,6 +809,22 @@ class PollerService {
     } catch { /* best-effort — the row simply stays newsless */ }
   }
 
+  // 📈 confirm alert — the only component the operator wants on the phone
+  // (2026-07-22; everything else muted via ALERTS_DISABLED). Once per
+  // ticker+tf per ET day; carries the cached catalyst when enrichment has
+  // already landed (it usually has — enrichment starts at nomination).
+  private pushCrossAlert(e: import('./ema-cross.js').EmaCrossEvent, tf: EmaCrossTf): void {
+    if (!telegramEnabled() || this.alertsMuted || alertDisabled('ema_cross')) return;
+    const key = `${tf}|${e.ticker}`;
+    if (this.alertedCross.has(key)) return;
+    this.alertedCross.add(key);
+    const cached = this.crossNewsCache.get(e.ticker);
+    void sendTelegram(formatEmaCrossAlert(
+      e.ticker, tf, e.price, e.cross_price, e.vol_ratio, e.intrabar ?? false,
+      cached ? { title: cached.title, catalyst: cached.catalyst } : null,
+    ));
+  }
+
   // Stamp the cached news entry onto every live cross row for the ticker.
   private applyCrossNews(ticker: string): void {
     const entry = this.crossNewsCache.get(ticker);
@@ -837,6 +856,7 @@ class PollerService {
         `$${e.price.toFixed(2)} · ${e.vol_ratio}x sibling vol` +
         `${e.intrabar ? ' · intrabar' : ''}${skipDisplay ? ' · (in ladder — display skipped)' : ''}`,
       );
+      if (e.type === 'confirm') this.pushCrossAlert(e, tf);
       if (skipDisplay) return;
       // Timestamps use the BAR's close time (intrabar: the tick's time), not
       // processing wall-clock, so the row's "ago" matches what the operator
@@ -868,6 +888,7 @@ class PollerService {
         `[ema-cross] 📈✅ confirm ${e.ticker}${tfTag} $${e.price.toFixed(2)} · ${e.vol_ratio}x sibling vol · ` +
         `${e.bars_since_cross} bars after the cross ($${e.cross_price.toFixed(2)})${e.intrabar ? ' · intrabar' : ''}`,
       );
+      this.pushCrossAlert(e, tf);
       if (existing) {
         existing.status = 'confirmed';
         existing.price = e.price;
@@ -1297,6 +1318,7 @@ class PollerService {
           const xtf = emaCrossTfOf(m.tf);
           const xkey = `${xtf}|${t}`;
           if (r.event === 'confirm') {
+            this.alertedCross.add(xkey); // already pinged before the deploy
             const prev = this.emaCrosses.get(xkey);
             this.emaCrosses.set(xkey, {
               ticker: t,
@@ -1425,6 +1447,7 @@ class PollerService {
       this.alertedFreshBurst.clear();
       this.alertedNewIgnition.clear();
       this.alertedTickCatch.clear();
+      this.alertedCross.clear();
       this.alertedTickWatch.clear();
       this.tickCatches.clear();
       this.accumSeen.clear();
@@ -3276,6 +3299,35 @@ function formatTickWatchAlert(e: TickEvent): string {
 // confirmed it: the validated relvol surge rule, the baseline-free sustain
 // read, or a Finviz screen returning the name. Shows the watch-flag chg% so
 // the lead the early tier bought is visible in the alert itself.
+// 📈 volume-confirmed EMA cross — the operator's favorite layer, alerted by
+// explicit request 2026-07-22 (all other components muted via
+// ALERTS_DISABLED the same day). Carries the timeframe, the expansion
+// multiple, and the day's catalyst when the news enrichment has landed.
+function formatEmaCrossAlert(
+  ticker: string, tf: string, price: number, crossPrice: number, volRatio: number,
+  intrabar: boolean, news: { title: string; catalyst: CatalystInfo | null } | null,
+): string {
+  const finviz = `https://finviz.com/quote.ashx?t=${encodeURIComponent(ticker)}`;
+  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(ticker)}`;
+  const ext = crossPrice > 0 ? (price / crossPrice - 1) * 100 : 0;
+  const evidence = [
+    `${volRatio.toFixed(1)}× sibling vol`,
+    `cross $${crossPrice.toFixed(2)}${ext >= 0.5 ? ` (+${ext.toFixed(1)}% since)` : ''}`,
+  ];
+  if (intrabar) evidence.push('intrabar');
+  const lines = [
+    `📈✅ <b>${escapeHtml(ticker)}</b>  $${price.toFixed(2)}  <b>${tf.toUpperCase()}</b> EMA CROSS CONFIRMED`,
+    evidence.join(' · '),
+  ];
+  if (news) {
+    const c = news.catalyst;
+    const tag = c ? `🔥${c.score}${c.type && c.type !== 'other' ? ` ${escapeHtml(c.type)}` : ''} — ` : '';
+    lines.push(`${tag}${escapeHtml(news.title.slice(0, 120))}`);
+  }
+  lines.push(`<a href="${finviz}">Finviz</a> · <a href="${tv}">TradingView</a>`);
+  return lines.join('\n');
+}
+
 function formatTickConfirmAlert(
   ticker: string, price: number, changePct: number, relVol: number, momPct: number,
   watchChangePct: number | null, via: 'surge' | 'sustain' | 'screen',
