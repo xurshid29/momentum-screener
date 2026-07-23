@@ -7,18 +7,29 @@ the "where we are right now + what's open" layer on top of it.
 detection chain** (📰/🤫/📈/👀/🛰️ — how each layer works, knobs, grading SQL).
 Memory files under `…/memory/` also carry the durable facts.
 
-**CURRENT FOCUS (2026-07-15): the early-detection chain is COMPLETE and in its
-grading week.** The full chain, all live on prod:
-📰 news radar (pre-move catalyst on known runners) →
-🤫 quiet accumulation (volume-before-price; screen-side chg<10+fastRV≥10×
-sustained, AND detector-side cum 3–10% + relvol≥3× sustained 120s) →
-📈 EMA-cross layer (6/50 on 5m bars NOMINATES, volume-vs-sibling-candles
-CONFIRMS — the operator's manual TV loop automated; **TRIAL status**) →
-👀 watch (+10% cross, evidence-gated rv≥3× OR mom≥3%/60s) →
-🛰️ confirm (surge / sustain / screen) → screens.
-Every transition persists to the `tier_events` DB table and the live sidebar
-state reseeds on boot (`seedTierState`) — deploys no longer erase evidence,
-entries, or dedups.
+**CURRENT FOCUS (2026-07-23): the 📈 EMA-cross layer is the operator's PRIMARY
+instrument, and the ONLY alerting component.** The chain still runs in full
+(📰 radar → 🤫 accum → 📈 cross → 👀 watch → 🛰️ confirm → screens; every
+transition in `tier_events`; sidebar reseeds on boot), but the posture
+changed 2026-07-22:
+- **📈 cross layer, current shape:** EMA **10/65** on THREE timeframes
+  (5m/1h/4h, config-driven `htfLayers`), intrabar TV-parity detection,
+  volume-vs-siblings confirm ($10k floor), $500 nomination junk floor with
+  the outlier/pending split (LBTYK phantoms discarded; ZBAO quiet-curl
+  crosses PEND until dollars arrive), stale-EMA guard, thin-tape ⚠️, news
+  enrichment + CatalystBadge on rows, per-tf sidebar sections. Full spec:
+  `docs/detection-layers.md`.
+- **Alert posture (operator's call):** droplet `.env` `ALERTS_DISABLED`
+  mutes ALL Telegram components except `ema_cross` (📈✅ confirm pushes,
+  any tf); dashboard sounds/notifications/title-flash are EMA-only via
+  kill-switch maps (`useScreenerAlerts` / `useTabTitleFlash`; observe =
+  soft E5 tone, confirm = B5→F#6 pair + pulse-green row). Everything else
+  is computed + graded but silent — do NOT read alert silence as detection
+  failure.
+- **Feed decision (2026-07-22): staying on Databento EQUS.MINI.** Thin-tape
+  names lag/diverge vs TV by design (MINI ⊂ consolidated); ⚠️ rows mark it;
+  Yahoo consolidated fallbacks keep warmups converged. SIP/PLUS upgrade
+  path documented in `tick_feed_scoping` memory if revisited.
 
 **THE PENDING TASK — the grading pass (run from ~2026-07-17, needs a few full
 sessions of tier_events):** (a) keep/kill the 📈 cross layer — nominate→confirm
@@ -36,9 +47,14 @@ cost — `watch_suppressed reason='low_evidence'` tickers that later confirmed;
 ≥+20pts) + whether the news-gated 🤫 Telegram picks winners; (d) radar
 precision by catalyst type. Then promote/demote Telegram gates accordingly.
 
-**Recent focus trail** (each has a dated entry below): 07-21 EMAX (📈
+**Recent focus trail** (each has a dated entry below): 07-22 XTAPE (the
+thin-tape day: LICN/LBTYK/SKYQ/FAC/ZBAO classes each got a mechanism; feed
+decision = stay on MINI) + XNEWS (news on cross rows) + XALRT (EMA-only
+alert surface, phone+dashboard+title) + 10/65 params & 30-min cooldown ·
+07-21 EMAX (📈
 configurable intervals + 1h layer, per-tf UI sections, hideable LIVE
-TICKS/ignition, golden EMA test + ema-debug endpoint) · 07-17 X4H (📈 4h
+TICKS/ignition, golden EMA test + ema-debug endpoint) + ALRT
+(ALERTS_DISABLED env + 📰 radar toggle) · 07-17 X4H (📈 4h
 cross layer — operator's swing-timing tool, dashboard-only) · 07-16 XINTRA
 (📈 intrabar TV-parity — the ~5-min lag closed) + XMETA (📈 hardening:
 Databento backfill, cooldown re-arm, notional floor, gradable meta) · 07-15
@@ -106,6 +122,11 @@ hourly rescan w/ 2h per-symbol retry; verified live (TMDE 98 stale bars →
 948 fresh). (6) **FAC anatomy** — 11-min lag fully explained by a 25-min
 MINI print gap; led to the feed decision: **operator chose to STAY on
 EQUS.MINI** (SIP/PLUS upgrade path documented in tick_feed_scoping memory).
+(6b) **LICN 5m warmup fix** (same day, morning): 16 MINI bars in 3d while
+Yahoo had 167 — the 5m Yahoo fallback now triggers on SPARSE (not just
+empty) MINI series; bars_5m seed window 48h→5d, retention 3d→6d,
+direct-seed slice 120→200 bars. (6c) freshly confirmed rows pulse green
+(tf-scaled: 5m 5min / 1h 15min / 4h 30min).
 (7) **ZBAO pending-cross mechanism** — a price-coherent cross on a junk bar
 (the quiet curl, the operator's core thesis) is PENDED, not consumed;
 converts to nomination/confirm when dollars arrive while fast>slow, anchored
@@ -480,9 +501,28 @@ history (temp tables `ir_entry` / `scored`, joined `ignition_results` →
 
 ---
 
-## Other deferred / known (refreshed 2026-07-15)
+## Other deferred / known (refreshed 2026-07-23)
 
-- **The grading pass** — see CURRENT FOCUS. The single next task.
+- **The grading pass** — the single next task; the clean 10/65 cross segment
+  starts **2026-07-23** (semantics churned all of 07-22). New first-class
+  cuts available in tier_events meta: `tf` (5m/1h/4h), `intrabar`,
+  `notional`/`sib_median` (thin-tape derivable: sib_median×cross_price<$5k),
+  `pending_min` (ZBAO conversions), `in_ladder`, and catalyst-vs-not via SQL
+  join to `news_articles` on (ticker, day).
+- ⚠️ **Anthropic API credits EXHAUSTED (noticed 2026-07-22)** —
+  `[catalyst-claude] 400 credit balance is too low` in api logs; the LLM
+  catalyst refinement is dead and classification is rules-only until the
+  operator tops up the balance (impact/hype scores skew accordingly).
+  Detection unaffected.
+- **Yahoo's unofficial API is now load-bearing** for thin-tape EMA warmups
+  (5m sparse fallback + HTF consolidated fallback, hourly scans). If Yahoo
+  breaks: MINI-quiet names lose warmup/freshness (LICN/TMDE classes return);
+  everything else unaffected. Watch `viaYahoo` counts in `[ema-backfill]`
+  logs. The clean escape remains the Databento SIP/PLUS upgrade.
+- **Deploy-loss residuals (tracker memory):** 5m 'observing' rows drop on
+  reseed (HTF rows survive their display windows); PENDING crosses are lost
+  on deploy (re-fire needs a genuine re-cross); detector quiet baselines
+  rebuild ~1-2 min. All logged classes, all self-correcting.
 - **Trade Journal attribution join (TJ)** — trades ↔ `screener_outcomes` +
   detections on `(ticker, et_date)`; the report-system payoff, untouched since
   06-21.
@@ -499,19 +539,21 @@ history (temp tables `ir_entry` / `scored`, joined `ignition_results` →
 - **DB growth** — 4.9 GB total, ~20 GB/yr run-rate (per-cycle tables dominate);
   49 GB free → years of headroom. Plan when disk crosses ~60%: archive+prune
   per-cycle rows >120–180d (or month-partitioning). Deliberately deferred.
-- **Databento capacity** — non-issue: flat $199/mo, ~3k symbols subscribed
-  (structural universe snapshot, self-bounding), chunked additive SUBs,
-  `ALL_SYMBOLS` exists as the ceiling. Real limit = ONE live connection
-  (deploy-overlap incident class, fixed 06-22).
+- **Databento capacity** — flat $199/mo live (EQUS.MINI, ~3.4k symbols);
+  historical is metered but tiny (daily ohlcv backfills bill cents; the
+  hourly HTF scans are batched 100 syms/request). Real limit = ONE live
+  connection (deploy-overlap incident class, fixed 06-22). Bar stores:
+  bars_5m (6d retention / 5d seed), bars_1h (35d), bars_4h (130d).
 - **Known-runner set eviction** — `radarHistory` re-seeds per boot (rolling
   30d); a process running many weeks without deploys wouldn't evict. Moot at
   current deploy cadence; one-line daily reseed if that changes.
-- **Detector-side residuals that intentionally remain:** quiet baselines
-  rebuild ~1–2 min post-deploy; reseeded 'observing' cross rows are dropped;
-  tick catches still lack float/catalyst enrichment (open item d from 06-23).
+- **Tick catches still lack float/catalyst enrichment** (open item d from
+  06-23) — note the cross layer got its news enrichment 07-22; the ladder
+  did not.
 - **Deeper Finviz relief** (share the AH v=152 overlay across screens) and
   **retune swing/dual-signal thresholds from outcomes** — both still open,
   both non-urgent.
-- Git state at handover: `main` @ `c4b62b2` + this docs commit, in sync;
-  working tree has only the operator's untracked `watchlist-*.txt` scratch
-  files.
+- Git state at handover: `main` @ `3c457a5` + this docs commit, in sync;
+  working tree has only the operator's untracked scratch files
+  (`watchlist-*.txt` now gitignored after the 07-21 accidental commit —
+  scrubbed from HEAD, still present in history if that ever matters).
