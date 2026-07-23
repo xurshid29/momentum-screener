@@ -3,10 +3,16 @@
 // gating, nominate→confirm, the confirm notional floor (dead-tape 3× must NOT
 // confirm), instant-confirm and its notional demotion to nominate, the price
 // hold, the post-expire re-arm cooldown (the TGHL lesson), confirm-ends-the-
-// day, and boot-seed silence. Run: npx tsx scripts/verify-ema-cross.ts
+// day, boot-seed silence, gap-decay parity + in-gap flip pending (the CPHI
+// lesson), and the warm-symbol consolidated re-seed.
+// Run: npx tsx scripts/verify-ema-cross.ts
 import { EmaCrossTracker, EMA_CROSS, EMA_CROSS_1H, EMA_CROSS_4H, adjustSplitHistory, type EmaCrossConfig, type EmaCrossEvent } from '../src/services/ema-cross.js';
 
-const T0 = 1_750_000_200; // aligned to a 5m boundary; absolute value irrelevant
+const T0 = 1_750_000_200; // aligned to a 5m boundary — a SUNDAY ~11:10 ET, so
+                          // gap-decay never applies and pre-decay scenarios
+                          // keep their exact original semantics
+const T0_SESSION = 1_750_168_800; // Tuesday 2025-06-17 10:00 ET (EDT), 5m-aligned
+                                  // — mid-session weekday for gap-decay scenarios
 
 let failures = 0;
 function check(name: string, cond: boolean, detail = ''): void {
@@ -21,8 +27,10 @@ class Sim {
   lastCloseTs = 0;
   private iv: number;
   private i = 0;
-  constructor(private sym = 'TEST', cfg: EmaCrossConfig = EMA_CROSS) {
+  private t0: number;
+  constructor(private sym = 'TEST', cfg: EmaCrossConfig = EMA_CROSS, t0 = T0) {
     this.iv = cfg.interval_sec;
+    this.t0 = t0;
     this.tracker = new EmaCrossTracker(cfg, (_t, closeTs) => {
       this.liveClosed++;
       this.lastCloseTs = closeTs;
@@ -32,7 +40,7 @@ class Sim {
   // a bar surfaces when the NEXT bar's first tick arrives — feed a trailing
   // flush bar to close the last one you care about.
   bar(close: number, vol: number): EmaCrossEvent | null {
-    const ev = this.tracker.addBar(this.sym, T0 + this.i++ * this.iv, close, vol);
+    const ev = this.tracker.addBar(this.sym, this.t0 + this.i++ * this.iv, close, vol);
     if (ev) this.events.push(ev);
     return ev;
   }
@@ -44,17 +52,17 @@ class Sim {
     this.i += n;
   }
   now(): number {
-    return T0 + this.i * this.iv;
+    return this.t0 + this.i * this.iv;
   }
   // Feed a tick INSIDE the currently open bucket (the one the last bar()
   // call opened) — exercises the intrabar TV-parity path.
   tick(close: number, vol: number, offsetSec = 42): EmaCrossEvent | null {
-    const ev = this.tracker.addBar(this.sym, T0 + (this.i - 1) * this.iv + offsetSec, close, vol);
+    const ev = this.tracker.addBar(this.sym, this.t0 + (this.i - 1) * this.iv + offsetSec, close, vol);
     if (ev) this.events.push(ev);
     return ev;
   }
   seed(close: number, vol: number): void {
-    this.tracker.seedBar(this.sym, T0 + this.i++ * this.iv, close, vol);
+    this.tracker.seedBar(this.sym, this.t0 + this.i++ * this.iv, close, vol);
   }
   count(type: EmaCrossEvent['type']): number {
     return this.events.filter((e) => e.type === type).length;
@@ -411,6 +419,116 @@ console.log('S21 — pending dies with the cross; outlier phantoms never pend (L
   check('outlier phantom never pends', t.tracker.snapshot('TEST')?.pending === false);
   t.bars(4, 1.0, 10_000); // normal tape continues — a pended phantom would convert here
   check('phantom stays silent on normal tape', t.count('nominate') === 0 && t.count('confirm') === 0);
+}
+
+console.log('S22 — gap-decay parity: an in-session feed gap equals flat carry-forward bars (CPHI)');
+{
+  // A: 80 real bars, a 9-bucket in-session silence, resume. B: the same 80
+  // bars with the silence filled by 9 explicit flat bars at the last close.
+  // The EMAs must match to 1e-9 — decay IS the flat fill, computed lazily.
+  const a = new Sim('TEST', EMA_CROSS, T0_SESSION);
+  warmDipped(a, 1.0, 10_000);
+  a.skip(9);
+  a.bar(0.91, 10_000); // resume tick: closes the open 0.9 bar, decays the gap
+  const b = new Sim('TEST', EMA_CROSS, T0_SESSION);
+  warmDipped(b, 1.0, 10_000);
+  b.bars(9, 0.9, 10_000); // the flat fill, as real bars
+  b.bar(0.91, 10_000);
+  const sa = a.tracker.snapshot('TEST')!;
+  const sb = b.tracker.snapshot('TEST')!;
+  check('fast EMA matches the flat-filled series', Math.abs((sa.ema_fast ?? 0) - (sb.ema_fast ?? 0)) < 1e-9,
+    `${sa.ema_fast} vs ${sb.ema_fast}`);
+  check('slow EMA matches the flat-filled series', Math.abs((sa.ema_slow ?? 0) - (sb.ema_slow ?? 0)) < 1e-9,
+    `${sa.ema_slow} vs ${sb.ema_slow}`);
+  check('decay adds no bars to warmup or siblings', sa.bars === 80 && sb.bars === 89,
+    `${sa.bars} vs ${sb.bars}`);
+  check('no events from either path', a.events.length === 0 && b.events.length === 0);
+}
+
+console.log('S23 — decay flip: a quiet-curl cross DURING silence pends, then converts on dollars');
+{
+  const s = new Sim('TEST', EMA_CROSS, T0_SESSION);
+  warmDipped(s, 1.0, 10_000);
+  s.bars(4, 1.0, 10_000);  // 3 closed recovery bars — diff still just below zero,
+                           // last close now ABOVE both EMAs (the curl set-up)
+  check('no cross before the gap', s.events.length === 0);
+  s.skip(12);              // in-session silence — the flat carry crosses fast over slow
+  s.bar(1.0, 300);         // junk resume tick (closes the open bar, decays the gap)
+  check('flip parked as pending, not nominated', s.events.length === 0 && s.tracker.snapshot('TEST')?.pending === true);
+  s.bar(1.01, 250);        // still junk dollars — no conversion either path
+  check('junk dollars cannot convert', s.count('nominate') === 0 && s.tracker.snapshot('TEST')?.pending === true);
+  s.bar(1.02, 10_000);     // dollars arrive → INTRABAR conversion at this very tick
+  const nom = s.events.find((e) => e.type === 'nominate');
+  check('converted to a nomination the moment dollars arrive', !!nom && nom.intrabar === true,
+    `${s.events.length} events`);
+  check('anchored at the in-gap cross, not the resume', !!nom && nom.cross_ts_sec != null
+    && nom.cross_ts_sec > nom.ts_sec - 20 * 300 && nom.cross_ts_sec < nom.ts_sec - 2 * 300,
+    `cross_ts ${nom?.cross_ts_sec} vs ts ${nom?.ts_sec}`);
+  check('pending cleared after conversion', s.tracker.snapshot('TEST')?.pending === false);
+}
+
+console.log('S26 — dead sibling window (CPHI): a real-dollar cross pends and converts, not vanishes');
+{
+  const s = new Sim(); // consecutive bars — no decay involved; the sibling ring is the subject
+  warmDipped(s, 1.0, 10); // ultra-thin tape: sibling median 10 shares (< the 50 floor)
+  s.bar(1.2, 3_000);  // closes the last dip bar, opens the first real-dollar recovery bar
+  s.bar(1.2, 3_000);  // closes recovery bar 1 (diff still ≤0); this tick's provisional
+                      // cross meets real dollars but a dead sibling window → PEND
+  check('pended intrabar over the dead sibling window (was: consumed silently)',
+    s.events.length === 0 && s.tracker.snapshot('TEST')?.pending === true);
+  const ev = s.tick(1.22, 3_000, 90); // dollars keep accumulating → intrabar conversion
+  check('converted intrabar on dollar evidence', ev?.type === 'nominate' && ev.intrabar === true,
+    `got ${ev?.type ?? 'nothing'}`);
+  check('cross price anchored at the pend', ev?.cross_price === 1.2, `$${ev?.cross_price}`);
+}
+
+console.log('S24 — out-of-session gaps decay nothing (overnight/weekend EMAs hold, like TV)');
+{
+  // Default T0 is a Sunday — every bucket is out-of-session. The same curl
+  // set-up as S23 must come through an equally long gap bit-identical to a
+  // gapless control, with no pending.
+  const s = new Sim();
+  warmDipped(s, 1.0, 10_000);
+  s.bars(4, 1.0, 10_000);
+  s.skip(12);
+  s.bar(1.0, 300);
+  const ctl = new Sim();
+  warmDipped(ctl, 1.0, 10_000);
+  ctl.bars(4, 1.0, 10_000);
+  ctl.bar(1.0, 300);
+  const ss = s.tracker.snapshot('TEST')!;
+  const sc = ctl.tracker.snapshot('TEST')!;
+  check('EMAs identical to the gapless control', Math.abs((ss.ema_fast ?? 0) - (sc.ema_fast ?? 0)) < 1e-12
+    && Math.abs((ss.ema_slow ?? 0) - (sc.ema_slow ?? 0)) < 1e-12);
+  check('no pending from the closed-session gap', ss.pending === false);
+}
+
+console.log('S25 — reseedFromHistory: warm-symbol consolidated re-seed (CPHI/sparse path)');
+{
+  const s = new Sim();
+  warmDipped(s, 1.0, 10_000);
+  s.bars(5, 1.2, 10_000);
+  s.bar(1.25, 35_000);
+  s.bar(1.25, 10_000); // S2 pattern → confirmed, day flag set
+  check('set-up confirmed', s.count('confirm') === 1);
+  const base = s.now() + 300;
+  const hist = Array.from({ length: 70 }, (_, k) => ({ closeTs: base + k * 300, close: 2.0, volume: 5_000 }));
+  check('warm symbol accepts the re-seed', s.tracker.reseedFromHistory('TEST', hist));
+  const snap = s.tracker.snapshot('TEST')!;
+  check('EMA state rebuilt from the denser series', snap.bars === 70
+    && Math.abs((snap.ema_fast ?? 0) - 2.0) < 1e-9 && Math.abs((snap.ema_slow ?? 0) - 2.0) < 1e-9);
+  check('day flag survives the re-seed', snap.confirmed_today === true);
+  check('feed-scale sibling volumes kept (not the consolidated 5k)', snap.sib_median === 10_000,
+    `median ${snap.sib_median}`);
+  check('ticks at or before the re-seeded history are dropped',
+    s.tracker.addBar('TEST', base + 69 * 300 - 10, 9.9, 1) == null);
+
+  const t = new Sim();
+  warmDipped(t, 1.0, 10_000);
+  t.bars(5, 1.2, 10_000); // nominate → live observation in flight
+  check('in-flight observation refuses the re-seed',
+    t.count('nominate') === 1 && !t.tracker.reseedFromHistory('TEST', hist)
+    && t.tracker.snapshot('TEST')?.observing === true);
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);

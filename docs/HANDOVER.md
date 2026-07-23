@@ -1,4 +1,4 @@
-# Session Handover — updated 2026-07-22
+# Session Handover — updated 2026-07-23
 
 A running handover so a fresh session can continue without re-deriving context.
 **Read `docs/web-dashboard.md` first** (the canonical status doc); this file is
@@ -30,6 +30,12 @@ changed 2026-07-22:
   names lag/diverge vs TV by design (MINI ⊂ consolidated); ⚠️ rows mark it;
   Yahoo consolidated fallbacks keep warmups converged. SIP/PLUS upgrade
   path documented in `tick_feed_scoping` memory if revisited.
+  **07-23 (XGAPD): the divergence is now structurally mitigated** — gap-decay
+  (empty in-session buckets decay EMAs like flat carry bars → TV-parity
+  horizons on sparse tapes), thin-sibling crosses PEND + convert intrabar
+  (were consumed silently by the 50-sh floor), and warm-but-sparse names get
+  a Yahoo consolidated EMA re-seed (5m + HTF). CPHI replay: nominate 09:35
+  @$1.73 vs the live 09:50:53 @$2.04 — the TV alert matched.
 
 **THE PENDING TASK — the grading pass (run from ~2026-07-17, needs a few full
 sessions of tier_events):** (a) keep/kill the 📈 cross layer — nominate→confirm
@@ -40,14 +46,19 @@ date and count the funnel per observation, not per ticker; ⚠️ EMA params
 changed 6/50→**10/65** on 2026-07-22 (operator's evolved TV setup, all
 timeframes; warmup 50→65 bars, HTF convergence target 150→200; 5m re-arm
 cooldown also 60→30 min same day, measured: re-arm carries 27% of confirms,
-late rallies re-cross median ~4.5h later) — a DIFFERENT signal, segment all
-cross grading again at 07-22); (b) audit the 👀 evidence gate's
+late rallies re-cross median ~4.5h later) — a DIFFERENT signal; ⚠️ AND
+semantics changed again 07-23 (XGAPD: gap-decay + thin-sibling pend +
+sparse re-seed) — **the clean segment starts 2026-07-24**); (b) audit the 👀
+evidence gate's
 cost — `watch_suppressed reason='low_evidence'` tickers that later confirmed;
 (c) re-check accum v2 precision (persistence gate promised ~65% promote / 24%
 ≥+20pts) + whether the news-gated 🤫 Telegram picks winners; (d) radar
 precision by catalyst type. Then promote/demote Telegram gates accordingly.
 
-**Recent focus trail** (each has a dated entry below): 07-22 XTAPE (the
+**Recent focus trail** (each has a dated entry below): 07-23 XGAPD (the
+CPHI 15-min lag: gap-decay to TV-parity EMA horizons on sparse tapes +
+thin-sibling pend/intrabar conversion + warm-sparse Yahoo re-seed; clean
+grading segment moves to 07-24) · 07-22 XTAPE (the
 thin-tape day: LICN/LBTYK/SKYQ/FAC/ZBAO classes each got a mechanism; feed
 decision = stay on MINI) + XNEWS (news on cross rows) + XALRT (EMA-only
 alert surface, phone+dashboard+title) + 10/65 params & 30-min cooldown ·
@@ -102,6 +113,48 @@ Journal; **attribution join still the open payoff**) · 06-17 tick feed go-live.
 ---
 
 ## What shipped this session (newest first, all on prod unless noted)
+
+XGAPD. **The CPHI 15-minute lag → gap-decay: TV-parity EMA horizons on
+sparse tapes (2026-07-23).** Operator: "why 18:50, not 18:35?" — their TV
+10/65 alert fired ~09:35 ET, ours 09:50:53 at $2.04 (the top of the move).
+Root cause was NOT a guard or a missing print: our closes matched TV's
+bar-for-bar, but 65 bars of MINI tape reach back DAYS (CPHI banks ~55
+bars/day; the **median tracked name banks 33/day, 81% < 55** — CPHI is the
+NORM, not an edge case), so our EMA65 still remembered Monday's $2.20 tape
+($1.88) while TV's dense consolidated series had decayed to $1.74. Fix
+shipped in three mechanisms (all timeframes, kill switch `gap_decay`):
+(1) **Gap-decay** — every empty in-session bucket folds the last close into
+the EMAs exactly as if a flat carry bar printed; computed lazily in closed
+form on the next tick (no timers, no synthetic bars in state/warmup/
+siblings/persistence; seed replay applies the same rule → live and reseeded
+state stay bit-identical; nights/weekends decay nothing, like TV). A
+fast-over-slow flip DURING a gap parks a PENDING quiet-curl cross at the
+carry price — the ZBAO mechanism reused. (2) **Thin-sibling pend + intrabar
+conversion** — the decayed CPHI cross landed where the sibling ring (days of
+junk prints, median ~40 sh) sat under the 50-sh dead-tape floor, which used
+to consume the cross SILENTLY; a real-dollar cross over a dead window now
+pends, and ALL pendings convert INTRABAR the second bucket dollars
+accumulate (monotone-volume soundness; conversion gated on the provisional
+diff so a crashing tick can't convert a dying cross). (3) **Warm-but-sparse
+consolidated re-seed** — the Yahoo fallback only rescued below-warmup names
+(CPHI's 329 banked bars = "warm"); now names under 400 banked 5d bars get
+their EMA state rebuilt from Yahoo's consolidated tape via
+`reseedFromHistory` (refuses mid-observation, keeps day flags + the
+feed-scale sibling ring; once/ET-day, most-recent-active first, 400/scan
+cap, deferrals logged), and the HTF backfill gained the same warm re-seed
+(CPHI 1h: EMA65 2.73 vs fast 1.92 — a weeks-deep horizon). **Verified:**
+replay of CPHI's real banked bars → pend 09:30–35, nominate 09:35 @$1.73,
+confirm 09:40 intrabar (vs live actual 09:50:53/$2.04) — the TV alert
+matched; suite now 26 scenarios (S22 decay≡flat-fill parity, S23 in-gap
+flip→pending→dollars, S24 closed-session no-decay, S25 warm re-seed
+contract, S26 dead-sibling pend/convert; S1–S21 unchanged — the default sim
+epoch is a Sunday, so pre-decay scenarios keep exact semantics). ⚠️ ratio
+meta on thin-sibling conversions is inflated (vs a junk median — CPHI reads
+91×/890×); `sib_median` rides in meta and the thin-tape ⚠️ still marks the
+rows — segment in grading. ⚠️ **Cross semantics changed again → the clean
+10/65 segment starts 2026-07-24.** Deferred: Databento EQUS.PLUS historical
+polling (consolidated intraday top-ups, metered cents) if grading still
+shows residual divergence.
 
 XTAPE. **The thin-tape day (2026-07-22 afternoon): the operator stress-tested
 the EMA layer against TV all day; every miss traced to ONE root — EQUS.MINI
@@ -504,21 +557,30 @@ history (temp tables `ir_entry` / `scored`, joined `ignition_results` →
 ## Other deferred / known (refreshed 2026-07-23)
 
 - **The grading pass** — the single next task; the clean 10/65 cross segment
-  starts **2026-07-23** (semantics churned all of 07-22). New first-class
+  starts **2026-07-24** (semantics churned 07-22 AND 07-23 — XGAPD shipped
+  gap-decay + thin-sibling pend + sparse re-seed). New first-class
   cuts available in tier_events meta: `tf` (5m/1h/4h), `intrabar`,
-  `notional`/`sib_median` (thin-tape derivable: sib_median×cross_price<$5k),
-  `pending_min` (ZBAO conversions), `in_ladder`, and catalyst-vs-not via SQL
-  join to `news_articles` on (ticker, day).
+  `notional`/`sib_median` (thin-tape derivable: sib_median×cross_price<$5k;
+  ⚠️ thin-sibling conversions carry inflated ratios — segment on sib_median),
+  `pending_min` (ZBAO + gap-flip + thin-sibling conversions), `in_ladder`,
+  and catalyst-vs-not via SQL join to `news_articles` on (ticker, day).
+  Also watch post-XGAPD: cross volume/day (pend-conversions add fires on
+  sparse names — if noisy, the dials are `SPARSE_5M_MIN_BARS`, the coherence
+  gate, and `nominate_min_notional`).
 - ⚠️ **Anthropic API credits EXHAUSTED (noticed 2026-07-22)** —
   `[catalyst-claude] 400 credit balance is too low` in api logs; the LLM
   catalyst refinement is dead and classification is rules-only until the
   operator tops up the balance (impact/hype scores skew accordingly).
   Detection unaffected.
 - **Yahoo's unofficial API is now load-bearing** for thin-tape EMA warmups
-  (5m sparse fallback + HTF consolidated fallback, hourly scans). If Yahoo
-  breaks: MINI-quiet names lose warmup/freshness (LICN/TMDE classes return);
-  everything else unaffected. Watch `viaYahoo` counts in `[ema-backfill]`
-  logs. The clean escape remains the Databento SIP/PLUS upgrade.
+  (5m sparse fallback + HTF consolidated fallback, hourly scans; since
+  07-23 also the warm-but-sparse 5m/HTF re-seeds — the daily sparse sweep
+  is ~hundreds of calls at 1.5s spacing, watch for throttling). If Yahoo
+  breaks: MINI-quiet names lose warmup/freshness/level-correction
+  (LICN/TMDE/CPHI classes return — though gap-decay alone now keeps sparse
+  EMA horizons TV-like); everything else unaffected. Watch `viaYahoo` +
+  `sparse done` counts in `[ema-backfill]` logs. The clean escape remains
+  the Databento SIP/PLUS upgrade (or metered EQUS.PLUS historical polling).
 - **Deploy-loss residuals (tracker memory):** 5m 'observing' rows drop on
   reseed (HTF rows survive their display windows); PENDING crosses are lost
   on deploy (re-fire needs a genuine re-cross); detector quiet baselines

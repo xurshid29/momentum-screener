@@ -193,6 +193,38 @@ wiggle-nomination cost separately. Kill switch: `EMA_CROSS.intrabar_detect`.
 Residual quantization caveat: a pure gap (no preparatory bar) still crosses
 late; a move with a preparatory bar (TGHL) crosses at that bar — now at the
 moment the provisional EMAs touch, not its close.
+**Gap-decay + sparse re-seed (2026-07-23, the CPHI lesson — the thin-tape
+horizon fix).** The MINI subset tape leaves the median known runner at ~33
+five-minute bars/day (vs ~192 ETH buckets; 81% of tracked names < 55/day) —
+so "65 bars" of slow EMA reached back DAYS while TV's spans hours. CPHI: our
+EMA65 sat at $1.88 (still remembering Monday's $2.20 tape) vs TV's $1.74 off
+the recent flat-line → our cross fired 09:50 ET at $2.04, TV's at ~09:35 —
+15 min late at the top of the move. Three mechanisms, all shipped together:
+(1) **gap-decay** (`gap_decay`, all timeframes): every empty IN-SESSION
+bucket decays the EMAs toward the last close exactly as if a flat
+carry-forward bar had printed — applied lazily in closed form, no timers/
+synthetic bars; nights and weekends decay nothing (TV holds EMAs across the
+close); warmup counting, sibling volumes and persistence see only real bars;
+a fast-over-slow flip DURING a gap parks a PENDING quiet-curl cross at the
+carry price (the ZBAO mechanism reused). (2) **Thin-sibling pend**: a
+real-dollar cross over a dead sibling window (median < 50 sh — on sparse
+names the "prior hour" of siblings spans days of junk prints) used to be
+consumed SILENTLY by the floor; it now pends, and **pendings convert
+INTRABAR** the moment bucket dollars accumulate (same monotone-volume
+soundness as intrabar confirms; conversion is gated on the provisional diff
+so a crashing tick can't convert a dying cross). (3) **Warm-but-sparse
+consolidated re-seed**: the Yahoo 5m fallback used to rescue only
+below-warmup names; now names past warmup but under `SPARSE_5M_MIN_BARS`
+(400 banked 5d bars) get their EMA state rebuilt from Yahoo's consolidated
+tape (`reseedFromHistory` — refuses mid-observation, keeps day flags and the
+feed-scale sibling ring), once/ET-day, most-recently-active first, capped
+per scan; the HTF backfill's Yahoo path gained the same warm re-seed (CPHI's
+1h EMA65 read 2.73 vs fast 1.92 off a weeks-deep MINI horizon). Replayed on
+CPHI's real banked bars: nominate 09:35 at $1.73 + confirm 09:40 intrabar —
+vs the live 09:50:53/$2.04 — matching the operator's TV alert. Verified:
+S22–S26 (decay parity vs flat fill, in-gap flip pending, out-of-session
+no-decay, dead-sibling pend/convert, warm re-seed). ⚠️ Grading: cross
+semantics changed AGAIN — the clean 10/65 segment now starts **2026-07-24**.
 
 **Surfacing.** Green 📈 sidebar section: dim "…observing" → "✅ N× vol" with a
 soft ping on confirm only. Timestamps are bar-close times; "ago" anchors on

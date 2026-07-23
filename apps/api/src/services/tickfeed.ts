@@ -274,6 +274,19 @@ interface HtfLayer {
 // session without hammering Yahoo (they are the bulk of the target list).
 const ATTEMPT_RETRY_MS = 2 * 3600_000;
 
+// Warm-but-sparse floor for the 5m consolidated re-seed (2026-07-23, the
+// CPHI lesson): a name past warmup can still be MINI-sparse — the median
+// known runner banks ~33 five-minute bars/day vs ~192 ETH buckets, so its
+// 65-bar slow EMA spans DAYS while TV's spans hours (CPHI: our EMA65 $1.88
+// vs TV's $1.74 → the cross fired 15 min late at the top of the move).
+// Banked 5d bars under this floor → Yahoo consolidated re-seed. ~400 ≈ two
+// dense ETH days; the CPHI class banks 150–350.
+const SPARSE_5M_MIN_BARS = 400;
+// Per-scan bound on the sparse sweep — Yahoo is per-symbol at ~2s each, so
+// one scan covers the most-recently-active names and the hourly rescans
+// work through the rest (deferrals are logged, not silent).
+const SPARSE_5M_MAX_PER_SCAN = 400;
+
 function makeHtfLayer(
   cfg: import('./ema-cross.js').EmaCrossConfig,
   table: HtfLayer['table'],
@@ -416,6 +429,11 @@ class TickFeedService {
   // closes that; the 4h layer can NEVER warm up live (~2-3 weeks of bars),
   // so its replay + the Databento backfill are load-bearing, not resilience.
   private async seedEmaBars(): Promise<void> {
+    // The gap-decay's session clock must be right BEFORE the replay — the
+    // sync() push only happens after the sidecar starts.
+    const etOff = etUtcOffsetHours();
+    this.emaCross.setEtOffset(etOff);
+    for (const l of this.htfLayers) l.tracker.setEtOffset(etOff);
     await this.seedTrackerFromTable('bars_5m', 5 * 86_400_000, this.emaCross, '5m');
     for (const l of this.htfLayers) {
       await this.seedTrackerFromTable(l.table, l.retentionDays * 86_400_000, l.tracker, l.cfg.tf);
@@ -488,18 +506,23 @@ class TickFeedService {
     if (this.backfillRunning || !this.running) return;
     this.backfillRunning = true;
     try {
-      const counts = new Map<string, number>();
+      const stats = new Map<string, { n: number; latestMs: number }>();
       const rows = await getDb()
         .selectFrom('bars_5m')
-        .select(['ticker', (eb) => eb.fn.countAll<number>().as('n')])
+        .select(['ticker',
+          (eb) => eb.fn.countAll<number>().as('n'),
+          (eb) => eb.fn.max('bar_ts').as('latest'),
+        ])
         .where('bar_ts', '>', new Date(Date.now() - 5 * 86_400_000))
         .groupBy('ticker')
         .execute();
-      for (const r of rows) counts.set(r.ticker, Number(r.n));
+      for (const r of rows) {
+        stats.set(r.ticker, { n: Number(r.n), latestMs: new Date(r.latest as Date).getTime() });
+      }
       const targets: string[] = [];
       for (const tk of poller.getKnownRunners()) {
         if (this.backfillAttempted.has(tk)) continue;
-        if ((counts.get(tk) ?? 0) >= EMA_CROSS.warmup_bars) continue;
+        if ((stats.get(tk)?.n ?? 0) >= EMA_CROSS.warmup_bars) continue;
         targets.push(tk);
         if (targets.length >= 800) break;
       }
@@ -542,11 +565,65 @@ class TickFeedService {
         console.log(`[ema-backfill] done — ${ok}/${targets.length} backfilled (${viaYahoo} via Yahoo), ${seeded} tracker-seeded, ${persisted} bars persisted`);
       }
       for (const l of this.htfLayers) await this.scanBackfillHtf(l);
+      await this.scanSparse5m(stats);
     } catch (err) {
       console.error('[ema-backfill] scan failed (continuing):', err instanceof Error ? err.message : err);
     } finally {
       this.backfillRunning = false;
     }
+  }
+
+  // Warm-but-sparse consolidated re-seed for the 5m layer (2026-07-23, the
+  // CPHI lesson — see SPARSE_5M_MIN_BARS). Names past warmup but under the
+  // density floor get their EMA state rebuilt from Yahoo's consolidated 5m
+  // tape, once per ET day, most-recently-active first. Gap-decay carries the
+  // state between re-seeds; the sibling ring keeps feed-scale volumes (see
+  // EmaCrossTracker.reseedFromHistory). Runs LAST in the scan — the proven
+  // below-warmup and HTF passes must never wait behind this sweep.
+  private async scanSparse5m(stats: Map<string, { n: number; latestMs: number }>): Promise<void> {
+    const cand: Array<{ tk: string; n: number; latestMs: number }> = [];
+    for (const tk of poller.getKnownRunners()) {
+      if (this.backfillAttempted.has(tk)) continue;
+      const s = stats.get(tk);
+      if (!s || s.n < EMA_CROSS.warmup_bars || s.n >= SPARSE_5M_MIN_BARS) continue;
+      cand.push({ tk, n: s.n, latestMs: s.latestMs });
+    }
+    if (cand.length === 0) return;
+    cand.sort((a, b) => b.latestMs - a.latestMs);
+    const batch = cand.slice(0, SPARSE_5M_MAX_PER_SCAN);
+    if (cand.length > batch.length) {
+      console.log(`[ema-backfill] sparse: ${cand.length - batch.length} names deferred to the next scan`);
+    }
+    console.log(`[ema-backfill] sparse: ${batch.length} warm-but-sparse known runners — Yahoo consolidated re-seed`);
+    let reseeded = 0, persisted = 0, inFlight = 0;
+    for (const { tk, n } of batch) {
+      if (!this.running) return;
+      this.backfillAttempted.add(tk);
+      const yahoo = await fetchYahoo5m(tk);
+      await new Promise((r) => setTimeout(r, 1_500));
+      if (!yahoo || yahoo.length <= n) continue; // consolidated adds nothing over the banked series
+      const adj = adjustSplitHistory(yahoo).slice(-200);
+      if (this.emaCross.canSeed(tk)) {
+        for (const b of adj) this.emaCross.seedBar(tk, b.closeTs, b.close, b.volume);
+        reseeded++;
+      } else if (this.emaCross.reseedFromHistory(tk, adj)) {
+        reseeded++;
+      } else {
+        inFlight++; // an observation/pending is live — never disturb it
+        continue;
+      }
+      const recent = yahoo.filter((b) => b.closeTs * 1000 > Date.now() - 5 * 86_400_000);
+      if (recent.length > 0) {
+        persisted += recent.length;
+        void getDb()
+          .insertInto('bars_5m')
+          .values(recent.map((b) => ({ ticker: tk, bar_ts: new Date(b.closeTs * 1000), close: b.close, volume: b.volume })))
+          .onConflict((oc) => oc.columns(['ticker', 'bar_ts']).doNothing())
+          .execute()
+          .catch(() => { /* non-critical */ });
+      }
+    }
+    console.log(`[ema-backfill] sparse done — ${reseeded}/${batch.length} re-seeded (${inFlight} in-flight skipped), ${persisted} bars persisted`);
   }
 
   // HTF-layer backfill: `spanDays` of Databento ohlcv-1h re-bucketed to the
@@ -632,8 +709,14 @@ class TickFeedService {
         }
         if (!bars || bars.length === 0) continue;
         ok++;
+        const adj = adjustSplitHistory(bars);
         if (l.tracker.canSeed(tk)) {
-          for (const b of adjustSplitHistory(bars)) l.tracker.seedBar(tk, b.closeTs, b.close, b.volume);
+          for (const b of adj) l.tracker.seedBar(tk, b.closeTs, b.close, b.volume);
+          seeded++;
+        } else if (l.tracker.reseedFromHistory(tk, adj)) {
+          // Warm but sparse/stale (the CPHI 1h class: EMA65 2.73 vs fast
+          // 1.92 off a weeks-deep MINI horizon) — the denser consolidated
+          // series replaces the EMA state; in-flight observations refuse.
           seeded++;
         }
         persisted += bars.length;
@@ -766,10 +849,16 @@ class TickFeedService {
       this.child?.kill();
       console.log('[tickfeed] midnight ET — detector reset, sidecar will respawn');
     }
-    // Refresh the EMA trackers' stale-guard anchor (most recent 04:00 ET).
+    // Refresh the EMA trackers' stale-guard anchor (most recent 04:00 ET)
+    // and the gap-decay's session clock (EDT/EST offset).
     const sessionOpen = lastSessionOpenSec();
+    const etOff = etUtcOffsetHours();
     this.emaCross.setSessionOpen(sessionOpen);
-    for (const l of this.htfLayers) l.tracker.setSessionOpen(sessionOpen);
+    this.emaCross.setEtOffset(etOff);
+    for (const l of this.htfLayers) {
+      l.tracker.setSessionOpen(sessionOpen);
+      l.tracker.setEtOffset(etOff);
+    }
     const priors = universe.getPriorCloses();
     for (const [t, c] of priors) this.detector.setPriorClose(t, c);
     const syms = Array.from(new Set([...universe.getUniverse(), ...this.extraSubs]));

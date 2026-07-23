@@ -80,6 +80,23 @@ export interface EmaCrossConfig {
   stale_gap_bars: number;
   renominate_cooldown_sec: number;
   intrabar_detect: boolean;
+  // Gap-decay (2026-07-23, the CPHI lesson): our EMAs run on the MINI subset
+  // tape, where the median known runner paints only ~33 five-minute bars/day
+  // (vs ~192 ETH buckets) — so 65 "bars" of slow EMA reach back DAYS while
+  // TV's consolidated 65 bars cover hours. CPHI: our EMA65 sat at $1.88
+  // (remembering Monday's $2.20 tape) while TV's read $1.74 off the recent
+  // flat-line — our cross fired 15 min late at the top of the move. Fix:
+  // every in-session bucket with NO trades decays the EMAs toward the last
+  // close, exactly as if a flat carry-forward bar had printed — applied
+  // lazily in closed form when the next real bar (or tick) arrives, so
+  // there are no timers and no synthetic bars in state, warmup counting,
+  // sibling volumes, or persistence. Out-of-session time (nights/weekends)
+  // decays nothing — TV holds EMAs across the close too. If the decayed
+  // fast EMA overtakes the slow one DURING a gap (price sat above both
+  // through the quiet — the operator's quiet-curl thesis), the cross parks
+  // as PENDING at the carry price and converts when dollars arrive (the
+  // ZBAO mechanism, reused verbatim).
+  gap_decay: boolean;
   // Bucket anchor offset in seconds. 5m buckets divide the hour so 0 always
   // works; 4h buckets must align to the ET session grid (04:00/08:00/12:00/
   // 16:00 ET — how TV draws 4h ETH bars), which is offset 0 under EDT but
@@ -124,6 +141,7 @@ export const EMA_CROSS: EmaCrossConfig = {
   // TV-parity live evaluation (see header). Kill switch only — flip to false
   // if the fast path misbehaves live; detection reverts to bar-close-only.
   intrabar_detect: true,
+  gap_decay: true,
   bucket_offset_sec: 0,
 };
 
@@ -148,6 +166,7 @@ export const EMA_CROSS_1H: EmaCrossConfig = {
   stale_gap_bars: 3,
   renominate_cooldown_sec: 7_200, // two bars
   intrabar_detect: true,
+  gap_decay: true,
   bucket_offset_sec: 0,
 };
 
@@ -174,6 +193,7 @@ export const EMA_CROSS_4H: EmaCrossConfig = {
   stale_gap_bars: 3,
   renominate_cooldown_sec: 14_400, // one bar — a dud re-arms next bar
   intrabar_detect: true,
+  gap_decay: true,
   bucket_offset_sec: 0,     // set live by the tick feed (EDT 0 / EST 3600)
 };
 
@@ -223,6 +243,9 @@ interface SymState {
   // the slow. Cleared when the cross dies (diff ≤ 0) or at the day roll.
   pending: { crossTs: number; crossPrice: number } | null;
   prevDiff: number | null; // emaF - emaS at the previous closed bar
+  decayedTo: number;     // bucket boundary the gap-decay has advanced to
+                         // (0 = none) — buckets before it are accounted for,
+                         // as real bars or as flat carry-forward decay steps
   sibVols: number[];     // ring: volumes of the last sibling_bars CLOSED bars
   watch: Observation | null;
   confirmedToday: boolean; // a confirm ends the symbol's day (already surfaced)
@@ -312,6 +335,63 @@ export class EmaCrossTracker {
     this.sessionOpenTs = tsSec;
   }
 
+  // ET-vs-UTC offset in hours (4 under EDT, 5 under EST) — the gap-decay's
+  // session clock. Pushed by the tick feed on its sync cadence; the fixed
+  // default keeps tests deterministic.
+  private etOffsetHours = 4;
+  setEtOffset(hours: number): void {
+    this.etOffsetHours = hours;
+  }
+
+  // True when this bucket sits inside the ETH session (04:00–20:00 ET,
+  // Mon–Fri) — the only time an empty bucket means "the consolidated tape
+  // was trading without us" and should decay the EMAs. Holidays count as
+  // sessions (a small extra decay toward a flat price — accepted).
+  private inSession(bucketStartSec: number): boolean {
+    const etSec = bucketStartSec - this.etOffsetHours * 3600;
+    const secOfDay = ((etSec % 86_400) + 86_400) % 86_400;
+    if (secOfDay < 4 * 3600 || secOfDay >= 20 * 3600) return false;
+    const day = (Math.floor(etSec / 86_400) + 4) % 7; // epoch day 0 = Thursday
+    return day !== 6 && day !== 0; // Sat / Sun
+  }
+
+  // Advance the EMA state across empty buckets up to (not including)
+  // targetBucketStart, folding the last close once per missed IN-SESSION
+  // bucket — see EmaCrossConfig.gap_decay. Recomputes prevDiff so cross
+  // detection compares against the decayed baseline; a sign flip DURING the
+  // gap parks a pending quiet-curl cross (live only — boot-seed replays
+  // rebuild EMAs but never observations, same as the rest of the seed path).
+  private applyGapDecay(ticker: string, st: SymState, targetBucketStart: number, silent: boolean): void {
+    if (!this.cfg.gap_decay) return;
+    if (targetBucketStart <= st.decayedTo) return;
+    if (st.lastCloseTs === 0 || st.emaF == null || st.emaS == null) {
+      st.decayedTo = targetBucketStart;
+      return;
+    }
+    const iv = this.cfg.interval_sec;
+    const from = Math.max(st.decayedTo, st.lastCloseTs);
+    const P = st.lastClose;
+    const kF = 2 / (this.cfg.fast + 1);
+    const kS = 2 / (this.cfg.slow + 1);
+    let flippedAt = 0;
+    for (let b = from; b < targetBucketStart; b += iv) {
+      if (!this.inSession(b)) continue;
+      const before = st.emaF - st.emaS;
+      st.emaF = P * kF + st.emaF * (1 - kF);
+      st.emaS = P * kS + st.emaS * (1 - kS);
+      if (flippedAt === 0 && before <= 0 && st.emaF - st.emaS > 0) flippedAt = b + iv;
+    }
+    st.decayedTo = targetBucketStart;
+    if (st.prevDiff != null) st.prevDiff = st.emaF - st.emaS;
+    if (
+      !silent && flippedAt > 0 && st.bars > this.cfg.warmup_bars &&
+      !st.watch && !st.pending && !st.confirmedToday && flippedAt >= st.lockedUntil
+    ) {
+      st.pending = { crossTs: flippedAt, crossPrice: P };
+      console.log(`[ema-cross] cross during quiet gap — pending at carry $${P} ${ticker} (${this.cfg.tf})`);
+    }
+  }
+
   // Read-only debug view of a symbol's live EMA state — powers the
   // /ema-debug endpoint so the operator can compare our EMAs against the
   // same symbol's TV chart whenever a detection looks off (the WOK class).
@@ -359,6 +439,37 @@ export class EmaCrossTracker {
     st.seededUpTo = closeTs - this.cfg.interval_sec;
   }
 
+  // Replace a WARM symbol's EMA state with a replay of denser history — the
+  // consolidated re-seed for MINI-sparse names (2026-07-23, the CPHI lesson:
+  // its 329 banked bars were "warm", so the below-warmup backfill never
+  // touched it, yet its slow EMA still remembered a multi-day horizon).
+  // Refuses while an observation or pending cross is in flight (never
+  // disturb live detection state). Day flags survive; the sibling-volume
+  // ring keeps the FEED-SCALE volumes it had — consolidated volumes would
+  // read every live ratio low for the next sibling window (the documented
+  // Yahoo skew) — and live ticks at/before the reseeded history are dropped
+  // by the seededUpTo guard, exactly like a boot seed.
+  reseedFromHistory(ticker: string, bars: SeedHistoryBar[]): boolean {
+    if (bars.length === 0) return false;
+    const cur = this.state.get(ticker);
+    if (cur && (cur.watch || cur.pending)) return false;
+    const keep = cur
+      ? { confirmedToday: cur.confirmedToday, lockedUntil: cur.lockedUntil, sibVols: cur.sibVols }
+      : null;
+    this.state.delete(ticker);
+    const st = this.ensure(ticker);
+    for (const b of bars) {
+      this.processClosedBar(ticker, st, b.closeTs, b.close, b.volume, true);
+      st.seededUpTo = b.closeTs - this.cfg.interval_sec;
+    }
+    if (keep) {
+      st.confirmedToday = keep.confirmedToday;
+      st.lockedUntil = keep.lockedUntil;
+      if (keep.sibVols.length > 0) st.sibVols = keep.sibVols;
+    }
+    return true;
+  }
+
   // ET-day roll: nominations re-arm, in-flight observations drop (they can't
   // span the closed session anyway — no bars 20:00→04:00). EMAs and bar
   // history deliberately survive: price structure isn't day-anchored.
@@ -378,7 +489,7 @@ export class EmaCrossTracker {
         bucketStart: -1, bucketClose: 0, bucketVol: 0,
         emaF: null, emaS: null, seedSumF: 0, seedSumS: 0,
         bars: 0, lastCloseTs: 0, lastClose: 0, pending: null,
-        prevDiff: null, sibVols: [], watch: null, confirmedToday: false, lockedUntil: 0,
+        prevDiff: null, decayedTo: 0, sibVols: [], watch: null, confirmedToday: false, lockedUntil: 0,
         seededUpTo: -1,
       };
       this.state.set(ticker, st);
@@ -396,6 +507,10 @@ export class EmaCrossTracker {
     if (bucket < st.bucketStart) return null; // stale/out-of-order tick — ignore
     if (bucket <= st.seededUpTo) return null; // bar already covered by boot seed
     if (st.bucketStart === -1) {
+      // Decay across any silence since the newest committed (or seeded) bar
+      // before the live tape resumes — the provisional EMAs the intrabar
+      // check folds against must reflect the quiet gap.
+      this.applyGapDecay(ticker, st, bucket, false);
       st.bucketStart = bucket;
       st.bucketClose = close;
       st.bucketVol = volume;
@@ -409,10 +524,11 @@ export class EmaCrossTracker {
       return this.intrabarCheck(ticker, st, tsSec, close);
     }
     // A later bucket started → the open one is closed. Process it, then open
-    // the new one.
+    // the new one (decaying any empty buckets between the two).
     const closeTs = st.bucketStart + iv;
     const ev = this.processClosedBar(ticker, st, closeTs, st.bucketClose, st.bucketVol, false);
     this.onBarClosed?.(ticker, closeTs, st.bucketClose, st.bucketVol);
+    this.applyGapDecay(ticker, st, bucket, false);
     st.bucketStart = bucket;
     st.bucketClose = close;
     st.bucketVol = volume;
@@ -452,13 +568,48 @@ export class EmaCrossTracker {
     }
     if (st.confirmedToday || tsSec < st.lockedUntil) return null;
     if (st.emaF == null || st.emaS == null || st.bars < this.cfg.warmup_bars) return null;
-    if (st.prevDiff == null || st.prevDiff > 0) return null;
     const kF = 2 / (this.cfg.fast + 1);
     const kS = 2 / (this.cfg.slow + 1);
     const pDiff = (c * kF + st.emaF * (1 - kF)) - (c * kS + st.emaS * (1 - kS));
+    // Pending-cross conversion, TV-parity live (2026-07-23): dollars
+    // accumulating in the OPEN bucket convert a parked quiet-curl cross the
+    // second they arrive — the same monotone-volume soundness as intrabar
+    // confirms. Gated on the PROVISIONAL diff so a crashing tick can't
+    // convert a cross its own close is about to kill (pending death itself
+    // stays with the closed-bar path).
+    if (st.pending) {
+      if (pDiff <= 0) return null;
+      const notional = c * st.bucketVol;
+      if (notional < this.cfg.nominate_min_notional) return null;
+      const p = st.pending;
+      st.pending = null;
+      const sibMedian = median(st.sibVols);
+      const ratio = sibMedian > 0 ? st.bucketVol / sibMedian : 0;
+      const barsSince = Math.max(1, Math.round((tsSec - p.crossTs) / this.cfg.interval_sec));
+      console.log(`[ema-cross] pending cross converted after ${Math.round((tsSec - p.crossTs) / 60)}m ${ticker} (${this.cfg.tf}, intrabar)`);
+      if (ratio >= this.cfg.instant_vol_x && c >= p.crossPrice && notional >= this.cfg.confirm_min_notional) {
+        st.confirmedToday = true;
+        return {
+          type: 'confirm', ticker, tf: this.cfg.tf, ts_sec: tsSec, price: c,
+          cross_price: p.crossPrice, vol_ratio: +ratio.toFixed(1),
+          volume: st.bucketVol, sib_median: sibMedian, bars_since_cross: barsSince,
+          intrabar: true, cross_ts_sec: p.crossTs,
+        };
+      }
+      st.watch = {
+        crossTs: p.crossTs, crossPrice: p.crossPrice, sibMedian,
+        barsSeen: 0, peakRatio: +ratio.toFixed(1), peakPrice: c,
+        crossBucket: -1, // the cross bar closed (or decayed) long ago
+      };
+      return {
+        type: 'nominate', ticker, tf: this.cfg.tf, ts_sec: tsSec, price: c,
+        cross_price: p.crossPrice, vol_ratio: +ratio.toFixed(1),
+        volume: st.bucketVol, sib_median: sibMedian, bars_since_cross: barsSince,
+        intrabar: true, cross_ts_sec: p.crossTs,
+      };
+    }
+    if (st.prevDiff == null || st.prevDiff > 0) return null;
     if (pDiff <= 0) return null;
-    const sibMedian = median(st.sibVols);
-    if (sibMedian < this.cfg.sibling_min_sh) return null;
     // Junk-print guard (the LBTYK phantom): the bucket's accumulated dollars
     // must be real before a provisional cross may nominate. No state is
     // consumed on rejection — a later tick in the same bucket re-evaluates
@@ -471,6 +622,22 @@ export class EmaCrossTracker {
     if (this.sessionOpenTs > 0 && st.lastCloseTs > 0) {
       const anchor = Math.max(st.lastCloseTs, this.sessionOpenTs);
       if (tsSec - anchor > this.cfg.stale_gap_bars * this.cfg.interval_sec) return null;
+    }
+    const sibMedian = median(st.sibVols);
+    if (sibMedian < this.cfg.sibling_min_sh) {
+      // Dead sibling window at a live cross (the CPHI class, 2026-07-23):
+      // on a MINI-sparse name the "prior hour" of siblings spans DAYS of
+      // junk prints, so a real cross used to be consumed silently by this
+      // floor. With real bucket dollars (checked above) and a coherent
+      // price, park it as PENDING — the conversion path above then fires
+      // the moment dollar evidence accumulates. Incoherent pokes still
+      // wait for the closed bar to decide.
+      const coherent = st.lastClose > 0 && Math.abs(c / st.lastClose - 1) <= this.cfg.junk_outlier_pct;
+      if (coherent) {
+        st.pending = { crossTs: tsSec, crossPrice: c };
+        console.log(`[ema-cross] cross pending — thin sibling window (${sibMedian} sh) ${ticker} (${this.cfg.tf})`);
+      }
+      return null;
     }
     const ratio = st.bucketVol / sibMedian;
     if (ratio >= this.cfg.instant_vol_x && c * st.bucketVol >= this.cfg.confirm_min_notional) {
@@ -496,6 +663,11 @@ export class EmaCrossTracker {
   }
 
   private processClosedBar(ticker: string, st: SymState, closeTs: number, c: number, v: number, silent: boolean): EmaCrossEvent | null {
+    // Decay across empty buckets between the previous bar and this one; the
+    // real bar then supersedes the decay for its own bucket. Runs for seed
+    // replays too — live and reseeded state stay bit-identical.
+    this.applyGapDecay(ticker, st, closeTs - this.cfg.interval_sec, silent);
+    st.decayedTo = closeTs;
     st.bars++;
     st.lastCloseTs = closeTs;
     const prevClose = st.lastClose; // previous bar's close — the outlier reference
@@ -636,12 +808,14 @@ export class EmaCrossTracker {
       !st.watch && !st.confirmedToday && closeTs >= st.lockedUntil
     ) {
       const diff = st.emaF - st.emaS;
-      if (st.prevDiff <= 0 && diff > 0 && sibMedian >= this.cfg.sibling_min_sh
-        && c * v < this.cfg.nominate_min_notional) {
+      if (st.prevDiff <= 0 && diff > 0 && c * v < this.cfg.nominate_min_notional) {
         // Junk-dollar cross bar. Two fates (the ZBAO vs LBTYK distinction):
         // an OUTLIER price on junk dollars is a phantom print the SIP tape
         // never carried → discarded outright; a COHERENT price on junk
         // dollars is a real quiet curl → parked as pending (block 1.5).
+        // Since 2026-07-23 this no longer requires a healthy sibling window
+        // — a junk cross over a dead window pends/discards the same way
+        // (it used to be consumed silently).
         const outlier = prevClose > 0 && Math.abs(c / prevClose - 1) > this.cfg.junk_outlier_pct;
         if (outlier) {
           console.log(`[ema-cross] cross discarded — outlier junk print $${Math.round(c * v)} ${ticker} (${this.cfg.tf})`);
@@ -649,6 +823,16 @@ export class EmaCrossTracker {
           st.pending = { crossTs: closeTs, crossPrice: c };
           console.log(`[ema-cross] cross pending — junk bar $${Math.round(c * v)} ${ticker} (${this.cfg.tf}) awaiting dollars`);
         }
+      }
+      if (st.prevDiff <= 0 && diff > 0 && sibMedian < this.cfg.sibling_min_sh
+        && c * v >= this.cfg.nominate_min_notional) {
+        // Real dollars over a dead sibling window (the CPHI class,
+        // 2026-07-23): the cross is genuine but its volume baseline is
+        // meaningless — on a MINI-sparse name the sibling ring spans days
+        // of junk prints. Used to be consumed silently by the floor; now
+        // it PENDS and converts (intrabar or on close) as dollars accrue.
+        st.pending = { crossTs: closeTs, crossPrice: c };
+        console.log(`[ema-cross] cross pending — thin sibling window (${sibMedian} sh) ${ticker} (${this.cfg.tf})`);
       }
       if (st.prevDiff <= 0 && diff > 0 && sibMedian >= this.cfg.sibling_min_sh
         && c * v >= this.cfg.nominate_min_notional
