@@ -214,12 +214,20 @@ INTRABAR** the moment bucket dollars accumulate (same monotone-volume
 soundness as intrabar confirms; conversion is gated on the provisional diff
 so a crashing tick can't convert a dying cross). (3) **Warm-but-sparse
 consolidated re-seed**: the Yahoo 5m fallback used to rescue only
-below-warmup names; now names past warmup but under `SPARSE_5M_MIN_BARS`
-(400 banked 5d bars) get their EMA state rebuilt from Yahoo's consolidated
-tape (`reseedFromHistory` — refuses mid-observation, keeps day flags and the
-feed-scale sibling ring), once/ET-day, most-recently-active first, capped
-per scan; the HTF backfill's Yahoo path gained the same warm re-seed (CPHI's
-1h EMA65 read 2.73 vs fast 1.92 off a weeks-deep MINI horizon). Replayed on
+below-warmup names; now names past warmup but under `SPARSE_5M_MIN_BARS_24H`
+(120 banked bars in the last 24h) get their EMA state rebuilt from Yahoo's
+consolidated tape (`reseedFromHistory` — refuses mid-observation, keeps day
+flags and the feed-scale sibling ring), **retried every 2h intraday**
+(same-day follow-up, the RELL/LFMD lesson: with a once/day re-anchor the
+path divergence re-accumulated within hours — RELL re-fired a morning TV
+cross as "fresh", LFMD crossed while TV's fast sat 3% below its slow),
+most-recently-active first, capped per scan, and deliberately NOT persisted
+to bars_5m (persisted Yahoo bars made swept names read "dense" and excluded
+them from later sweeps); the HTF backfill's Yahoo path gained the same warm
+re-seed (CPHI's 1h EMA65 read 2.73 vs fast 1.92 off a weeks-deep MINI
+horizon). Known transient: a deploy boot re-derives every symbol's EMAs, so
+the first minutes can burst nominations (fresh-eyes re-evaluation — 8 of 10
+sidebar rows fired ≤8 min after the 07-23 boot); one-time per deploy. Replayed on
 CPHI's real banked bars: nominate 09:35 at $1.73 + confirm 09:40 intrabar —
 vs the live 09:50:53/$2.04 — matching the operator's TV alert. Verified:
 S22–S26 (decay parity vs flat fill, in-gap flip pending, out-of-session

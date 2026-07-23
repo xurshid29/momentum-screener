@@ -137,12 +137,25 @@ pends, and ALL pendings convert INTRABAR the second bucket dollars
 accumulate (monotone-volume soundness; conversion gated on the provisional
 diff so a crashing tick can't convert a dying cross). (3) **Warm-but-sparse
 consolidated re-seed** — the Yahoo fallback only rescued below-warmup names
-(CPHI's 329 banked bars = "warm"); now names under 400 banked 5d bars get
-their EMA state rebuilt from Yahoo's consolidated tape via
-`reseedFromHistory` (refuses mid-observation, keeps day flags + the
-feed-scale sibling ring; once/ET-day, most-recent-active first, 400/scan
+(CPHI's 329 banked bars = "warm"); now names under 120 banked LAST-24H bars
+(`SPARSE_5M_MIN_BARS_24H`) get their EMA state rebuilt from Yahoo's
+consolidated tape via `reseedFromHistory` (refuses mid-observation, keeps
+day flags + the feed-scale sibling ring; most-recent-active first, 400/scan
 cap, deferrals logged), and the HTF backfill gained the same warm re-seed
-(CPHI 1h: EMA65 2.73 vs fast 1.92 — a weeks-deep horizon). **Verified:**
+(CPHI 1h: EMA65 2.73 vs fast 1.92 — a weeks-deep horizon).
+**Same-day follow-up (the RELL/LFMD report, operator's TV check):** the
+first cut re-seeded once/ET-day and persisted the Yahoo bars — wrong twice:
+path divergence re-accumulates within HOURS on MINI-quiet names (RELL
+re-fired a morning TV cross as "fresh" at 12:50; LFMD crossed while TV's
+fast sat 3% below its slow — its confirm did catch a real +5% pop, for the
+record), and persisted Yahoo bars made swept names read "dense", excluding
+them from later sweeps for days. Now: **2h per-symbol retry** (HTF's
+pattern), criterion = last-24h banked density, **no persist** from the
+sparse path. Known transient documented: a deploy boot re-derives all EMA
+state → a burst of nominations in the first minutes (8 of 10 sidebar rows
+fired ≤8 min after the 07-23 16:44 boot) — one-time per deploy, volume
+stage disposes. First sweep on prod: 374/400 re-seeded + 834 deferred;
+1h warm-reseed 108/109, 4h 360/361. **Verified:**
 replay of CPHI's real banked bars → pend 09:30–35, nominate 09:35 @$1.73,
 confirm 09:40 intrabar (vs live actual 09:50:53/$2.04) — the TV alert
 matched; suite now 26 scenarios (S22 decay≡flat-fill parity, S23 in-gap

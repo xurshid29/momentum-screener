@@ -279,12 +279,19 @@ const ATTEMPT_RETRY_MS = 2 * 3600_000;
 // known runner banks ~33 five-minute bars/day vs ~192 ETH buckets, so its
 // 65-bar slow EMA spans DAYS while TV's spans hours (CPHI: our EMA65 $1.88
 // vs TV's $1.74 → the cross fired 15 min late at the top of the move).
-// Banked 5d bars under this floor → Yahoo consolidated re-seed. ~400 ≈ two
-// dense ETH days; the CPHI class banks 150–350.
-const SPARSE_5M_MIN_BARS = 400;
+// The criterion is banked bars over the LAST 24h (dense ETH day ≈ 192;
+// the CPHI class banks 30–60) — a 24h window so the day-one sweep's
+// persisted Yahoo bars stop distorting the read by the next day, and
+// Monday-morning full sweeps stay bounded by the per-scan cap.
+const SPARSE_5M_MIN_BARS_24H = 120;
 // Per-scan bound on the sparse sweep — Yahoo is per-symbol at ~2s each, so
 // one scan covers the most-recently-active names and the hourly rescans
-// work through the rest (deferrals are logged, not silent).
+// work through the rest (deferrals are logged, not silent). Retries per
+// symbol every ATTEMPT_RETRY_MS (2h), NOT once/day: the RELL/LFMD lesson
+// (2026-07-23 afternoon) — divergence vs the consolidated tape
+// re-accumulates within hours on MINI-quiet names (RELL re-fired a
+// morning TV cross as "fresh" at 12:50; LFMD crossed while TV's fast sat
+// 3% below its slow), so the re-anchor must repeat intraday.
 const SPARSE_5M_MAX_PER_SCAN = 400;
 
 function makeHtfLayer(
@@ -337,6 +344,9 @@ class TickFeedService {
   private backfillTimer: NodeJS.Timeout | null = null;
   private backfillRunning = false;
   private backfillAttempted = new Set<string>();  // once per ET day per symbol
+  // Sparse-sweep attempts retry every ATTEMPT_RETRY_MS (intraday re-anchor,
+  // unlike the once/day cold backfill above) — the RELL/LFMD lesson.
+  private sparseAttempted = new Map<string, number>();
   private backfilledOk = 0;
   private child: ChildProcessWithoutNullStreams | null = null;
   private rl: Interface | null = null;
@@ -506,18 +516,19 @@ class TickFeedService {
     if (this.backfillRunning || !this.running) return;
     this.backfillRunning = true;
     try {
-      const stats = new Map<string, { n: number; latestMs: number }>();
+      const stats = new Map<string, { n: number; n24: number; latestMs: number }>();
       const rows = await getDb()
         .selectFrom('bars_5m')
         .select(['ticker',
           (eb) => eb.fn.countAll<number>().as('n'),
+          (eb) => eb.fn.countAll<number>().filterWhere('bar_ts', '>', new Date(Date.now() - 86_400_000)).as('n24'),
           (eb) => eb.fn.max('bar_ts').as('latest'),
         ])
         .where('bar_ts', '>', new Date(Date.now() - 5 * 86_400_000))
         .groupBy('ticker')
         .execute();
       for (const r of rows) {
-        stats.set(r.ticker, { n: Number(r.n), latestMs: new Date(r.latest as Date).getTime() });
+        stats.set(r.ticker, { n: Number(r.n), n24: Number(r.n24), latestMs: new Date(r.latest as Date).getTime() });
       }
       const targets: string[] = [];
       for (const tk of poller.getKnownRunners()) {
@@ -574,18 +585,24 @@ class TickFeedService {
   }
 
   // Warm-but-sparse consolidated re-seed for the 5m layer (2026-07-23, the
-  // CPHI lesson — see SPARSE_5M_MIN_BARS). Names past warmup but under the
-  // density floor get their EMA state rebuilt from Yahoo's consolidated 5m
-  // tape, once per ET day, most-recently-active first. Gap-decay carries the
-  // state between re-seeds; the sibling ring keeps feed-scale volumes (see
+  // CPHI lesson — see SPARSE_5M_MIN_BARS_24H). Names past warmup whose
+  // last-24h banked density is under the floor get their EMA state rebuilt
+  // from Yahoo's consolidated 5m tape, most-recently-active first, retried
+  // every 2h (the RELL/LFMD lesson — see SPARSE_5M_MAX_PER_SCAN). The
+  // fetched bars deliberately do NOT persist to bars_5m: persisted Yahoo
+  // bars made a swept name read "dense" and excluded it from every later
+  // sweep, defeating the intraday re-anchor (boot replay + gap-decay are
+  // already TV-close without them). Gap-decay carries the state between
+  // re-seeds; the sibling ring keeps feed-scale volumes (see
   // EmaCrossTracker.reseedFromHistory). Runs LAST in the scan — the proven
   // below-warmup and HTF passes must never wait behind this sweep.
-  private async scanSparse5m(stats: Map<string, { n: number; latestMs: number }>): Promise<void> {
+  private async scanSparse5m(stats: Map<string, { n: number; n24: number; latestMs: number }>): Promise<void> {
     const cand: Array<{ tk: string; n: number; latestMs: number }> = [];
     for (const tk of poller.getKnownRunners()) {
-      if (this.backfillAttempted.has(tk)) continue;
+      const lastTry = this.sparseAttempted.get(tk) ?? 0;
+      if (Date.now() - lastTry < ATTEMPT_RETRY_MS) continue;
       const s = stats.get(tk);
-      if (!s || s.n < EMA_CROSS.warmup_bars || s.n >= SPARSE_5M_MIN_BARS) continue;
+      if (!s || s.n < EMA_CROSS.warmup_bars || s.n24 >= SPARSE_5M_MIN_BARS_24H) continue;
       cand.push({ tk, n: s.n, latestMs: s.latestMs });
     }
     if (cand.length === 0) return;
@@ -595,10 +612,10 @@ class TickFeedService {
       console.log(`[ema-backfill] sparse: ${cand.length - batch.length} names deferred to the next scan`);
     }
     console.log(`[ema-backfill] sparse: ${batch.length} warm-but-sparse known runners — Yahoo consolidated re-seed`);
-    let reseeded = 0, persisted = 0, inFlight = 0;
+    let reseeded = 0, inFlight = 0;
     for (const { tk, n } of batch) {
       if (!this.running) return;
-      this.backfillAttempted.add(tk);
+      this.sparseAttempted.set(tk, Date.now());
       const yahoo = await fetchYahoo5m(tk);
       await new Promise((r) => setTimeout(r, 1_500));
       if (!yahoo || yahoo.length <= n) continue; // consolidated adds nothing over the banked series
@@ -610,20 +627,9 @@ class TickFeedService {
         reseeded++;
       } else {
         inFlight++; // an observation/pending is live — never disturb it
-        continue;
-      }
-      const recent = yahoo.filter((b) => b.closeTs * 1000 > Date.now() - 5 * 86_400_000);
-      if (recent.length > 0) {
-        persisted += recent.length;
-        void getDb()
-          .insertInto('bars_5m')
-          .values(recent.map((b) => ({ ticker: tk, bar_ts: new Date(b.closeTs * 1000), close: b.close, volume: b.volume })))
-          .onConflict((oc) => oc.columns(['ticker', 'bar_ts']).doNothing())
-          .execute()
-          .catch(() => { /* non-critical */ });
       }
     }
-    console.log(`[ema-backfill] sparse done — ${reseeded}/${batch.length} re-seeded (${inFlight} in-flight skipped), ${persisted} bars persisted`);
+    console.log(`[ema-backfill] sparse done — ${reseeded}/${batch.length} re-seeded (${inFlight} in-flight skipped)`);
   }
 
   // HTF-layer backfill: `spanDays` of Databento ohlcv-1h re-bucketed to the
@@ -829,6 +835,7 @@ class TickFeedService {
       this.emaCross.resetDaily();
       this.extraSubs.clear();
       this.backfillAttempted.clear();
+      this.sparseAttempted.clear();
       // Prune persisted bars beyond their seed windows (fire-and-forget).
       void getDb()
         .deleteFrom('bars_5m')
