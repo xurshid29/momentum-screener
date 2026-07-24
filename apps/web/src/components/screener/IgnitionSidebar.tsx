@@ -288,7 +288,7 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
           <SectionHeader label={`📈 EMA ${g.tf.toUpperCase()}`} count={g.items.length} color="#95de64" />
           {g.items.map((x) => (
             <EmaCrossRow
-              key={`${x.tf}|${x.ticker}`}
+              key={`${x.tf}|${x.signal}|${x.ticker}`}
               item={x}
               selected={x.ticker === selected}
               onSelect={setSelected}
