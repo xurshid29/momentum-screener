@@ -587,7 +587,8 @@ class TickFeedService {
   // Warm-but-sparse consolidated re-seed for the 5m layer (2026-07-23, the
   // CPHI lesson — see SPARSE_5M_MIN_BARS_24H). Names past warmup whose
   // last-24h banked density is under the floor get their EMA state rebuilt
-  // from Yahoo's consolidated 5m tape, most-recently-active first, retried
+  // from Yahoo's consolidated 5m tape, stalest-banked-tape first (the OMH
+  // lesson — see the sort below), retried
   // every 2h (the RELL/LFMD lesson — see SPARSE_5M_MAX_PER_SCAN). The
   // fetched bars deliberately do NOT persist to bars_5m: persisted Yahoo
   // bars made a swept name read "dense" and excluded it from every later
@@ -606,7 +607,17 @@ class TickFeedService {
       cand.push({ tk, n: s.n, latestMs: s.latestMs });
     }
     if (cand.length === 0) return;
-    cand.sort((a, b) => b.latestMs - a.latestMs);
+    // STALEST banked tape first (2026-07-24, the OMH lesson — flipped from
+    // most-recent-first): a name whose MINI tape is fresh is the LOWEST-
+    // divergence candidate (its own live bars keep correcting the EMAs),
+    // while a name silent for hours is the blindest — the consolidated tape
+    // can move (OMH: the whole premarket dip-below-stack + curl that armed
+    // TV's cross AND reclaim) while our EMAs sit frozen on stale carries.
+    // OMH sat behind 912 fresher names when its burst came 15 min after
+    // boot. Stalest-first also makes deploy resets of the in-memory retry
+    // map harmless: the highest-value names re-anchor in the first minutes
+    // of every boot; truly dead names cost one cheap skip each.
+    cand.sort((a, b) => a.latestMs - b.latestMs);
     const batch = cand.slice(0, SPARSE_5M_MAX_PER_SCAN);
     if (cand.length > batch.length) {
       console.log(`[ema-backfill] sparse: ${cand.length - batch.length} names deferred to the next scan`);

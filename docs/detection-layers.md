@@ -217,7 +217,11 @@ consolidated re-seed**: the Yahoo 5m fallback used to rescue only
 below-warmup names; now names past warmup but under `SPARSE_5M_MIN_BARS_24H`
 (120 banked bars in the last 24h) get their EMA state rebuilt from Yahoo's
 consolidated tape (`reseedFromHistory` — refuses mid-observation, keeps day
-flags and the feed-scale sibling ring), **retried every 2h intraday**
+flags and the feed-scale sibling ring), **stalest-banked-tape first**
+(the OMH lesson: our MINI feed can be blind for a whole premarket while
+the consolidated tape dips below the stack and re-arms — the stalest
+names are the blindest, and fresh-tape names self-correct via their own
+live bars), **retried every 2h intraday**
 (same-day follow-up, the RELL/LFMD lesson: with a once/day re-anchor the
 path divergence re-accumulated within hours — RELL re-fired a morning TV
 cross as "fresh", LFMD crossed while TV's fast sat 3% below its slow),

@@ -194,7 +194,14 @@ fast sat 3% below its slow — its confirm did catch a real +5% pop, for the
 record), and persisted Yahoo bars made swept names read "dense", excluding
 them from later sweeps for days. Now: **2h per-symbol retry** (HTF's
 pattern), criterion = last-24h banked density, **no persist** from the
-sparse path. Known transient documented: a deploy boot re-derives all EMA
+sparse path; **ordering flipped to stalest-first 07-24 evening (the OMH
+lesson)** — MINI was blind through OMH's entire premarket (no prints
+18:30 ET → 09:20 ET) while consolidated dipped below the stack and
+re-armed both TV signals; OMH sat behind 912 fresher names in the sweep
+queue and 4 deploys kept resetting the in-memory retry map, so its slot
+never came before the +100% burst (the 4h reclaim + tick ladder caught
+it). Stalest banked tape = blindest = first; deploy resets become
+harmless. Known transient documented: a deploy boot re-derives all EMA
 state → a burst of nominations in the first minutes (8 of 10 sidebar rows
 fired ≤8 min after the 07-23 16:44 boot) — one-time per deploy, volume
 stage disposes. First sweep on prod: 374/400 re-seeded + 834 deferred;
