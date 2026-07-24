@@ -827,6 +827,11 @@ class PollerService {
   // already landed (it usually has — enrichment starts at nomination).
   private pushCrossAlert(e: import('./ema-cross.js').EmaCrossEvent, tf: EmaCrossTf): void {
     const reclaim = e.signal === 'reclaim';
+    // HTF reclaim confirms are dashboard+grading only for now (the X4H
+    // precedent: no phone until tier_events shows the fire rate is worth
+    // it) — measured baseline says full-tf reclaim Telegram would add
+    // ~50-85 pushes/day. The 5m reclaim A/B keeps its pushes.
+    if (reclaim && tf !== '5m') return;
     if (!telegramEnabled() || this.alertsMuted || alertDisabled(reclaim ? 'ema_reclaim' : 'ema_cross')) return;
     const key = reclaim ? `${tf}|R|${e.ticker}` : `${tf}|${e.ticker}`;
     if (this.alertedCross.has(key)) return;

@@ -179,7 +179,8 @@ export const EMA_CROSS_1H: EmaCrossConfig = {
   renominate_cooldown_sec: 7_200, // two bars
   intrabar_detect: true,
   gap_decay: true,
-  reclaim_detect: false,   // 5m-only trial — flip when the A/B earns HTF scope
+  reclaim_detect: true,    // detection+dashboard+grading; Telegram is 5m-only
+                           // until the A/B reads out (the X4H precedent)
   bucket_offset_sec: 0,
 };
 
@@ -207,7 +208,8 @@ export const EMA_CROSS_4H: EmaCrossConfig = {
   renominate_cooldown_sec: 14_400, // one bar — a dud re-arms next bar
   intrabar_detect: true,
   gap_decay: true,
-  reclaim_detect: false,   // 5m-only trial — flip when the A/B earns HTF scope
+  reclaim_detect: true,    // detection+dashboard+grading; Telegram is 5m-only
+                           // until the A/B reads out (the X4H precedent)
   bucket_offset_sec: 0,     // set live by the tick feed (EDT 0 / EST 3600)
 };
 

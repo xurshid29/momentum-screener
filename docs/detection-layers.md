@@ -250,8 +250,12 @@ sibling windows skip (the reclaim re-arms on the next dip-below-both cycle
 — no pend needed). Events carry `signal: 'reclaim'` (queued via
 `drainEvents()`, never the cross channel's return value) → tier_events
 `meta.signal` is the A/B grading cut: nominate→confirm rate + forward
-outcomes per channel, decided by data. Kill switch `reclaim_detect` — 5m
-only for the trial (HTF configs off until the A/B earns scope). Alerts:
+outcomes per channel, decided by data. Kill switch `reclaim_detect` — ON for
+all three timeframes (same-day follow-up: operator asked for HTF too);
+Telegram for reclaim confirms is **5m-only** (the X4H precedent — HTF
+reclaims are dashboard+grading until the A/B shows their worth; measured:
+full-tf reclaim Telegram would add ~50-85 pushes/day on the 1h ~20-27 /
+4h ~8-23 cross-confirm baseline). Alerts:
 own slug `ema_reclaim` (mutable independently of `ema_cross`); Telegram
 headline "↗✅ PRICE RECLAIMED EMA 10+65"; sidebar rows carry a blue ↗ tag
 and read "reclaim Xm ago" — they will NOT match TV crossover alerts by

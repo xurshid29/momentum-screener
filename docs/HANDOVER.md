@@ -134,8 +134,13 @@ addBar's return). Poller: rows/dedups key `${tf}|R|${ticker}` (cross keys
 unchanged → reseed continuity), tier_events meta.signal (the A/B cut),
 new `ema_reclaim` Telegram slug (independent of ema_cross; headline
 "↗✅ PRICE RECLAIMED EMA 10+65"), reseed carries signal. Web: blue ↗ tag
-+ "reclaim Xm ago" rows; alert/title-flash keys include signal. 5m-only
-trial (`reclaim_detect` false on 1h/4h). Suite → 28 scenarios / 96 checks
++ "reclaim Xm ago" rows; alert/title-flash keys include signal.
+Same-day follow-up: HTF enabled too (`reclaim_detect` true on 1h/4h —
+measured raw rates 1h ~200-270/day, 4h ~60-110/day, both ~1.7-1.8× their
+crossover) with reclaim Telegram gated to **5m only** (X4H precedent;
+full-tf pushes would add ~50-85/day on the 1h 20-27 / 4h 8-23
+cross-confirm baseline — dashboard rows + tier_events grade all tfs).
+Suite → 28 scenarios / 96 checks
 (S27 funnel+independence, S28 arming rules); legacy scenarios pinned to
 CROSS_ONLY config so the cross channel stays tested in isolation.
 **Grading:** both channels grade from tier='cross' segmented on
