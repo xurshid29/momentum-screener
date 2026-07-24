@@ -463,8 +463,13 @@ function EmaCrossRow({ item, selected, onSelect, onOpenCatalyst }: {
             />
           </span>
         )}
+        {item.signal === 'reclaim' && (
+          <Tooltip title="Price-reclaim channel: price crossed up through BOTH EMAs (10 & 65) on one bar — the parallel trial, not the EMA crossover">
+            <span style={{ marginLeft: 4, fontSize: 10, color: '#69c0ff', fontWeight: 600, cursor: 'help' }}>↗</span>
+          </Tooltip>
+        )}
         <span style={{ marginLeft: 6, fontSize: 10, color: freshConfirm ? '#95de64' : '#8c8c8c', fontWeight: freshConfirm ? 600 : undefined }}>
-          {confirmed ? `✅ ${Math.round(item.vol_ratio)}× vol` : isHtf ? 'cross' : '… observing'} · {isHtf ? '' : 'cross '}{ago} ago
+          {confirmed ? `✅ ${Math.round(item.vol_ratio)}× vol` : isHtf ? (item.signal === 'reclaim' ? 'reclaim' : 'cross') : '… observing'} · {item.signal === 'reclaim' ? 'reclaim ' : isHtf ? '' : 'cross '}{ago} ago
         </span>
         {item.thin_tape && (
           <Tooltip title="Thin tape on our feed — our EMAs may diverge from TV's here; verify the cross on the chart">

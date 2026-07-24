@@ -167,9 +167,9 @@ export function useScreenerAlerts(payload: CyclePayload | null) {
     // HTF layers) and a bright pair when volume CONFIRMS.
     const crossConfirmKeys = (payload.ema_crosses ?? [])
       .filter((x) => x.status === 'confirmed')
-      .map((x) => ({ key: `${x.tf}|${x.ticker}:${x.confirmed_at}`, ticker: x.ticker }));
+      .map((x) => ({ key: `${x.tf}|${x.signal}|${x.ticker}:${x.confirmed_at}`, ticker: x.ticker }));
     const crossObserveKeys = (payload.ema_crosses ?? [])
-      .map((x) => ({ key: `${x.tf}|${x.ticker}:${x.cross_at}`, ticker: x.ticker, confirmed: x.status === 'confirmed' }));
+      .map((x) => ({ key: `${x.tf}|${x.signal}|${x.ticker}:${x.cross_at}`, ticker: x.ticker, confirmed: x.status === 'confirmed' }));
 
     if (!seenFirst.current) {
       seenFirst.current = true;

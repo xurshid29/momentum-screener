@@ -97,6 +97,17 @@ export interface EmaCrossConfig {
   // as PENDING at the carry price and converts when dollars arrive (the
   // ZBAO mechanism, reused verbatim).
   gap_decay: boolean;
+  // Price-reclaim channel (2026-07-24, operator's ask): TV's "price Crossing
+  // Up EMA(10) AND price Crossing Up EMA(65)" alert — a single bar punching
+  // up through the whole EMA stack. A DIFFERENT event from the 10/65
+  // crossover (measured on 4d of banked bars: only 11% of reclaim bars
+  // coincide with a crossover bar; ~1.6× the raw fire rate): before the
+  // crossover it's the early precursor, after it it's the pullback-reclaim
+  // the crossover can never re-fire on. Runs as a PARALLEL nomination
+  // channel with its own observation/day-flag/cooldown state and the same
+  // volume-confirm rules — the A/B against the crossover funnel is graded
+  // from tier_events meta.signal. Cross-channel semantics are untouched.
+  reclaim_detect: boolean;
   // Bucket anchor offset in seconds. 5m buckets divide the hour so 0 always
   // works; 4h buckets must align to the ET session grid (04:00/08:00/12:00/
   // 16:00 ET — how TV draws 4h ETH bars), which is offset 0 under EDT but
@@ -142,6 +153,7 @@ export const EMA_CROSS: EmaCrossConfig = {
   // if the fast path misbehaves live; detection reverts to bar-close-only.
   intrabar_detect: true,
   gap_decay: true,
+  reclaim_detect: true,
   bucket_offset_sec: 0,
 };
 
@@ -167,6 +179,7 @@ export const EMA_CROSS_1H: EmaCrossConfig = {
   renominate_cooldown_sec: 7_200, // two bars
   intrabar_detect: true,
   gap_decay: true,
+  reclaim_detect: false,   // 5m-only trial — flip when the A/B earns HTF scope
   bucket_offset_sec: 0,
 };
 
@@ -194,12 +207,17 @@ export const EMA_CROSS_4H: EmaCrossConfig = {
   renominate_cooldown_sec: 14_400, // one bar — a dud re-arms next bar
   intrabar_detect: true,
   gap_decay: true,
+  reclaim_detect: false,   // 5m-only trial — flip when the A/B earns HTF scope
   bucket_offset_sec: 0,     // set live by the tick feed (EDT 0 / EST 3600)
 };
 
 export interface EmaCrossEvent {
   type: 'nominate' | 'confirm' | 'expire';
   ticker: string;
+  // Which nomination channel fired: absent = the EMA10×EMA65 crossover
+  // (every pre-2026-07-24 event); 'reclaim' = the price-reclaims-both-EMAs
+  // channel. Kept optional so the cross path's emit sites stay untouched.
+  signal?: 'reclaim';
   tf: string;            // which layer fired ('5m' | '4h') — from the config
   ts_sec: number;        // close time of the triggering bar (intrabar: the tick's time)
   price: number;         // close of the triggering bar (intrabar: the tick's price)
@@ -243,6 +261,18 @@ interface SymState {
   // the slow. Cleared when the cross dies (diff ≤ 0) or at the day roll.
   pending: { crossTs: number; crossPrice: number } | null;
   prevDiff: number | null; // emaF - emaS at the previous closed bar
+  // Previous CLOSED bar's close sat at/below BOTH EMAs (as they stood after
+  // that bar) — the arming condition for the price-reclaim channel. TV's
+  // AND-ed "Crossing Up" pair needs both crossings on the same bar, which
+  // is exactly prev-below-both → now-above-both. Invariant under gap-decay
+  // (decay moves the EMAs toward the last close but never across it).
+  prevBelowBoth: boolean;
+  // Parallel price-reclaim observation state — deliberately separate from
+  // the cross channel's watch/confirmedToday/lockedUntil so the two funnels
+  // never gate each other (the A/B must stay clean).
+  watchR: Observation | null;
+  confirmedTodayR: boolean;
+  lockedUntilR: number;
   decayedTo: number;     // bucket boundary the gap-decay has advanced to
                          // (0 = none) — buckets before it are accounted for,
                          // as real bars or as flat carry-forward decay steps
@@ -306,6 +336,18 @@ function median(xs: number[]): number {
 export class EmaCrossTracker {
   private state = new Map<string, SymState>();
   private bucketOff: number;
+
+  // Secondary-event queue: the price-reclaim channel emits here so addBar's
+  // single-return contract (owned by the cross channel) stays untouched —
+  // callers drain after each addBar. Same pattern as the detector's
+  // drainDiagnostics.
+  private queued: EmaCrossEvent[] = [];
+  drainEvents(): EmaCrossEvent[] {
+    if (this.queued.length === 0) return [];
+    const q = this.queued;
+    this.queued = [];
+    return q;
+  }
 
   // onBarClosed fires for every LIVE closed bar (not boot-seeded replays) —
   // the tick feed persists these (bars_5m / bars_4h) so warmup survives
@@ -399,7 +441,9 @@ export class EmaCrossTracker {
     tf: string; bars: number; ema_fast: number | null; ema_slow: number | null;
     prev_diff: number | null; sib_median: number; observing: boolean;
     pending: boolean;
-    confirmed_today: boolean; locked_until: number; open_bucket_ts: number | null;
+    confirmed_today: boolean; locked_until: number;
+    observing_reclaim: boolean; confirmed_today_reclaim: boolean;
+    open_bucket_ts: number | null;
     open_bucket_close: number | null; open_bucket_vol: number | null;
   } | null {
     const st = this.state.get(ticker);
@@ -415,6 +459,8 @@ export class EmaCrossTracker {
       pending: st.pending != null,
       confirmed_today: st.confirmedToday,
       locked_until: st.lockedUntil,
+      observing_reclaim: st.watchR != null,
+      confirmed_today_reclaim: st.confirmedTodayR,
       open_bucket_ts: st.bucketStart === -1 ? null : st.bucketStart,
       open_bucket_close: st.bucketStart === -1 ? null : st.bucketClose,
       open_bucket_vol: st.bucketStart === -1 ? null : st.bucketVol,
@@ -452,9 +498,13 @@ export class EmaCrossTracker {
   reseedFromHistory(ticker: string, bars: SeedHistoryBar[]): boolean {
     if (bars.length === 0) return false;
     const cur = this.state.get(ticker);
-    if (cur && (cur.watch || cur.pending)) return false;
+    if (cur && (cur.watch || cur.watchR || cur.pending)) return false;
     const keep = cur
-      ? { confirmedToday: cur.confirmedToday, lockedUntil: cur.lockedUntil, sibVols: cur.sibVols }
+      ? {
+          confirmedToday: cur.confirmedToday, lockedUntil: cur.lockedUntil,
+          confirmedTodayR: cur.confirmedTodayR, lockedUntilR: cur.lockedUntilR,
+          sibVols: cur.sibVols,
+        }
       : null;
     this.state.delete(ticker);
     const st = this.ensure(ticker);
@@ -465,6 +515,8 @@ export class EmaCrossTracker {
     if (keep) {
       st.confirmedToday = keep.confirmedToday;
       st.lockedUntil = keep.lockedUntil;
+      st.confirmedTodayR = keep.confirmedTodayR;
+      st.lockedUntilR = keep.lockedUntilR;
       if (keep.sibVols.length > 0) st.sibVols = keep.sibVols;
     }
     return true;
@@ -479,6 +531,9 @@ export class EmaCrossTracker {
       st.lockedUntil = 0;
       st.watch = null;
       st.pending = null;
+      st.watchR = null;
+      st.confirmedTodayR = false;
+      st.lockedUntilR = 0;
     }
   }
 
@@ -489,7 +544,9 @@ export class EmaCrossTracker {
         bucketStart: -1, bucketClose: 0, bucketVol: 0,
         emaF: null, emaS: null, seedSumF: 0, seedSumS: 0,
         bars: 0, lastCloseTs: 0, lastClose: 0, pending: null,
-        prevDiff: null, decayedTo: 0, sibVols: [], watch: null, confirmedToday: false, lockedUntil: 0,
+        prevDiff: null, prevBelowBoth: false,
+        watchR: null, confirmedTodayR: false, lockedUntilR: 0,
+        decayedTo: 0, sibVols: [], watch: null, confirmedToday: false, lockedUntil: 0,
         seededUpTo: -1,
       };
       this.state.set(ticker, st);
@@ -535,6 +592,73 @@ export class EmaCrossTracker {
     return ev ?? this.intrabarCheck(ticker, st, tsSec, close);
   }
 
+  // Price-reclaim channel, intrabar side (2026-07-24 — see
+  // EmaCrossConfig.reclaim_detect). Arms when the previous CLOSED bar sat
+  // at/below both EMAs; fires when the live price clears both. Note the
+  // algebra: price above the provisionally-folded EMA is equivalent to
+  // price above the committed EMA (c > c·k + e·(1−k) ⟺ c > e), so the
+  // committed values are compared directly. Same junk floor, stale guard,
+  // and sibling-floor skip as the cross channel; watchR confirms mid-bar on
+  // accumulated bucket volume exactly like the cross watch. All events are
+  // queued (signal: 'reclaim') — never returned.
+  private intrabarReclaimCheck(ticker: string, st: SymState, tsSec: number, c: number): void {
+    if (!this.cfg.reclaim_detect) return;
+    if (st.emaF == null || st.emaS == null || st.bars < this.cfg.warmup_bars) return;
+    const w = st.watchR;
+    if (w) {
+      if (w.sibMedian <= 0) return;
+      const isCrossBar = st.bucketStart === w.crossBucket;
+      const ratio = st.bucketVol / w.sibMedian;
+      const volOk = ratio >= (isCrossBar ? this.cfg.instant_vol_x : this.cfg.confirm_vol_x);
+      const priceOk = isCrossBar
+        ? c >= w.crossPrice
+        : c >= w.crossPrice * (1 + this.cfg.confirm_price_ext);
+      if (volOk && priceOk && c * st.bucketVol >= this.cfg.confirm_min_notional) {
+        st.confirmedTodayR = true;
+        st.watchR = null;
+        this.queued.push({
+          type: 'confirm', ticker, signal: 'reclaim', tf: this.cfg.tf, ts_sec: tsSec, price: c,
+          cross_price: w.crossPrice, vol_ratio: +ratio.toFixed(1),
+          volume: st.bucketVol, sib_median: w.sibMedian,
+          bars_since_cross: isCrossBar ? 0 : w.barsSeen + 1, intrabar: true,
+        });
+      }
+      return;
+    }
+    if (st.confirmedTodayR || tsSec < st.lockedUntilR) return;
+    if (!st.prevBelowBoth) return;
+    if (!(c > st.emaF && c > st.emaS)) return;
+    if (c * st.bucketVol < this.cfg.nominate_min_notional) return;
+    if (this.sessionOpenTs > 0 && st.lastCloseTs > 0) {
+      const anchor = Math.max(st.lastCloseTs, this.sessionOpenTs);
+      if (tsSec - anchor > this.cfg.stale_gap_bars * this.cfg.interval_sec) return;
+    }
+    const sibMedian = median(st.sibVols);
+    if (sibMedian < this.cfg.sibling_min_sh) return;
+    const ratio = st.bucketVol / sibMedian;
+    if (ratio >= this.cfg.instant_vol_x && c * st.bucketVol >= this.cfg.confirm_min_notional) {
+      st.confirmedTodayR = true;
+      this.queued.push({
+        type: 'confirm', ticker, signal: 'reclaim', tf: this.cfg.tf, ts_sec: tsSec, price: c,
+        cross_price: c, vol_ratio: +ratio.toFixed(1),
+        volume: st.bucketVol, sib_median: sibMedian,
+        bars_since_cross: 0, intrabar: true,
+      });
+      return;
+    }
+    st.watchR = {
+      crossTs: tsSec, crossPrice: c, sibMedian,
+      barsSeen: 0, peakRatio: +ratio.toFixed(1), peakPrice: c,
+      crossBucket: st.bucketStart,
+    };
+    this.queued.push({
+      type: 'nominate', ticker, signal: 'reclaim', tf: this.cfg.tf, ts_sec: tsSec, price: c,
+      cross_price: c, vol_ratio: +ratio.toFixed(1),
+      volume: st.bucketVol, sib_median: sibMedian,
+      bars_since_cross: 0, intrabar: true,
+    });
+  }
+
   // TV-parity live check, run on every tick (see header). Two jobs:
   // (1) with an active observation, confirm mid-bar on the bucket's
   // ACCUMULATED volume — the cross bar itself needs the instant rule (≥5×),
@@ -545,6 +669,10 @@ export class EmaCrossTracker {
   // closed-bar diff, so this path strictly precedes the closed-bar backstop.
   private intrabarCheck(ticker: string, st: SymState, tsSec: number, c: number): EmaCrossEvent | null {
     if (!this.cfg.intrabar_detect) return null;
+    // The reclaim channel evaluates first and independently (events go to the
+    // queue) — the cross path's guards and early returns below must never
+    // gate it, and vice versa.
+    this.intrabarReclaimCheck(ticker, st, tsSec, c);
     const w = st.watch;
     if (w) {
       if (w.sibMedian <= 0) return null;
@@ -751,6 +879,59 @@ export class EmaCrossTracker {
       }
     }
 
+    // 1R) Reclaim-channel observation — the same confirm/expire rules as
+    // block 1 on fully separate state; events are queued (signal:
+    // 'reclaim') so the cross channel's return value is never displaced.
+    if (!silent && st.watchR && closeTs - this.cfg.interval_sec === st.watchR.crossBucket) {
+      // The intrabar-detected reclaim bar just closed — bar 0, instant rule;
+      // neither consumes the observation window nor expires it.
+      const w = st.watchR;
+      const ratio = w.sibMedian > 0 ? v / w.sibMedian : 0;
+      if (ratio > w.peakRatio) w.peakRatio = ratio;
+      if (c > w.peakPrice) w.peakPrice = c;
+      if (
+        ratio >= this.cfg.instant_vol_x &&
+        c >= w.crossPrice &&
+        c * v >= this.cfg.confirm_min_notional
+      ) {
+        st.confirmedTodayR = true;
+        this.queued.push({
+          type: 'confirm', ticker, signal: 'reclaim', tf: this.cfg.tf, ts_sec: closeTs, price: c,
+          cross_price: w.crossPrice, vol_ratio: +ratio.toFixed(1),
+          volume: v, sib_median: w.sibMedian, bars_since_cross: 0,
+        });
+        st.watchR = null;
+      }
+    } else if (!silent && st.watchR) {
+      const w = st.watchR;
+      w.barsSeen++;
+      const ratio = w.sibMedian > 0 ? v / w.sibMedian : 0;
+      if (ratio > w.peakRatio) w.peakRatio = ratio;
+      if (c > w.peakPrice) w.peakPrice = c;
+      if (
+        ratio >= this.cfg.confirm_vol_x &&
+        c >= w.crossPrice * (1 + this.cfg.confirm_price_ext) &&
+        c * v >= this.cfg.confirm_min_notional
+      ) {
+        st.confirmedTodayR = true;
+        this.queued.push({
+          type: 'confirm', ticker, signal: 'reclaim', tf: this.cfg.tf, ts_sec: closeTs, price: c,
+          cross_price: w.crossPrice, vol_ratio: +ratio.toFixed(1),
+          volume: v, sib_median: w.sibMedian, bars_since_cross: w.barsSeen,
+        });
+        st.watchR = null;
+      } else if (w.barsSeen >= this.cfg.observe_bars) {
+        st.lockedUntilR = closeTs + this.cfg.renominate_cooldown_sec;
+        this.queued.push({
+          type: 'expire', ticker, signal: 'reclaim', tf: this.cfg.tf, ts_sec: closeTs, price: c,
+          cross_price: w.crossPrice, vol_ratio: +ratio.toFixed(1),
+          volume: v, sib_median: w.sibMedian, bars_since_cross: w.barsSeen,
+          peak_ratio: +w.peakRatio.toFixed(1), peak_price: w.peakPrice,
+        });
+        st.watchR = null;
+      }
+    }
+
     // 1.5) Pending-cross management (the ZBAO mechanism). A price-coherent
     // cross that happened on a junk-dollar bar sits here until real dollars
     // arrive WHILE the fast EMA still rides above the slow — then it
@@ -862,7 +1043,49 @@ export class EmaCrossTracker {
       }
     }
 
+    // 2R) Price-reclaim detection, closed-bar backstop (see reclaim_detect):
+    // the previous close sat at/below both EMAs, this close clears both —
+    // TV's AND-ed "Crossing Up" pair on one bar. Thin sibling windows and
+    // junk-dollar bars just skip: unlike the one-shot geometric cross, the
+    // reclaim re-arms naturally on the next dip-below-both cycle, so no
+    // pending mechanism is needed.
+    if (
+      !silent && this.cfg.reclaim_detect &&
+      st.emaF != null && st.emaS != null &&
+      st.bars > this.cfg.warmup_bars &&
+      st.prevBelowBoth &&
+      !st.watchR && !st.confirmedTodayR && closeTs >= st.lockedUntilR &&
+      c > st.emaF && c > st.emaS &&
+      c * v >= this.cfg.nominate_min_notional &&
+      sibMedian >= this.cfg.sibling_min_sh
+    ) {
+      const ratio = v / sibMedian;
+      if (ratio >= this.cfg.instant_vol_x && c * v >= this.cfg.confirm_min_notional) {
+        st.confirmedTodayR = true;
+        this.queued.push({
+          type: 'confirm', ticker, signal: 'reclaim', tf: this.cfg.tf, ts_sec: closeTs, price: c,
+          cross_price: c, vol_ratio: +ratio.toFixed(1),
+          volume: v, sib_median: sibMedian, bars_since_cross: 0,
+        });
+      } else {
+        st.watchR = {
+          crossTs: closeTs, crossPrice: c, sibMedian,
+          barsSeen: 0, peakRatio: +ratio.toFixed(1), peakPrice: c,
+          crossBucket: -1, // the reclaim bar is already closed
+        };
+        this.queued.push({
+          type: 'nominate', ticker, signal: 'reclaim', tf: this.cfg.tf, ts_sec: closeTs, price: c,
+          cross_price: c, vol_ratio: +ratio.toFixed(1),
+          volume: v, sib_median: sibMedian, bars_since_cross: 0,
+        });
+      }
+    }
+
     if (st.emaF != null && st.emaS != null) st.prevDiff = st.emaF - st.emaS;
+    // Arm/disarm the reclaim channel off this bar's close vs the post-fold
+    // EMAs. Gap-decay preserves the flag's truth: decay moves the EMAs
+    // toward the last close but never across it.
+    st.prevBelowBoth = st.emaF != null && st.emaS != null && c <= st.emaF && c <= st.emaS;
 
     // The just-closed bar becomes a sibling for the next ones.
     st.sibVols.push(v);

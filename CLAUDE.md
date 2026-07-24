@@ -26,7 +26,7 @@ TELEGRAM_USER_ID=...                                     # optional — dashboar
 DATABENTO_API_KEY=db-...                                 # optional — Databento live (EQUS.MINI) for the tick-feed early-ignition detector
 TICKFEED_ENABLED=true                                    # optional — turn on the live tick feed (needs DATABENTO_API_KEY + a Standard/US-Equities subscription); off unless exactly 'true'
 TICKFEED_PYTHON=python3                                  # optional — python interpreter for the sidecar (default python3)
-ALERTS_DISABLED=tick_watch,accum                         # optional — mute these components' TELEGRAM pushes only; detection, tier_events grading, and the dashboard keep running (slugs: momentum, ignition, new_ignition, fresh_burst, accum, tick_watch, tick_catch, radar, dual_signal, swing, ema_cross)
+ALERTS_DISABLED=tick_watch,accum                         # optional — mute these components' TELEGRAM pushes only; detection, tier_events grading, and the dashboard keep running (slugs: momentum, ignition, new_ignition, fresh_burst, accum, tick_watch, tick_catch, radar, dual_signal, swing, ema_cross, ema_reclaim)
 ```
 
 ## Database Schema

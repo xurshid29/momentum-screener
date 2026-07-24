@@ -4,7 +4,10 @@
 // confirm), instant-confirm and its notional demotion to nominate, the price
 // hold, the post-expire re-arm cooldown (the TGHL lesson), confirm-ends-the-
 // day, boot-seed silence, gap-decay parity + in-gap flip pending (the CPHI
-// lesson), and the warm-symbol consolidated re-seed.
+// lesson), the warm-symbol consolidated re-seed, and the parallel
+// price-reclaim channel (S27-S28). Legacy scenarios run with reclaim_detect
+// OFF (CROSS_ONLY) so the cross channel is tested in isolation, exactly as
+// before the reclaim channel existed.
 // Run: npx tsx scripts/verify-ema-cross.ts
 import { EmaCrossTracker, EMA_CROSS, EMA_CROSS_1H, EMA_CROSS_4H, adjustSplitHistory, type EmaCrossConfig, type EmaCrossEvent } from '../src/services/ema-cross.js';
 
@@ -13,6 +16,10 @@ const T0 = 1_750_000_200; // aligned to a 5m boundary — a SUNDAY ~11:10 ET, so
                           // keep their exact original semantics
 const T0_SESSION = 1_750_168_800; // Tuesday 2025-06-17 10:00 ET (EDT), 5m-aligned
                                   // — mid-session weekday for gap-decay scenarios
+
+// The cross channel in isolation — the Sim default, keeping every
+// pre-reclaim scenario's counts byte-identical.
+const CROSS_ONLY: EmaCrossConfig = { ...EMA_CROSS, reclaim_detect: false };
 
 let failures = 0;
 function check(name: string, cond: boolean, detail = ''): void {
@@ -28,7 +35,7 @@ class Sim {
   private iv: number;
   private i = 0;
   private t0: number;
-  constructor(private sym = 'TEST', cfg: EmaCrossConfig = EMA_CROSS, t0 = T0) {
+  constructor(private sym = 'TEST', cfg: EmaCrossConfig = CROSS_ONLY, t0 = T0) {
     this.iv = cfg.interval_sec;
     this.t0 = t0;
     this.tracker = new EmaCrossTracker(cfg, (_t, closeTs) => {
@@ -42,6 +49,7 @@ class Sim {
   bar(close: number, vol: number): EmaCrossEvent | null {
     const ev = this.tracker.addBar(this.sym, this.t0 + this.i++ * this.iv, close, vol);
     if (ev) this.events.push(ev);
+    this.events.push(...this.tracker.drainEvents());
     return ev;
   }
   bars(n: number, close: number, vol: number): void {
@@ -59,13 +67,16 @@ class Sim {
   tick(close: number, vol: number, offsetSec = 42): EmaCrossEvent | null {
     const ev = this.tracker.addBar(this.sym, this.t0 + (this.i - 1) * this.iv + offsetSec, close, vol);
     if (ev) this.events.push(ev);
-    return ev;
+    const q = this.tracker.drainEvents();
+    this.events.push(...q);
+    return ev ?? q[0] ?? null;
   }
   seed(close: number, vol: number): void {
     this.tracker.seedBar(this.sym, this.t0 + this.i++ * this.iv, close, vol);
   }
-  count(type: EmaCrossEvent['type']): number {
-    return this.events.filter((e) => e.type === type).length;
+  count(type: EmaCrossEvent['type'], signal?: 'cross' | 'reclaim'): number {
+    return this.events.filter((e) => e.type === type
+      && (signal === undefined || (signal === 'reclaim' ? e.signal === 'reclaim' : e.signal !== 'reclaim'))).length;
   }
 }
 
@@ -426,11 +437,11 @@ console.log('S22 — gap-decay parity: an in-session feed gap equals flat carry-
   // A: 80 real bars, a 9-bucket in-session silence, resume. B: the same 80
   // bars with the silence filled by 9 explicit flat bars at the last close.
   // The EMAs must match to 1e-9 — decay IS the flat fill, computed lazily.
-  const a = new Sim('TEST', EMA_CROSS, T0_SESSION);
+  const a = new Sim('TEST', CROSS_ONLY, T0_SESSION);
   warmDipped(a, 1.0, 10_000);
   a.skip(9);
   a.bar(0.91, 10_000); // resume tick: closes the open 0.9 bar, decays the gap
-  const b = new Sim('TEST', EMA_CROSS, T0_SESSION);
+  const b = new Sim('TEST', CROSS_ONLY, T0_SESSION);
   warmDipped(b, 1.0, 10_000);
   b.bars(9, 0.9, 10_000); // the flat fill, as real bars
   b.bar(0.91, 10_000);
@@ -447,7 +458,7 @@ console.log('S22 — gap-decay parity: an in-session feed gap equals flat carry-
 
 console.log('S23 — decay flip: a quiet-curl cross DURING silence pends, then converts on dollars');
 {
-  const s = new Sim('TEST', EMA_CROSS, T0_SESSION);
+  const s = new Sim('TEST', CROSS_ONLY, T0_SESSION);
   warmDipped(s, 1.0, 10_000);
   s.bars(4, 1.0, 10_000);  // 3 closed recovery bars — diff still just below zero,
                            // last close now ABOVE both EMAs (the curl set-up)
@@ -529,6 +540,48 @@ console.log('S25 — reseedFromHistory: warm-symbol consolidated re-seed (CPHI/s
   check('in-flight observation refuses the re-seed',
     t.count('nominate') === 1 && !t.tracker.reseedFromHistory('TEST', hist)
     && t.tracker.snapshot('TEST')?.observing === true);
+}
+
+console.log('S27 — price-reclaim channel: fires BEFORE the crossover, confirms on volume, independent funnels');
+{
+  const s = new Sim('TEST', EMA_CROSS); // reclaim ON — the prod 5m config
+  warmDipped(s, 1.0, 10_000);   // dipped close 0.9 sits below both EMAs → armed
+  s.bar(0.97, 10_000); // pops above BOTH EMAs (fast ~0.90, slow ~0.955); queued event
+  const nom = s.events.find((e) => e.signal === 'reclaim');
+  check('reclaim nominated intrabar while the 10/65 diff is still negative',
+    nom?.type === 'nominate' && nom.intrabar === true
+    && s.count('nominate', 'cross') === 0,
+    `got ${nom?.type ?? 'nothing'}/${nom?.signal ?? '-'}`);
+  const cf = s.tick(0.98, 45_000, 90); // 5.5× accumulated on the reclaim bar, $53.9k
+  check('reclaim confirmed mid-bar on accumulated volume',
+    cf?.type === 'confirm' && cf.signal === 'reclaim' && cf.intrabar === true && cf.bars_since_cross === 0,
+    `got ${cf?.type ?? 'nothing'}`);
+  s.bars(6, 1.2, 10_000); // rally drags EMA10 over EMA65 → the CROSS channel must still fire
+  check('cross channel unaffected by the reclaim confirm',
+    s.count('nominate', 'cross') === 1,
+    `${s.count('nominate', 'cross')} cross nominations`);
+  check('reclaim channel done for the day', s.count('nominate', 'reclaim') === 1 && s.count('confirm', 'reclaim') === 1);
+}
+
+console.log('S28 — reclaim arms only from below BOTH EMAs; a confirm ends its day');
+{
+  const s = new Sim('TEST', EMA_CROSS);
+  warmDipped(s, 1.0, 10_000);
+  s.bar(0.93, 10_000);  // recovers above the fast EMA but NOT the slow — not armed
+  const ev = s.bar(1.0, 10_000); // clears both, but prev bar was between the EMAs
+  check('no reclaim without prev-below-BOTH (gradual walk excluded)',
+    ev == null && s.count('nominate', 'reclaim') === 0, `${s.events.length} events`);
+
+  const t = new Sim('TEST', EMA_CROSS);
+  warmDipped(t, 1.0, 10_000);
+  t.bar(0.97, 60_000);  // reclaim bar arrives 6× with $58k → instant confirm
+  const first = t.events.find((e) => e.signal === 'reclaim');
+  check('reclaim instant-confirms on a 6× dollar bar',
+    first?.type === 'confirm' && first.bars_since_cross === 0, `got ${first?.type ?? 'nothing'}`);
+  t.bars(8, 0.85, 10_000); // dip back below both — re-arms the condition…
+  t.bars(2, 1.0, 10_000);  // …and pops again
+  check('confirmed reclaim stays silent for the rest of the day',
+    t.count('nominate', 'reclaim') === 0 && t.count('confirm', 'reclaim') === 1);
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);

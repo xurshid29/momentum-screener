@@ -971,9 +971,13 @@ class TickFeedService {
     if (poller.isKnownRunner(m.s)) {
       const xev = this.emaCross.addBar(m.s, m.t, m.c, m.v);
       if (xev) poller.onEmaCrossEvent(xev);
+      // The reclaim channel's events arrive via the queue (never the return
+      // value — that stays the cross channel's contract).
+      for (const q of this.emaCross.drainEvents()) poller.onEmaCrossEvent(q);
       for (const l of this.htfLayers) {
         const hev = l.tracker.addBar(m.s, m.t, m.c, m.v);
         if (hev) poller.onEmaCrossEvent(hev);
+        for (const q of l.tracker.drainEvents()) poller.onEmaCrossEvent(q);
       }
     }
     // Surface near-miss reasons (gapped vs which gate) so the rollout is

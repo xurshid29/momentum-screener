@@ -27,7 +27,8 @@ export type AlertComponent =
   | 'radar'         // 📰 news radar (strong/major urgency)
   | 'dual_signal'   // momentum+ignition dual-signal
   | 'swing'         // swing-score breakout
-  | 'ema_cross';    // 📈 volume-confirmed EMA cross (any timeframe)
+  | 'ema_cross'     // 📈 volume-confirmed EMA cross (any timeframe)
+  | 'ema_reclaim';  // ↗ volume-confirmed price-reclaim of EMA 10+65 (parallel channel)
 let disabledAlerts: Set<string> | null = null;
 export function alertDisabled(component: AlertComponent): boolean {
   if (!disabledAlerts) {

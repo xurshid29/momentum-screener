@@ -80,9 +80,9 @@ export function useTabTitleFlash(payload: CyclePayload | null) {
     // tab is visible, so backgrounding the tab doesn't back-blast old rows.
     const confirmKeys = (payload.ema_crosses ?? [])
       .filter((x) => x.status === 'confirmed')
-      .map((x) => `${x.tf}|${x.ticker}:${x.confirmed_at}`);
+      .map((x) => `${x.tf}|${x.signal}|${x.ticker}:${x.confirmed_at}`);
     const observeKeys = (payload.ema_crosses ?? [])
-      .map((x) => ({ key: `${x.tf}|${x.ticker}:${x.cross_at}`, confirmed: x.status === 'confirmed' }));
+      .map((x) => ({ key: `${x.tf}|${x.signal}|${x.ticker}:${x.cross_at}`, confirmed: x.status === 'confirmed' }));
 
     if (!seenFirst.current) {
       seenFirst.current = true;

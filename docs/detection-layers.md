@@ -234,6 +234,29 @@ S22–S26 (decay parity vs flat fill, in-gap flip pending, out-of-session
 no-decay, dead-sibling pend/convert, warm re-seed). ⚠️ Grading: cross
 semantics changed AGAIN — the clean 10/65 segment now starts **2026-07-24**.
 
+**Price-reclaim channel ↗ (2026-07-24, operator's ask — the TV alert form's
+"price Crossing Up EMA(10) AND price Crossing Up EMA(65)").** A single bar
+punching up through the whole EMA stack, run as a PARALLEL nomination
+channel next to the crossover — measured first (4d of banked bars): only
+11% of reclaim bars coincide with a crossover bar (~1.6× the raw rate), so
+it's a genuinely different event set — the early precursor before the
+crossover, the pullback-reclaim after it. Detection: previous CLOSED bar's
+close at/below BOTH EMAs, current price above both (intrabar equivalence:
+price above the provisionally-folded EMA ⟺ above the committed one, so the
+committed values compare directly). Fully separate observation state
+(`watchR`/`confirmedTodayR`/`lockedUntilR`) so the two funnels never gate
+each other; same volume-confirm rules, junk floor, stale guard; thin
+sibling windows skip (the reclaim re-arms on the next dip-below-both cycle
+— no pend needed). Events carry `signal: 'reclaim'` (queued via
+`drainEvents()`, never the cross channel's return value) → tier_events
+`meta.signal` is the A/B grading cut: nominate→confirm rate + forward
+outcomes per channel, decided by data. Kill switch `reclaim_detect` — 5m
+only for the trial (HTF configs off until the A/B earns scope). Alerts:
+own slug `ema_reclaim` (mutable independently of `ema_cross`); Telegram
+headline "↗✅ PRICE RECLAIMED EMA 10+65"; sidebar rows carry a blue ↗ tag
+and read "reclaim Xm ago" — they will NOT match TV crossover alerts by
+design, they match the price-crossing alert pair. Scenarios S27–S28.
+
 **Surfacing.** Green 📈 sidebar section: dim "…observing" → "✅ N× vol" with a
 soft ping on confirm only. Timestamps are bar-close times; "ago" anchors on
 the cross (matches the TV chart). Names already in the LIVE TICKS ladder skip

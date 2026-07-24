@@ -323,6 +323,10 @@ export type EmaCrossTf = '5m' | '1h' | '4h';
 export interface EmaCrossItem {
   ticker: string;
   tf: EmaCrossTf;         // which timeframe layer fired
+  // Which nomination channel: the EMA10×EMA65 crossover, or the
+  // price-reclaims-both-EMAs channel (2026-07-24, parallel A/B trial —
+  // same volume-confirm rules, separate funnel, graded via meta.signal).
+  signal: 'cross' | 'reclaim';
   status: 'observing' | 'confirmed';
   price: number;
   cross_price: number;
@@ -822,14 +826,16 @@ class PollerService {
   // ticker+tf per ET day; carries the cached catalyst when enrichment has
   // already landed (it usually has — enrichment starts at nomination).
   private pushCrossAlert(e: import('./ema-cross.js').EmaCrossEvent, tf: EmaCrossTf): void {
-    if (!telegramEnabled() || this.alertsMuted || alertDisabled('ema_cross')) return;
-    const key = `${tf}|${e.ticker}`;
+    const reclaim = e.signal === 'reclaim';
+    if (!telegramEnabled() || this.alertsMuted || alertDisabled(reclaim ? 'ema_reclaim' : 'ema_cross')) return;
+    const key = reclaim ? `${tf}|R|${e.ticker}` : `${tf}|${e.ticker}`;
     if (this.alertedCross.has(key)) return;
     this.alertedCross.add(key);
     const cached = this.crossNewsCache.get(e.ticker);
     void sendTelegram(formatEmaCrossAlert(
       e.ticker, tf, e.price, e.cross_price, e.vol_ratio, e.intrabar ?? false,
       cached ? { title: cached.title, catalyst: cached.catalyst } : null,
+      reclaim,
     ));
   }
 
@@ -849,12 +855,18 @@ class PollerService {
   onEmaCrossEvent(e: import('./ema-cross.js').EmaCrossEvent): void {
     const nowMs = Date.now();
     const tf = emaCrossTfOf(e.tf);
-    const key = `${tf}|${e.ticker}`;
+    const signal: 'cross' | 'reclaim' = e.signal === 'reclaim' ? 'reclaim' : 'cross';
+    // Reclaim rows/dedups key separately (a name can carry one of each);
+    // cross keys keep their exact pre-reclaim shape so reseeds spanning this
+    // deploy stay continuous.
+    const key = signal === 'reclaim' ? `${tf}|R|${e.ticker}` : `${tf}|${e.ticker}`;
     const tfTag = tf === '5m' ? '' : ` (${tf})`;
+    const glyph = signal === 'reclaim' ? '↗' : '📈';
+    const evName = signal === 'reclaim' ? 'reclaim' : 'cross';
     if (e.type === 'nominate' || (e.type === 'confirm' && !this.emaCrosses.has(key))) {
       const inLadder = this.tickCatches.has(e.ticker);
       recordTierEvent('cross', e.type, e.ticker, {
-        tf, price: e.price, cross_price: e.cross_price, vol_ratio: e.vol_ratio,
+        tf, signal, price: e.price, cross_price: e.cross_price, vol_ratio: e.vol_ratio,
         vol: e.volume, sib_median: e.sib_median, notional: Math.round(e.price * e.volume),
         bars: e.bars_since_cross, in_ladder: inLadder, intrabar: e.intrabar ?? false,
         // Pending conversions (the ZBAO mechanism): how long the cross waited
@@ -866,8 +878,8 @@ class PollerService {
       // hid inside a ladder section the operator now HIDES — alert and row
       // must always match. in_ladder stays in meta for the grading overlap cut.
       console.log(
-        `[ema-cross] ${e.type === 'confirm' ? '📈✅ instant-confirm' : '📈 nominate'} ${e.ticker}${tfTag} ` +
-        `$${e.price.toFixed(2)} · ${e.vol_ratio}x sibling vol` +
+        `[ema-cross] ${e.type === 'confirm' ? `${glyph}✅ instant-confirm` : `${glyph} nominate`} ${e.ticker}${tfTag} ` +
+        `${signal === 'reclaim' ? '(reclaim) ' : ''}$${e.price.toFixed(2)} · ${e.vol_ratio}x sibling vol` +
         `${e.intrabar ? ' · intrabar' : ''}${inLadder ? ' · in ladder' : ''}`,
       );
       if (e.type === 'confirm') this.pushCrossAlert(e, tf);
@@ -880,6 +892,7 @@ class PollerService {
       this.emaCrosses.set(key, {
         ticker: e.ticker,
         tf,
+        signal,
         status: e.type === 'confirm' ? 'confirmed' : 'observing',
         price: e.price,
         cross_price: e.cross_price,
@@ -896,13 +909,14 @@ class PollerService {
     const existing = this.emaCrosses.get(key);
     if (e.type === 'confirm') {
       recordTierEvent('cross', 'confirm', e.ticker, {
-        tf, price: e.price, cross_price: e.cross_price, vol_ratio: e.vol_ratio,
+        tf, signal, price: e.price, cross_price: e.cross_price, vol_ratio: e.vol_ratio,
         vol: e.volume, sib_median: e.sib_median, notional: Math.round(e.price * e.volume),
         bars: e.bars_since_cross, intrabar: e.intrabar ?? false,
       });
       console.log(
-        `[ema-cross] 📈✅ confirm ${e.ticker}${tfTag} $${e.price.toFixed(2)} · ${e.vol_ratio}x sibling vol · ` +
-        `${e.bars_since_cross} bars after the cross ($${e.cross_price.toFixed(2)})${e.intrabar ? ' · intrabar' : ''}`,
+        `[ema-cross] ${glyph}✅ confirm ${e.ticker}${tfTag} ${signal === 'reclaim' ? '(reclaim) ' : ''}` +
+        `$${e.price.toFixed(2)} · ${e.vol_ratio}x sibling vol · ` +
+        `${e.bars_since_cross} bars after the ${evName} ($${e.cross_price.toFixed(2)})${e.intrabar ? ' · intrabar' : ''}`,
       );
       this.pushCrossAlert(e, tf);
       if (existing) {
@@ -916,11 +930,11 @@ class PollerService {
     }
     // expire — the observation window ran out without expansion.
     recordTierEvent('cross', 'expire', e.ticker, {
-      tf, cross_price: e.cross_price, sib_median: e.sib_median,
+      tf, signal, cross_price: e.cross_price, sib_median: e.sib_median,
       peak_ratio: e.peak_ratio ?? null, peak_price: e.peak_price ?? null,
     });
     console.log(
-      `[ema-cross] 📉 expire ${e.ticker}${tfTag} — no expansion in ${e.bars_since_cross} bars ` +
+      `[ema-cross] 📉 expire ${e.ticker}${tfTag} ${signal === 'reclaim' ? '(reclaim) ' : ''}— no expansion in ${e.bars_since_cross} bars ` +
       `(peak ${e.peak_ratio ?? '?'}x vol)`,
     );
     if (existing && existing.status === 'observing') this.emaCrosses.delete(key);
@@ -1332,13 +1346,15 @@ class PollerService {
           }
         } else if (r.tier === 'cross') {
           const xtf = emaCrossTfOf(m.tf);
-          const xkey = `${xtf}|${t}`;
+          const xsig: 'cross' | 'reclaim' = m.signal === 'reclaim' ? 'reclaim' : 'cross';
+          const xkey = xsig === 'reclaim' ? `${xtf}|R|${t}` : `${xtf}|${t}`;
           if (r.event === 'confirm') {
             this.alertedCross.add(xkey); // already pinged before the deploy
             const prev = this.emaCrosses.get(xkey);
             this.emaCrosses.set(xkey, {
               ticker: t,
               tf: xtf,
+              signal: xsig,
               status: 'confirmed',
               price: num(m.price) ?? 0,
               cross_price: num(m.cross_price) ?? num(m.price) ?? 0,
@@ -1353,7 +1369,7 @@ class PollerService {
             // Track for cross_at continuity only — pruned below unless a
             // confirm follows (the old process's observation died with it).
             this.emaCrosses.set(xkey, {
-              ticker: t, tf: xtf, status: 'observing',
+              ticker: t, tf: xtf, signal: xsig, status: 'observing',
               price: num(m.price) ?? 0,
               cross_price: num(m.cross_price) ?? num(m.price) ?? 0,
               vol_ratio: num(m.vol_ratio) ?? 0,
@@ -2387,7 +2403,7 @@ class PollerService {
         continue;
       }
       emaCrossList.push({
-        ticker: xc.ticker, tf: xc.tf, status: xc.status, price: xc.price, cross_price: xc.cross_price,
+        ticker: xc.ticker, tf: xc.tf, signal: xc.signal, status: xc.status, price: xc.price, cross_price: xc.cross_price,
         vol_ratio: xc.vol_ratio, cross_at: xc.cross_at, confirmed_at: xc.confirmed_at,
         thin_tape: xc.thin_tape,
         news_title: xc.news_title, news_url: xc.news_url,
@@ -3325,17 +3341,20 @@ function formatTickWatchAlert(e: TickEvent): string {
 function formatEmaCrossAlert(
   ticker: string, tf: string, price: number, crossPrice: number, volRatio: number,
   intrabar: boolean, news: { title: string; catalyst: CatalystInfo | null } | null,
+  reclaim = false,
 ): string {
   const finviz = `https://finviz.com/quote.ashx?t=${encodeURIComponent(ticker)}`;
   const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(ticker)}`;
   const ext = crossPrice > 0 ? (price / crossPrice - 1) * 100 : 0;
   const evidence = [
     `${volRatio.toFixed(1)}× sibling vol`,
-    `cross $${crossPrice.toFixed(2)}${ext >= 0.5 ? ` (+${ext.toFixed(1)}% since)` : ''}`,
+    `${reclaim ? 'reclaim' : 'cross'} $${crossPrice.toFixed(2)}${ext >= 0.5 ? ` (+${ext.toFixed(1)}% since)` : ''}`,
   ];
   if (intrabar) evidence.push('intrabar');
   const lines = [
-    `📈✅ <b>${escapeHtml(ticker)}</b>  $${price.toFixed(2)}  <b>${tf.toUpperCase()}</b> EMA CROSS CONFIRMED`,
+    reclaim
+      ? `↗✅ <b>${escapeHtml(ticker)}</b>  $${price.toFixed(2)}  <b>${tf.toUpperCase()}</b> PRICE RECLAIMED EMA 10+65`
+      : `📈✅ <b>${escapeHtml(ticker)}</b>  $${price.toFixed(2)}  <b>${tf.toUpperCase()}</b> EMA CROSS CONFIRMED`,
     evidence.join(' · '),
   ];
   if (news) {

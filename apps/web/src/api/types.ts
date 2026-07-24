@@ -345,6 +345,9 @@ export interface NewsRadarItem {
 export interface EmaCrossItem {
   ticker: string;
   tf: '5m' | '1h' | '4h';
+  // Nomination channel: the EMA10×EMA65 crossover, or the price-reclaims-
+  // both-EMAs channel (↗, parallel A/B trial since 2026-07-24).
+  signal: 'cross' | 'reclaim';
   status: 'observing' | 'confirmed';
   price: number;
   cross_price: number;

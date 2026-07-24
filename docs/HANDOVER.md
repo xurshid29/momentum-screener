@@ -1,4 +1,4 @@
-# Session Handover — updated 2026-07-23
+# Session Handover — updated 2026-07-24
 
 A running handover so a fresh session can continue without re-deriving context.
 **Read `docs/web-dashboard.md` first** (the canonical status doc); this file is
@@ -55,7 +55,9 @@ cost — `watch_suppressed reason='low_evidence'` tickers that later confirmed;
 ≥+20pts) + whether the news-gated 🤫 Telegram picks winners; (d) radar
 precision by catalyst type. Then promote/demote Telegram gates accordingly.
 
-**Recent focus trail** (each has a dated entry below): 07-23 XGAPD (the
+**Recent focus trail** (each has a dated entry below): 07-24 XRECL (↗
+price-reclaim parallel channel — the operator's TV price-crossing alert
+pair; A/B vs the crossover via tier_events meta.signal) · 07-23 XGAPD (the
 CPHI 15-min lag: gap-decay to TV-parity EMA horizons on sparse tapes +
 thin-sibling pend/intrabar conversion + warm-sparse Yahoo re-seed; clean
 grading segment moves to 07-24) · 07-22 XTAPE (the
@@ -113,6 +115,32 @@ Journal; **attribution join still the open payoff**) · 06-17 tick feed go-live.
 ---
 
 ## What shipped this session (newest first, all on prod unless noted)
+
+XRECL. **↗ Price-reclaim channel — the operator's TV "price Crossing Up
+EMA(10) AND EMA(65)" alert pair, as a PARALLEL nomination channel
+(2026-07-24).** Operator asked to detect the AND-ed price-crossing
+conditions "instead of" the crossover; measured first (4d banked bars,
+$500 floor): reclaims fire ~1.6× the crossover's raw rate and only 11%
+of reclaim bars coincide with a crossover bar — a different event set
+(pre-crossover precursor / post-crossover pullback-reclaim). Recommended
+parallel over replacement (the crossover's clean segment started 07-24
+same day); operator agreed. Built: reclaim detection in the tracker
+(prev close ≤ both EMAs → price > both; intrabar + closed-bar; SEPARATE
+watchR/confirmedTodayR/lockedUntilR so the funnels never gate each other
+— cross semantics untouched, its segment holds), same volume-confirm
+rules/floors/stale-guard, thin-sibling skip (reclaims re-arm naturally,
+no pend), events tagged `signal:'reclaim'` via a drain queue (cross keeps
+addBar's return). Poller: rows/dedups key `${tf}|R|${ticker}` (cross keys
+unchanged → reseed continuity), tier_events meta.signal (the A/B cut),
+new `ema_reclaim` Telegram slug (independent of ema_cross; headline
+"↗✅ PRICE RECLAIMED EMA 10+65"), reseed carries signal. Web: blue ↗ tag
++ "reclaim Xm ago" rows; alert/title-flash keys include signal. 5m-only
+trial (`reclaim_detect` false on 1h/4h). Suite → 28 scenarios / 96 checks
+(S27 funnel+independence, S28 arming rules); legacy scenarios pinned to
+CROSS_ONLY config so the cross channel stays tested in isolation.
+**Grading:** both channels grade from tier='cross' segmented on
+meta.signal (absent = cross); compare nominate→confirm + forward outcomes
+after ~a week, then keep/kill/expand-to-HTF.
 
 XGAPD. **The CPHI 15-minute lag → gap-decay: TV-parity EMA horizons on
 sparse tapes (2026-07-23).** Operator: "why 18:50, not 18:35?" — their TV
@@ -571,7 +599,8 @@ history (temp tables `ir_entry` / `scored`, joined `ignition_results` →
 
 - **The grading pass** — the single next task; the clean 10/65 cross segment
   starts **2026-07-24** (semantics churned 07-22 AND 07-23 — XGAPD shipped
-  gap-decay + thin-sibling pend + sparse re-seed). New first-class
+  gap-decay + thin-sibling pend + sparse re-seed). The ↗ reclaim channel
+  (XRECL) grades from the same date — A/B on meta.signal. New first-class
   cuts available in tier_events meta: `tf` (5m/1h/4h), `intrabar`,
   `notional`/`sib_median` (thin-tape derivable: sib_median×cross_price<$5k;
   ⚠️ thin-sibling conversions carry inflated ratios — segment on sib_median),
