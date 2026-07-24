@@ -614,6 +614,15 @@ history (temp tables `ir_entry` / `scored`, joined `ignition_results` →
   Also watch post-XGAPD: cross volume/day (pend-conversions add fires on
   sparse names — if noisy, the dials are `SPARSE_5M_MIN_BARS`, the coherence
   gate, and `nominate_min_notional`).
+- **Dead-tape nominations stay (operator's call, 2026-07-24, the PBM case):**
+  odd-lot-only trickles on consolidated-sparse names can nominate (cross +
+  reclaim) with ⚠️ and can never confirm ($10k floor unreachable) — the
+  operator reviewed the PBM anatomy (TV's tape silent 2h, our feed saw $1.1k
+  of odd lots) and chose to keep the current floors. No `sib_median × price`
+  nomination floor for now — if grading shows the dead-baseline band
+  (sib_median×cross_price < ~$2k) is pure expire-noise, the calibrated
+  conditional floor (dead baseline ⇒ escalated trigger notional) is the
+  designed dial; meta carries everything needed to place the line.
 - ⚠️ **Anthropic API credits EXHAUSTED (noticed 2026-07-22)** —
   `[catalyst-claude] 400 credit balance is too low` in api logs; the LLM
   catalyst refinement is dead and classification is rules-only until the
