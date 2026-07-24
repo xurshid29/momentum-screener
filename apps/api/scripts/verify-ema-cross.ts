@@ -584,5 +584,29 @@ console.log('S28 — reclaim arms only from below BOTH EMAs; a confirm ends its 
     t.count('nominate', 'reclaim') === 0 && t.count('confirm', 'reclaim') === 1);
 }
 
+console.log('S29 — pending reclaim (AMIX): a thin-window burst pends and converts, not vanishes');
+{
+  const s = new Sim('TEST', EMA_CROSS);
+  warmDipped(s, 1.0, 10);  // dead tape (10-sh sibling median), ends dipped → armed
+  s.bar(1.05, 3_000);      // real-dollar burst bar pops above both EMAs
+  s.bar(1.06, 3_000);      // closes the burst bar → thin window → PEND; new bucket's
+                           // dollars then convert INTRABAR on this same tick
+  const nom = s.events.find((e) => e.signal === 'reclaim');
+  check('thin-window reclaim pended and converted on dollars',
+    nom?.type === 'nominate' && nom.intrabar === true, `got ${nom?.type ?? 'nothing'}`);
+  check('anchored at the original reclaim bar', !!nom && nom.cross_ts_sec != null && nom.cross_ts_sec <= nom.ts_sec,
+    `cross_ts ${nom?.cross_ts_sec} vs ts ${nom?.ts_sec}`);
+  check('pending cleared after conversion', s.tracker.snapshot('TEST')?.pending_reclaim === false);
+
+  const t = new Sim('TEST', EMA_CROSS);
+  warmDipped(t, 1.0, 10);
+  t.bar(1.05, 3_000);      // burst bar
+  t.bar(0.85, 3_000);      // closes it → PEND; price then collapses back inside
+  check('pend created on the thin-window burst', t.tracker.snapshot('TEST')?.pending_reclaim === true);
+  t.bar(0.86, 3_000);      // the 0.85 close lands back below the stack → pend dies
+  check('pending reclaim dies when price closes back inside the stack',
+    t.tracker.snapshot('TEST')?.pending_reclaim === false && t.count('nominate', 'reclaim') === 0);
+}
+
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

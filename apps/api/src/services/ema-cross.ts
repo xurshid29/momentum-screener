@@ -262,6 +262,15 @@ interface SymState {
   // nomination when real dollars arrive while the fast EMA is still above
   // the slow. Cleared when the cross dies (diff ≤ 0) or at the day roll.
   pending: { crossTs: number; crossPrice: number } | null;
+  // Pending price-reclaim (2026-07-24, the AMIX lesson): the reclaim's v1
+  // skipped thin-sibling windows on the theory that the condition re-arms
+  // on the next dip-below-both — but a vertical ignition never dips back,
+  // so the channel missed the exact moves it exists for (AMIX burst: the
+  // cross pended through the 42-share window and confirmed 92×; the
+  // reclaim skipped and stayed silent). Same shape as `pending`: converts
+  // when dollars arrive while price still holds above both EMAs; dies at
+  // any close back inside the stack.
+  pendingR: { crossTs: number; crossPrice: number } | null;
   prevDiff: number | null; // emaF - emaS at the previous closed bar
   // Previous CLOSED bar's close sat at/below BOTH EMAs (as they stood after
   // that bar) — the arming condition for the price-reclaim channel. TV's
@@ -445,6 +454,7 @@ export class EmaCrossTracker {
     pending: boolean;
     confirmed_today: boolean; locked_until: number;
     observing_reclaim: boolean; confirmed_today_reclaim: boolean;
+    pending_reclaim: boolean;
     open_bucket_ts: number | null;
     open_bucket_close: number | null; open_bucket_vol: number | null;
   } | null {
@@ -463,6 +473,7 @@ export class EmaCrossTracker {
       locked_until: st.lockedUntil,
       observing_reclaim: st.watchR != null,
       confirmed_today_reclaim: st.confirmedTodayR,
+      pending_reclaim: st.pendingR != null,
       open_bucket_ts: st.bucketStart === -1 ? null : st.bucketStart,
       open_bucket_close: st.bucketStart === -1 ? null : st.bucketClose,
       open_bucket_vol: st.bucketStart === -1 ? null : st.bucketVol,
@@ -500,7 +511,7 @@ export class EmaCrossTracker {
   reseedFromHistory(ticker: string, bars: SeedHistoryBar[]): boolean {
     if (bars.length === 0) return false;
     const cur = this.state.get(ticker);
-    if (cur && (cur.watch || cur.watchR || cur.pending)) return false;
+    if (cur && (cur.watch || cur.watchR || cur.pending || cur.pendingR)) return false;
     const keep = cur
       ? {
           confirmedToday: cur.confirmedToday, lockedUntil: cur.lockedUntil,
@@ -536,6 +547,7 @@ export class EmaCrossTracker {
       st.watchR = null;
       st.confirmedTodayR = false;
       st.lockedUntilR = 0;
+      st.pendingR = null;
     }
   }
 
@@ -545,7 +557,7 @@ export class EmaCrossTracker {
       st = {
         bucketStart: -1, bucketClose: 0, bucketVol: 0,
         emaF: null, emaS: null, seedSumF: 0, seedSumS: 0,
-        bars: 0, lastCloseTs: 0, lastClose: 0, pending: null,
+        bars: 0, lastCloseTs: 0, lastClose: 0, pending: null, pendingR: null,
         prevDiff: null, prevBelowBoth: false,
         watchR: null, confirmedTodayR: false, lockedUntilR: 0,
         decayedTo: 0, sibVols: [], watch: null, confirmedToday: false, lockedUntil: 0,
@@ -628,6 +640,44 @@ export class EmaCrossTracker {
       return;
     }
     if (st.confirmedTodayR || tsSec < st.lockedUntilR) return;
+    // Pending-reclaim conversion (the AMIX lesson): dollars accumulating in
+    // the open bucket convert a parked thin-window reclaim the moment they
+    // arrive, as long as price still holds above both EMAs (death itself
+    // stays with the closed-bar path). Mirrors the cross channel's
+    // conversion exactly so the A/B compares signals, not mechanisms.
+    if (st.pendingR) {
+      if (!(c > st.emaF && c > st.emaS)) return;
+      const notional = c * st.bucketVol;
+      if (notional < this.cfg.nominate_min_notional) return;
+      const p = st.pendingR;
+      st.pendingR = null;
+      const sibMedian = median(st.sibVols);
+      const ratio = sibMedian > 0 ? st.bucketVol / sibMedian : 0;
+      const barsSince = Math.max(1, Math.round((tsSec - p.crossTs) / this.cfg.interval_sec));
+      console.log(`[ema-cross] pending reclaim converted after ${Math.round((tsSec - p.crossTs) / 60)}m ${ticker} (${this.cfg.tf}, intrabar)`);
+      if (ratio >= this.cfg.instant_vol_x && c >= p.crossPrice && notional >= this.cfg.confirm_min_notional) {
+        st.confirmedTodayR = true;
+        this.queued.push({
+          type: 'confirm', ticker, signal: 'reclaim', tf: this.cfg.tf, ts_sec: tsSec, price: c,
+          cross_price: p.crossPrice, vol_ratio: +ratio.toFixed(1),
+          volume: st.bucketVol, sib_median: sibMedian, bars_since_cross: barsSince,
+          intrabar: true, cross_ts_sec: p.crossTs,
+        });
+        return;
+      }
+      st.watchR = {
+        crossTs: p.crossTs, crossPrice: p.crossPrice, sibMedian,
+        barsSeen: 0, peakRatio: +ratio.toFixed(1), peakPrice: c,
+        crossBucket: -1,
+      };
+      this.queued.push({
+        type: 'nominate', ticker, signal: 'reclaim', tf: this.cfg.tf, ts_sec: tsSec, price: c,
+        cross_price: p.crossPrice, vol_ratio: +ratio.toFixed(1),
+        volume: st.bucketVol, sib_median: sibMedian, bars_since_cross: barsSince,
+        intrabar: true, cross_ts_sec: p.crossTs,
+      });
+      return;
+    }
     if (!st.prevBelowBoth) return;
     if (!(c > st.emaF && c > st.emaS)) return;
     if (c * st.bucketVol < this.cfg.nominate_min_notional) return;
@@ -636,7 +686,19 @@ export class EmaCrossTracker {
       if (tsSec - anchor > this.cfg.stale_gap_bars * this.cfg.interval_sec) return;
     }
     const sibMedian = median(st.sibVols);
-    if (sibMedian < this.cfg.sibling_min_sh) return;
+    if (sibMedian < this.cfg.sibling_min_sh) {
+      // Dead sibling window at a live reclaim: with real bucket dollars
+      // (checked above) and a coherent price, park it as PENDING — the
+      // conversion path above fires the moment dollar evidence accumulates
+      // (the AMIX lesson: a vertical ignition never dips back below the
+      // stack, so "wait for the natural re-arm" missed the whole move).
+      const coherent = st.lastClose > 0 && Math.abs(c / st.lastClose - 1) <= this.cfg.junk_outlier_pct;
+      if (coherent) {
+        st.pendingR = { crossTs: tsSec, crossPrice: c };
+        console.log(`[ema-cross] reclaim pending — thin sibling window (${sibMedian} sh) ${ticker} (${this.cfg.tf})`);
+      }
+      return;
+    }
     const ratio = st.bucketVol / sibMedian;
     if (ratio >= this.cfg.instant_vol_x && c * st.bucketVol >= this.cfg.confirm_min_notional) {
       st.confirmedTodayR = true;
@@ -934,6 +996,49 @@ export class EmaCrossTracker {
       }
     }
 
+    // 1.5R) Pending-reclaim management (the AMIX lesson). Dies at any close
+    // back inside the EMA stack; converts when a closed bar carries real
+    // dollars while price still holds above both. Events queued (reclaim).
+    if (!silent && st.pendingR && st.emaF != null && st.emaS != null) {
+      if (c <= st.emaF || c <= st.emaS) {
+        st.pendingR = null; // price fell back inside the stack — reclaim died
+      } else if (
+        !st.watchR && !st.confirmedTodayR &&
+        c * v >= this.cfg.nominate_min_notional
+      ) {
+        const p = st.pendingR;
+        st.pendingR = null;
+        const ratio = sibMedian > 0 ? v / sibMedian : 0;
+        const barsSince = Math.max(1, Math.round((closeTs - p.crossTs) / this.cfg.interval_sec));
+        console.log(`[ema-cross] pending reclaim converted after ${Math.round((closeTs - p.crossTs) / 60)}m ${ticker} (${this.cfg.tf})`);
+        if (
+          ratio >= this.cfg.instant_vol_x &&
+          c >= p.crossPrice &&
+          c * v >= this.cfg.confirm_min_notional
+        ) {
+          st.confirmedTodayR = true;
+          this.queued.push({
+            type: 'confirm', ticker, signal: 'reclaim', tf: this.cfg.tf, ts_sec: closeTs, price: c,
+            cross_price: p.crossPrice, vol_ratio: +ratio.toFixed(1),
+            volume: v, sib_median: sibMedian, bars_since_cross: barsSince,
+            cross_ts_sec: p.crossTs,
+          });
+        } else {
+          st.watchR = {
+            crossTs: p.crossTs, crossPrice: p.crossPrice, sibMedian,
+            barsSeen: 0, peakRatio: +ratio.toFixed(1), peakPrice: c,
+            crossBucket: -1,
+          };
+          this.queued.push({
+            type: 'nominate', ticker, signal: 'reclaim', tf: this.cfg.tf, ts_sec: closeTs, price: c,
+            cross_price: p.crossPrice, vol_ratio: +ratio.toFixed(1),
+            volume: v, sib_median: sibMedian, bars_since_cross: barsSince,
+            cross_ts_sec: p.crossTs,
+          });
+        }
+      }
+    }
+
     // 1.5) Pending-cross management (the ZBAO mechanism). A price-coherent
     // cross that happened on a junk-dollar bar sits here until real dollars
     // arrive WHILE the fast EMA still rides above the slow — then it
@@ -1047,39 +1152,47 @@ export class EmaCrossTracker {
 
     // 2R) Price-reclaim detection, closed-bar backstop (see reclaim_detect):
     // the previous close sat at/below both EMAs, this close clears both —
-    // TV's AND-ed "Crossing Up" pair on one bar. Thin sibling windows and
-    // junk-dollar bars just skip: unlike the one-shot geometric cross, the
-    // reclaim re-arms naturally on the next dip-below-both cycle, so no
-    // pending mechanism is needed.
+    // TV's AND-ed "Crossing Up" pair on one bar. Junk-dollar bars just skip
+    // (the condition re-arms on the next dip-below-both cycle); a real-dollar
+    // reclaim over a DEAD sibling window pends instead — the AMIX lesson: a
+    // vertical ignition never dips back below the stack, so "wait for the
+    // natural re-arm" missed the exact moves this channel exists for.
     if (
       !silent && this.cfg.reclaim_detect &&
       st.emaF != null && st.emaS != null &&
       st.bars > this.cfg.warmup_bars &&
       st.prevBelowBoth &&
-      !st.watchR && !st.confirmedTodayR && closeTs >= st.lockedUntilR &&
+      !st.watchR && !st.pendingR && !st.confirmedTodayR && closeTs >= st.lockedUntilR &&
       c > st.emaF && c > st.emaS &&
-      c * v >= this.cfg.nominate_min_notional &&
-      sibMedian >= this.cfg.sibling_min_sh
+      c * v >= this.cfg.nominate_min_notional
     ) {
-      const ratio = v / sibMedian;
-      if (ratio >= this.cfg.instant_vol_x && c * v >= this.cfg.confirm_min_notional) {
-        st.confirmedTodayR = true;
-        this.queued.push({
-          type: 'confirm', ticker, signal: 'reclaim', tf: this.cfg.tf, ts_sec: closeTs, price: c,
-          cross_price: c, vol_ratio: +ratio.toFixed(1),
-          volume: v, sib_median: sibMedian, bars_since_cross: 0,
-        });
+      if (sibMedian < this.cfg.sibling_min_sh) {
+        // Real dollars over a dead sibling window → PEND (block 1.5R
+        // converts it as dollars accrue). No coherence gate on the closed
+        // path — a full bar of real dollars is not a phantom print.
+        st.pendingR = { crossTs: closeTs, crossPrice: c };
+        console.log(`[ema-cross] reclaim pending — thin sibling window (${sibMedian} sh) ${ticker} (${this.cfg.tf})`);
       } else {
-        st.watchR = {
-          crossTs: closeTs, crossPrice: c, sibMedian,
-          barsSeen: 0, peakRatio: +ratio.toFixed(1), peakPrice: c,
-          crossBucket: -1, // the reclaim bar is already closed
-        };
-        this.queued.push({
-          type: 'nominate', ticker, signal: 'reclaim', tf: this.cfg.tf, ts_sec: closeTs, price: c,
-          cross_price: c, vol_ratio: +ratio.toFixed(1),
-          volume: v, sib_median: sibMedian, bars_since_cross: 0,
-        });
+        const ratio = v / sibMedian;
+        if (ratio >= this.cfg.instant_vol_x && c * v >= this.cfg.confirm_min_notional) {
+          st.confirmedTodayR = true;
+          this.queued.push({
+            type: 'confirm', ticker, signal: 'reclaim', tf: this.cfg.tf, ts_sec: closeTs, price: c,
+            cross_price: c, vol_ratio: +ratio.toFixed(1),
+            volume: v, sib_median: sibMedian, bars_since_cross: 0,
+          });
+        } else {
+          st.watchR = {
+            crossTs: closeTs, crossPrice: c, sibMedian,
+            barsSeen: 0, peakRatio: +ratio.toFixed(1), peakPrice: c,
+            crossBucket: -1, // the reclaim bar is already closed
+          };
+          this.queued.push({
+            type: 'nominate', ticker, signal: 'reclaim', tf: this.cfg.tf, ts_sec: closeTs, price: c,
+            cross_price: c, vol_ratio: +ratio.toFixed(1),
+            volume: v, sib_median: sibMedian, bars_since_cross: 0,
+          });
+        }
       }
     }
 

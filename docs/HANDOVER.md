@@ -140,9 +140,19 @@ measured raw rates 1h ~200-270/day, 4h ~60-110/day, both ~1.7-1.8× their
 crossover) with reclaim Telegram gated to **5m only** (X4H precedent;
 full-tf pushes would add ~50-85/day on the 1h 20-27 / 4h 8-23
 cross-confirm baseline — dashboard rows + tier_events grade all tfs).
-Suite → 28 scenarios / 96 checks
-(S27 funnel+independence, S28 arming rules); legacy scenarios pinned to
-CROSS_ONLY config so the cross channel stays tested in isolation.
+Suite → 29 scenarios / 101 checks
+(S27 funnel+independence, S28 arming rules, S29 pending reclaim); legacy
+scenarios pinned to CROSS_ONLY config so the cross channel stays tested in
+isolation. **Same-day fix (the AMIX burst):** v1 SKIPPED thin-sibling
+reclaims ("re-arms on the next dip-below-both") — but a vertical ignition
+never dips back: AMIX's burst met the reclaim condition on a 42-share
+sibling window; the cross pended through it (CPHI mechanism) and confirmed
+92×, the reclaim stayed silent and missed the move (1h reclaim caught it
+at 470×). Reclaims now PEND on thin windows + convert on dollars
+(`pendingR`, dies at any close back inside the stack) — mechanism parity
+so the A/B compares signals, not plumbing. ⚠️ reclaim semantics changed
+→ the reclaim channel's clean segment starts 2026-07-25 (cross untouched,
+its segment stays 07-24).
 **Grading:** both channels grade from tier='cross' segmented on
 meta.signal (absent = cross); compare nominate→confirm + forward outcomes
 after ~a week, then keep/kill/expand-to-HTF.

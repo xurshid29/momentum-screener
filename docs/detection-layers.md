@@ -245,9 +245,13 @@ close at/below BOTH EMAs, current price above both (intrabar equivalence:
 price above the provisionally-folded EMA ⟺ above the committed one, so the
 committed values compare directly). Fully separate observation state
 (`watchR`/`confirmedTodayR`/`lockedUntilR`) so the two funnels never gate
-each other; same volume-confirm rules, junk floor, stale guard; thin
-sibling windows skip (the reclaim re-arms on the next dip-below-both cycle
-— no pend needed). Events carry `signal: 'reclaim'` (queued via
+each other; same volume-confirm rules, junk floor, stale guard. Thin
+sibling windows PEND and convert on dollars, exactly like the cross
+channel (same-day fix, the AMIX lesson: the v1 skipped thin windows on the
+"re-arms on the next dip-below-both" theory — but a vertical ignition
+never dips back, so the reclaim missed the exact burst it exists for while
+the cross pended through the same 42-share window and confirmed 92×;
+`pendingR` dies at any close back inside the EMA stack). Events carry `signal: 'reclaim'` (queued via
 `drainEvents()`, never the cross channel's return value) → tier_events
 `meta.signal` is the A/B grading cut: nominate→confirm rate + forward
 outcomes per channel, decided by data. Kill switch `reclaim_detect` — ON for
