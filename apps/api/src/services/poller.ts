@@ -16,7 +16,7 @@ import type {
 import { fetchScreener, fetchFinvizNews, type ScreenerRow } from './finviz.js';
 import { fetchYahooNews } from './yahoo.js';
 import { fetchBenzingaDelta } from './benzinga.js';
-import { fetchEdgarFilings, type EdgarFiling } from './edgar.js';
+import { fetchEdgarFilings, type EdgarFiling, tvSymbol } from './edgar.js';
 import { fetchHalts, type TradeHalt } from './halts.js';
 import { broadcast } from './sse.js';
 import { sendTelegram, telegramEnabled, escapeHtml, alertDisabled } from './telegram.js';
@@ -3202,7 +3202,7 @@ function formatTelegramAlert(r: EnrichedRow): string {
   if (r.rel_volume != null) meta.push(`RVol ${Math.round(r.rel_volume)}x`);
   if (r.status) meta.push(r.status);
 
-  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}`;
+  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSymbol(r.ticker))}`;
   const links = [`<a href="${escapeHtml(r.finviz_url)}">Finviz</a>`, `<a href="${tv}">TradingView</a>`];
   if (r.news_url) links.unshift(`<a href="${escapeHtml(r.news_url)}">News</a>`);
 
@@ -3239,7 +3239,7 @@ function formatIgnitionAlert(r: IgnitionRow): string {
   if (r.rel_vol_5min != null) meta.push(`RVol5m ${Math.round(r.rel_vol_5min)}%`);
   if (r.rel_vol_1min != null) meta.push(`RVol1m ${Math.round(r.rel_vol_1min)}%`);
   if (r.catalyst) meta.push(`catalyst ${r.catalyst.score}`);
-  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}`;
+  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSymbol(r.ticker))}`;
   const lines = [
     `⚡ <b>${escapeHtml(r.ticker)}</b>  ${price}  ${chg}`.trimEnd(),
     `<b>Ignition ${r.runner_score}</b> · float ${b.float} / vol ${b.volume} / cat ${b.catalyst} / mat ${b.maturity} / pm ${b.premarket} / shelf ${b.shelf}`,
@@ -3264,7 +3264,7 @@ function formatNewIgnitionAlert(r: IgnitionRow, ageSec: number): string {
   if (r.rel_vol_1min != null) meta.push(`RVol1m ${Math.round(r.rel_vol_1min)}%`);
   if (r.rel_vol_5min != null) meta.push(`RVol5m ${Math.round(r.rel_vol_5min)}%`);
   if (r.catalyst) meta.push(`catalyst ${r.catalyst.score}`);
-  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}`;
+  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSymbol(r.ticker))}`;
   const lines = [
     `🆕 <b>${escapeHtml(r.ticker)}</b>  ${price}  ${chg}`.trimEnd(),
     `<b>New ignition ${r.runner_score}</b> (building) · float ${b.float} / vol ${b.volume} / cat ${b.catalyst} / mat ${b.maturity}`,
@@ -3282,7 +3282,7 @@ function formatNewIgnitionAlert(r: IgnitionRow, ageSec: number): string {
 // the crowd" ping. Deliberately headline-forward.
 function formatNewsRadarAlert(item: NewsRadarItem): string {
   const finviz = `https://finviz.com/quote.ashx?t=${encodeURIComponent(item.ticker)}`;
-  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(item.ticker)}`;
+  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSymbol(item.ticker))}`;
   const meta = [`impact ${item.impact}`, `hype ${item.hype}`, item.catalyst_type];
   const lines = [
     `📰 <b>${escapeHtml(item.ticker)}</b>  fresh catalyst, not moving yet`,
@@ -3301,7 +3301,7 @@ function formatAccumAlert(r: EnrichedRow, fastRv: number, bullishNews: boolean):
   const price = r.price == null ? '' : `$${r.price.toFixed(2)}`;
   const chg = r.change_pct == null ? '' : `+${r.change_pct.toFixed(1)}%`;
   const finviz = `https://finviz.com/quote.ashx?t=${encodeURIComponent(r.ticker)}`;
-  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}`;
+  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSymbol(r.ticker))}`;
   const meta: string[] = [`fastRV ${Math.round(fastRv / 100)}×`];
   if (r.rel_volume != null) meta.push(`dayRV ${r.rel_volume.toFixed(1)}×`);
   if (r.float_m != null) meta.push(`float ${r.float_m.toFixed(1)}M`);
@@ -3323,7 +3323,7 @@ function formatTickWatchAlert(e: TickEvent): string {
   const price = `$${e.price.toFixed(2)}`;
   const chg = `${e.change_pct >= 0 ? '+' : ''}${e.change_pct.toFixed(1)}%`;
   const finviz = `https://finviz.com/quote.ashx?t=${encodeURIComponent(e.ticker)}`;
-  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(e.ticker)}`;
+  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSymbol(e.ticker))}`;
   const evidence = [`+${e.mom_pct.toFixed(0)}%/60s`];
   if (e.rel_vol > 0) evidence.unshift(`RVol ${e.rel_vol.toFixed(1)}x`);
   const lines = [
@@ -3349,7 +3349,7 @@ function formatEmaCrossAlert(
   reclaim = false,
 ): string {
   const finviz = `https://finviz.com/quote.ashx?t=${encodeURIComponent(ticker)}`;
-  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(ticker)}`;
+  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSymbol(ticker))}`;
   const ext = crossPrice > 0 ? (price / crossPrice - 1) * 100 : 0;
   const evidence = [
     `${volRatio.toFixed(1)}× sibling vol`,
@@ -3377,7 +3377,7 @@ function formatTickConfirmAlert(
 ): string {
   const chg = `${changePct >= 0 ? '+' : ''}${changePct.toFixed(1)}%`;
   const finviz = `https://finviz.com/quote.ashx?t=${encodeURIComponent(ticker)}`;
-  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(ticker)}`;
+  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSymbol(ticker))}`;
   const viaLabel = via === 'surge' ? 'volume surge' : via === 'sustain' ? 'sustained tape' : 'hit the screens';
   const evidence: string[] = [];
   if (relVol > 0) evidence.push(`RVol ${relVol.toFixed(1)}x`);
@@ -3403,7 +3403,7 @@ function formatFreshBurstAlert(r: EnrichedRow, ageSec: number): string {
   if (r.rel_vol_1min != null) meta.push(`RVol1m ${Math.round(r.rel_vol_1min)}%`);
   if (r.rel_vol_5min != null) meta.push(`RVol5m ${Math.round(r.rel_vol_5min)}%`);
   if (r.rel_volume != null) meta.push(`RVolDay ${r.rel_volume.toFixed(1)}x`);
-  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}`;
+  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSymbol(r.ticker))}`;
   const lines = [
     `🚀 <b>${escapeHtml(r.ticker)}</b>  ${price}  ${chg}`.trimEnd(),
     `<b>FRESH BURST</b> — just hit the screens on violent volume`,
@@ -3438,7 +3438,7 @@ function formatDualSignalAlert(r: IgnitionRow, c: ContinuationCandidate): string
   if (r.rel_vol_5min != null) meta.push(`RVol5m ${Math.round(r.rel_vol_5min)}%`);
   if (r.rel_vol_1min != null) meta.push(`RVol1m ${Math.round(r.rel_vol_1min)}%`);
   if (r.catalyst) meta.push(`catalyst ${r.catalyst.score}`);
-  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}`;
+  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSymbol(r.ticker))}`;
   const lines = [
     `🎯 <b>${escapeHtml(r.ticker)}</b>  ${price}  ${chg}`.trimEnd(),
     `<b>${trajectory}</b> · first seen ${firstSeenMd} · multi-day setup confirming`,
@@ -3481,7 +3481,7 @@ function formatSwingAlert(r: SwingRow): string {
       ? '📈 breakout day 2'
       : '🔥 fresh catalyst';
 
-  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}`;
+  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSymbol(r.ticker))}`;
   const lines = [
     `📊 <b>${escapeHtml(r.ticker)}</b>  ${price}  ${chg}`.trimEnd(),
     `<b>Swing ${r.swing_score}</b> · ${trigger} · volat ${b.volatility} / room ${b.room} / trig ${b.trigger} / vol ${b.volume} / ext ${b.extension} / shelf ${b.shelf}`,

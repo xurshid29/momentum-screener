@@ -6,6 +6,7 @@
 // a Continuation entry whose ticker dropped off the live screens).
 
 import { Space } from 'antd';
+import { tvChartUrl } from '../../api/tvSymbols';
 
 interface Props {
   ticker: string;
@@ -14,7 +15,7 @@ interface Props {
 
 export function TickerLinks({ ticker, finvizUrl }: Props) {
   const fv = finvizUrl ?? `https://elite.finviz.com/quote?t=${encodeURIComponent(ticker)}&ty=c&p=h&b=1`;
-  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(ticker)}`;
+  const tv = tvChartUrl(ticker);
   return (
     <Space size={4} onClick={(e) => e.stopPropagation()}>
       <a href={fv} target="_blank" rel="noreferrer" className="screener-link-btn">

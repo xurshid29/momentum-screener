@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Select, Button, Tooltip, Space, Typography } from 'antd';
 import { FullscreenOutlined, FullscreenExitOutlined, LinkOutlined } from '@ant-design/icons';
 import { TradingViewWidget } from './TradingViewWidget';
+import { tvChartUrl } from '../../api/tvSymbols';
 
 const { Text } = Typography;
 
@@ -79,7 +80,7 @@ export function ChartSlot({ slotIndex, ticker, interval, onIntervalChange, onFul
 
   const openInTv = () => {
     if (!ticker) return;
-    window.open(`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(ticker)}`, '_blank', 'noopener');
+    window.open(tvChartUrl(ticker), '_blank', 'noopener');
   };
 
   return (

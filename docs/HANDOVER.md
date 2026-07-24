@@ -640,6 +640,16 @@ history (temp tables `ir_entry` / `scored`, joined `ignition_results` →
   (sib_median×cross_price < ~$2k) is pure expire-noise, the calibrated
   conditional floor (dead baseline ⇒ escalated trigger notional) is the
   designed dial; meta carries everything needed to place the line.
+- **TV links are exchange-qualified for Nasdaq names (2026-07-25, the SPRO
+  collision):** TV resolved bare "SPRO" to CBOE's S&P 500 Buffer Protect
+  INDEX instead of Spero Therapeutics — the operator's chart-verification
+  loop landed on the wrong instrument. All TV chart links (11 Telegram
+  formatter sites + 3 web sites via `tvChartUrl`) now prefix `NASDAQ:` for
+  SEC-confirmed Nasdaq listings (`company_tickers_exchange.json`, daily,
+  `tvSymbol()` in edgar.ts; web fetches `/api/screener/tv-map` lazily).
+  NYSE deliberately stays bare — SEC lumps NYSE American/Arca under "NYSE"
+  while TV files those under AMEX: (CPHI), so a blind prefix would break
+  Arca links.
 - ⚠️ **Anthropic API credits EXHAUSTED (noticed 2026-07-22)** —
   `[catalyst-claude] 400 credit balance is too low` in api logs; the LLM
   catalyst refinement is dead and classification is rules-only until the

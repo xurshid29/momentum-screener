@@ -77,6 +77,60 @@ async function loadCikMap(): Promise<Map<number, string>> {
   return cikToTicker ?? new Map();
 }
 
+// ── ticker → TradingView symbol ────────────────────────────────────────────
+// TV resolves bare tickers by search ranking, which collides for some names
+// (2026-07-24: SPRO resolved to CBOE's "S&P 500 Buffer Protect Index"
+// instead of Spero Therapeutics — the operator's TV verification loop landed
+// on an index chart). SEC's exchange-annotated ticker file disambiguates:
+// Nasdaq-listed names get an explicit NASDAQ: prefix. NYSE deliberately
+// stays bare — SEC lumps NYSE American/Arca under "NYSE" while TV files
+// those under AMEX: (CPHI is "NYSE Arca" on TV), so a blind NYSE: prefix
+// would break Arca names, and bare NYSE tickers resolve correctly today.
+// Fetched once per day, same UA rules as the CIK map above.
+const COMPANY_TICKERS_EXCHANGE_URL = 'https://www.sec.gov/files/company_tickers_exchange.json';
+let nasdaqTickers: Set<string> | null = null;
+let exchMapDay = '';
+
+async function loadExchangeMap(): Promise<Set<string>> {
+  const today = new Date().toISOString().slice(0, 10);
+  if (nasdaqTickers && exchMapDay === today) return nasdaqTickers;
+  try {
+    const res = await fetchWithTimeout(COMPANY_TICKERS_EXCHANGE_URL);
+    if (!res.ok) return nasdaqTickers ?? new Set();
+    const json = (await res.json()) as { fields?: string[]; data?: unknown[][] };
+    const ti = json.fields?.indexOf('ticker') ?? -1;
+    const ei = json.fields?.indexOf('exchange') ?? -1;
+    if (ti >= 0 && ei >= 0 && Array.isArray(json.data)) {
+      const set = new Set<string>();
+      for (const row of json.data) {
+        const t = row?.[ti];
+        if (row?.[ei] === 'Nasdaq' && typeof t === 'string' && t) set.add(t.toUpperCase());
+      }
+      if (set.size > 0) {
+        nasdaqTickers = set;
+        exchMapDay = today;
+      }
+    }
+  } catch {
+    /* keep whatever map we already have */
+  }
+  return nasdaqTickers ?? new Set();
+}
+
+// Synchronous best-effort resolver for alert links: answers from the current
+// map (bare ticker until the first daily load lands) and kicks the refresh
+// in the background.
+export function tvSymbol(ticker: string): string {
+  void loadExchangeMap();
+  const t = ticker.toUpperCase();
+  return nasdaqTickers?.has(t) ? `NASDAQ:${t}` : t;
+}
+
+// The full Nasdaq set for the web's TV links (GET /api/screener/tv-map).
+export async function nasdaqTickerSet(): Promise<Set<string>> {
+  return loadExchangeMap();
+}
+
 // Resolve a ticker to its SEC CIK. Returns null for tickers SEC doesn't list
 // (most OTC names, some foreign ADRs). Throws if the CIK map could not be
 // loaded at all, so a transient fetch failure isn't mistaken for "not listed"

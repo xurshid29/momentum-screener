@@ -19,6 +19,7 @@ import type {
   RowStatus,
 } from '../../api/types';
 import { fmtPct, fmtPrice, fmtVolume, fmtFloat, fmtMcap, fmtRelVol, fmtBigPct, num } from '../../utils/format';
+import { tvChartUrl } from '../../api/tvSymbols';
 
 const { Text } = Typography;
 
@@ -269,7 +270,7 @@ function DetailsTab({ ticker, meta, news }: DetailsTabProps) {
             <img src="/finviz-icon.png" alt="Finviz" />
           </a>
           <a
-            href={`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(ticker)}`}
+            href={tvChartUrl(ticker)}
             target="_blank"
             rel="noreferrer"
             className="screener-link-btn"

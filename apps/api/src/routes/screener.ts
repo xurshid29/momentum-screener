@@ -7,6 +7,7 @@ import { poller } from '../services/poller.js';
 import { tickfeed } from '../services/tickfeed.js';
 import { dailyBars, getRecentBars } from '../services/daily-bars.js';
 import { addClient } from '../services/sse.js';
+import { nasdaqTickerSet } from '../services/edgar.js';
 import { getDb } from '../db/index.js';
 
 const router = Router();
@@ -18,6 +19,14 @@ router.get('/latest', authMiddleware, (_req, res) => {
     return res.json({ data: { rows: [], polled_at: null, config: poller.getConfig(), banners: { new_with_catalyst: [], fresh_news: [] }, fresh_news: [] } });
   }
   res.json({ data: p });
+});
+
+// GET /api/screener/tv-map — Nasdaq-listed tickers (from SEC's exchange
+// map) so the web can build unambiguous NASDAQ:X TradingView links (the
+// SPRO index-collision fix). ~4.3k tickers, refreshed daily server-side.
+router.get('/tv-map', authMiddleware, async (_req, res) => {
+  const set = await nasdaqTickerSet();
+  res.json({ data: [...set] });
 });
 
 // GET /api/screener/ema-debug?ticker=X — live EMA-cross tracker state for
