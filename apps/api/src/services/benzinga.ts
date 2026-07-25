@@ -19,10 +19,25 @@ export interface BenzingaDelta {
   newWatermark: number;
 }
 
+let disabledLogged = false;
+
 export async function fetchBenzingaDelta(
   prevWatermark: number,
   todayEt: string,
 ): Promise<BenzingaDelta | null> {
+  // BENZINGA_DISABLED=true parks the subscription without unwiring the
+  // token (2026-07-25, operator's call — EMA layers are the primary
+  // instrument; the 📰 radar, this feed's main consumer, is Telegram-muted
+  // anyway). Consequences while off: the radar goes dark (this delta is its
+  // only source), market-wide news coverage shrinks to Finviz/Yahoo/SEC/
+  // halts. Re-enable: flip the env + `up -d api`.
+  if (process.env.BENZINGA_DISABLED === 'true') {
+    if (!disabledLogged) {
+      disabledLogged = true;
+      console.log('[benzinga] BENZINGA_DISABLED — market-wide delta off (radar dark; Finviz/Yahoo/SEC/halt news continue)');
+    }
+    return null;
+  }
   const tk = process.env.BENZINGA_API_TOKEN;
   if (!tk) return null;
 

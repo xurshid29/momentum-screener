@@ -20,9 +20,18 @@ import type { Classification, ClassifierInput } from './catalyst-rules.js';
 const MODEL = 'claude-sonnet-4-6';
 const MAX_BODY_CHARS = 4000;
 
+// NEWS_LLM_DISABLED=true stops all Anthropic calls without unwiring the
+// key (2026-07-25, operator's call; the balance was exhausted 07-22 anyway
+// so classification has been rules-only since). Poller gates its needsLLM
+// flags through this too.
+export function llmEnabled(): boolean {
+  return !!process.env.ANTHROPIC_API_KEY && process.env.NEWS_LLM_DISABLED !== 'true';
+}
+
 let client: Anthropic | null = null;
 function getClient(): Anthropic | null {
   if (client) return client;
+  if (!llmEnabled()) return null;
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
   client = new Anthropic({ apiKey });

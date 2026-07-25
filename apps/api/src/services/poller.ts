@@ -34,7 +34,7 @@ import { outcomes } from './outcomes.js';
 import { getContinuationCandidates, type ContinuationCandidate } from './continuation.js';
 import { classifyByRules, type Classification, type ClassifierInput } from './catalyst-rules.js';
 import { recordTierEvent } from './tier-events.js';
-import { classifyByClaude } from './catalyst-claude.js';
+import { classifyByClaude, llmEnabled } from './catalyst-claude.js';
 import { fetchAndStoreTickerNews } from './ticker-news.js';
 
 const DEFAULTS: ScreenerFilterSnapshot = {
@@ -796,7 +796,7 @@ class PollerService {
         cached = {
           classification: cls,
           classifier: 'rules',
-          needsLLM: !!process.env.ANTHROPIC_API_KEY && art.source !== 'sec' && art.source !== 'halt',
+          needsLLM: llmEnabled() && art.source !== 'sec' && art.source !== 'halt',
           input,
         };
         this.classificationCache.set(art.url, cached);
@@ -987,7 +987,7 @@ class PollerService {
         cached = {
           classification: cls,
           classifier: 'rules',
-          needsLLM: !!process.env.ANTHROPIC_API_KEY && c.source !== 'sec' && c.source !== 'halt',
+          needsLLM: llmEnabled() && c.source !== 'sec' && c.source !== 'halt',
           input,
         };
         this.classificationCache.set(c.url, cached);
@@ -1971,7 +1971,7 @@ class PollerService {
             // SEC filings and halts are classified deterministically from
             // their form/reason code — the rule verdict is final, not a
             // baseline for the LLM to refine.
-            needsLLM: !!process.env.ANTHROPIC_API_KEY
+            needsLLM: llmEnabled()
               && headline.source !== 'sec' && headline.source !== 'halt',
             input,
           };
@@ -2497,7 +2497,7 @@ class PollerService {
   // infinite work.
   private async refineWithLLM() {
     if (this.llmInFlight) return;
-    if (!process.env.ANTHROPIC_API_KEY) return;
+    if (!llmEnabled()) return;
 
     const pending = [...this.classificationCache.values()].filter(
       (v) => v.needsLLM && v.articleId,

@@ -659,6 +659,16 @@ history (temp tables `ir_entry` / `scored`, joined `ignition_results` →
   have poisoned Monday's seed replays). onBar now drops any bar whose ET
   day is Sat/Sun before every consumer; Saturday's leaked bars + the two
   phantom tier_events (VLN 5m, ROLR 4h reclaims) purged from prod.
+- **Benzinga + Anthropic PARKED via env (2026-07-25, operator's call):**
+  EMA layers are the primary instrument, so `BENZINGA_DISABLED=true` +
+  `NEWS_LLM_DISABLED=true` are set on the droplet to stop paid API usage
+  ($147/mo Benzinga; Anthropic was already dead on exhausted credits).
+  While parked: 📰 radar is fully DARK (the Benzinga delta is its only
+  source — no radar rows, no radar grading, no radar tick-arming); news
+  coverage = Finviz + Yahoo + SEC + halts (cross-row enrichment unaffected
+  — its top-up is Finviz/Yahoo); classification stays rules-only. This
+  consciously suspends the "compute always" principle for the radar layer
+  to save the subscription. Re-enable: flip the env vars + `up -d api`.
 - ⚠️ **Anthropic API credits EXHAUSTED (noticed 2026-07-22)** —
   `[catalyst-claude] 400 credit balance is too low` in api logs; the LLM
   catalyst refinement is dead and classification is rules-only until the
