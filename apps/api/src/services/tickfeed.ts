@@ -366,6 +366,8 @@ class TickFeedService {
   private extraSubs = new Set<string>();
   // AH rows with a daily-close lookup in flight — dedupes the 30s sync ticks.
   private pendingPrior = new Set<string>();
+  // One log per process when weekend test-session bars start flowing.
+  private weekendDropLogged = false;
 
   status() {
     return {
@@ -967,6 +969,22 @@ class TickFeedService {
     this.barsSeen++;
     this.lastBarAt = Date.now();
     if (this.lastError) this.lastError = null; // bars flowing again — clear the stale error
+    // Weekend bars are exchange TEST-session prints, not trades (2026-07-25,
+    // a Saturday: 132k bars streamed with plausible-but-fake prices — ROLR
+    // "printed" +9% and fired a phantom 4h reclaim; the US market was
+    // closed). Exchanges run production tests on scheduled Saturdays and
+    // the raw prop feeds behind EQUS.MINI carry them. Drop them before ANY
+    // consumer — detector, EMA layers, and bar persistence (they would
+    // poison Monday's seed replays). bars_seen above still counts them so
+    // /health shows the pipe itself is alive.
+    const etDay = (Math.floor((m.t - etUtcOffsetHours() * 3600) / 86_400) + 4) % 7;
+    if (etDay === 6 || etDay === 0) {
+      if (!this.weekendDropLogged) {
+        this.weekendDropLogged = true;
+        console.log('[tickfeed] weekend (test-session) bars detected — dropping all bars until the next trading day');
+      }
+      return;
+    }
     const bar: TickBar = { ts_sec: m.t, close: m.c, high: m.h, low: m.l, volume: m.v };
     const ev = this.detector.addBar(m.s, bar);
     if (ev) {

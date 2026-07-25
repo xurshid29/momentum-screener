@@ -650,6 +650,15 @@ history (temp tables `ir_entry` / `scored`, joined `ignition_results` →
   NYSE deliberately stays bare — SEC lumps NYSE American/Arca under "NYSE"
   while TV files those under AMEX: (CPHI), so a blind prefix would break
   Arca links.
+- **Weekend bars are exchange TEST prints — dropped at the gate
+  (2026-07-25, a Saturday):** Databento streamed 132k live bars on a closed
+  Saturday (exchanges run scheduled production tests; the prop feeds behind
+  EQUS.MINI carry the test prints at plausible-but-fake prices). ROLR
+  "printed" +9% and fired a phantom 4h reclaim; pendings and near-misses
+  fired too, and test bars were being PERSISTED into bars_5m/1h/4h (would
+  have poisoned Monday's seed replays). onBar now drops any bar whose ET
+  day is Sat/Sun before every consumer; Saturday's leaked bars + the two
+  phantom tier_events (VLN 5m, ROLR 4h reclaims) purged from prod.
 - ⚠️ **Anthropic API credits EXHAUSTED (noticed 2026-07-22)** —
   `[catalyst-claude] 400 credit balance is too low` in api logs; the LLM
   catalyst refinement is dead and classification is rules-only until the
