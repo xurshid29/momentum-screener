@@ -15,9 +15,7 @@ Required in `.env` (copy from `.env.example`):
 ```bash
 DATABASE_URL=postgres://app:app@localhost:5438/app?sslmode=disable
 FINVIZ_API_TOKEN=your-token-here
-BENZINGA_API_TOKEN=bz.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   # optional
-BENZINGA_DISABLED=true                                   # optional — park the Benzinga sub without removing the token (radar goes dark; Finviz/Yahoo/SEC/halt news continue)
-NEWS_LLM_DISABLED=true                                   # optional — stop all Anthropic classification calls (impact/hype fall back to rules-only)
+BENZINGA_API_TOKEN=bz.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   # optional — comment out to park the sub (radar goes dark; Finviz/Yahoo/SEC/halt news continue)
 SEC_EDGAR_USER_AGENT=App Name (you@example.com)          # optional — SEC requires a descriptive UA; a default is used if unset
 JWT_SECRET=your-secret-key-here
 JWT_EXPIRES_IN=7d
