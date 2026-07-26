@@ -144,6 +144,15 @@ promote (via, minutes, pts) vs expire (peak_pts).
 
 ## 📈 EMA-cross layer (`ema-cross.ts`; **TRIAL**)
 
+> **2026-07-26 — the crossover channel is RETIRED (operator's call):**
+> `cross_detect: false` on every config; the ↗ price-reclaim is the sole
+> nomination signal, now on FIVE timeframes (5m/15m/1h/4h/1d — bars_15m +
+> bars_1d added; 1d buckets on the 04:00-ET day grid, intrabar is its
+> real-time path since a daily bucket only closes next morning). The
+> crossover machinery below stays in the code + verify suite for a
+> data-driven revisit; passages describing cross detection are historical
+> context. Grading = reclaim precision per timeframe.
+
 **What/why.** The operator's manual TV loop, automated: an EMA bullish
 crossover — **10/65 since 2026-07-22** (6/50 at launch; ⚠️ a different
 signal — segment ALL cross grading at that date, every timeframe) — on

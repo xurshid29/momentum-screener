@@ -55,7 +55,8 @@ cost — `watch_suppressed reason='low_evidence'` tickers that later confirmed;
 ≥+20pts) + whether the news-gated 🤫 Telegram picks winners; (d) radar
 precision by catalyst type. Then promote/demote Telegram gates accordingly.
 
-**Recent focus trail** (each has a dated entry below): 07-24 XRECL (↗
+**Recent focus trail** (each has a dated entry below): 07-26 XRCL2
+(crossover retired — reclaim-only; + 15m & 1d layers) · 07-24 XRECL (↗
 price-reclaim parallel channel — the operator's TV price-crossing alert
 pair; A/B vs the crossover via tier_events meta.signal) · 07-23 XGAPD (the
 CPHI 15-min lag: gap-decay to TV-parity EMA horizons on sparse tapes +
@@ -115,6 +116,28 @@ Journal; **attribution join still the open payoff**) · 06-17 tick feed go-live.
 ---
 
 ## What shipped this session (newest first, all on prod unless noted)
+
+XRCL2. **Crossover retired; reclaim-only on FIVE timeframes (2026-07-26,
+operator's call).** After three days watching both channels live, the
+operator kept the ↗ price-reclaim and killed the 10/65 crossover as a
+nomination source — `cross_detect: false` on every config (the machinery
+stays intact + tested via CROSS_ONLY/BOTH_ON in the verify suite; a data
+revisit is one flag; historical tier_events stay interpretable —
+meta.signal absent = cross). ⚠️ The planned cross-vs-reclaim A/B is MOOT
+— the grading pass becomes reclaim precision per timeframe. Also added
+**15m** and **1d** reclaim layers (operator's ask): htfLayers now
+15m/1h/4h/1d + the bespoke 5m — new `bars_15m` (12d retention, Databento
+ohlcv-1m, Yahoo 15m×60d fallback) and `bars_1d` (260d retention,
+ohlcv-1h re-bucketed to the 04:00-ET day grid via `etDailyOffsetSec`,
+Yahoo 1d×1y fallback; deepDays 160 is the convergence skip — minBars 200
+would mean 10 months). A 1d bucket only closes on the next day's first
+print, so intrabar is the real-time path (the point). Telegram: reclaim
+confirms still 5m-only. Suite → 31 scenarios / 105 checks (S30
+prod-configs-are-reclaim-only, S31 new-grid tf stamping; S12/S15/S27
+pinned to cross-enabled variants). ⚠️ First boot pays the 1d Databento
+pass (~1,500 syms × 240d ohlcv-1h, metered — larger than the 4h pass,
+one-time); 15m/1d layers warm from backfill — grade them from
+convergence, not from deploy time.
 
 XRECL. **↗ Price-reclaim channel — the operator's TV "price Crossing Up
 EMA(10) AND EMA(65)" alert pair, as a PARALLEL nomination channel
