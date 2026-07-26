@@ -167,6 +167,25 @@ function etDailyOffsetSec(): number {
   return ((4 + etUtcOffsetHours()) % 24) * 3600;
 }
 
+// ET day-of-week now (0=Sun … 6=Sat, epoch day 0 = Thursday).
+function etDowNow(): number {
+  return (Math.floor((Date.now() / 1000 - etUtcOffsetHours() * 3600) / 86_400) + 4) % 7;
+}
+
+// Epoch ms of the most recent WEEKDAY 20:00 ET — the last moment a live bar
+// could have printed. The staleness reference on weekends (see below).
+function lastSessionCloseMs(): number {
+  const offH = etUtcOffsetHours();
+  for (let i = 0; i < 7; i++) {
+    const dayIdx = Math.floor((Date.now() / 1000 - offH * 3600) / 86_400) - i;
+    const dow = (dayIdx + 4) % 7;
+    if (dow === 0 || dow === 6) continue;
+    const closeMs = (dayIdx * 86_400 + (20 + offH) * 3600) * 1000;
+    if (closeMs <= Date.now()) return closeMs;
+  }
+  return Date.now() - 86_400_000;
+}
+
 // Epoch seconds of the most recent 04:00 ET session open — the EMA trackers'
 // stale-guard anchor (see EmaCrossConfig.stale_gap_bars).
 function lastSessionOpenSec(): number {
@@ -620,6 +639,11 @@ class TickFeedService {
   // EmaCrossTracker.reseedFromHistory). Runs LAST in the scan — the proven
   // below-warmup and HTF passes must never wait behind this sweep.
   private async scanSparse5m(stats: Map<string, { n: number; n24: number; latestMs: number }>): Promise<void> {
+    // No live tape exists on ET weekends (test-session bars are dropped at
+    // the gate), so there is nothing to re-anchor against — and the last-24h
+    // density criterion reads 0 for everything, which would churn the whole
+    // sparse set through Yahoo every 2h all weekend.
+    if (etDowNow() === 0 || etDowNow() === 6) return;
     const cand: Array<{ tk: string; n: number; latestMs: number }> = [];
     for (const tk of poller.getKnownRunners()) {
       const lastTry = this.sparseAttempted.get(tk) ?? 0;
@@ -700,8 +724,13 @@ class TickFeedService {
     // Staleness criterion (2026-07-22, the TV-log audit): TMDE had 98 banked
     // bars (past warmup) but its NEWEST bar was 22h old — depth-only skip
     // rules never re-fetched it, and its TV crosses were invisible. A banked
-    // series counts as healthy only if it is also fresh.
-    const freshEnoughMs = Date.now() - 12 * 3600_000;
+    // series counts as healthy only if it is also fresh. On WEEKENDS the
+    // wall-clock rule degenerates (2026-07-26, a Saturday: every series read
+    // "stale" and 1,533 pointless 1h re-fetches queued, retrying every 2h)
+    // — fresh then means "has Friday's close".
+    const freshEnoughMs = etDowNow() === 0 || etDowNow() === 6
+      ? lastSessionCloseMs() - 3600_000
+      : Date.now() - 12 * 3600_000;
     const targets: string[] = [];
     for (const tk of poller.getKnownRunners()) {
       const lastTry = l.attempted.get(tk) ?? 0;
