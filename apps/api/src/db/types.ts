@@ -363,6 +363,21 @@ export interface Bars1hTable {
   volume: number;
 }
 
+// Closed 15m / 1d bars — the 15m and 1d reclaim layers' warmup stores
+// (2026-07-26). Same shape as bars_1h; retention in tickfeed.ts.
+export interface Bars15mTable {
+  ticker: string;
+  bar_ts: ColumnType<Date, Date | string, Date | string>;
+  close: number;
+  volume: number;
+}
+export interface Bars1dTable {
+  ticker: string;
+  bar_ts: ColumnType<Date, Date | string, Date | string>;
+  close: number;
+  volume: number;
+}
+
 export interface Database {
   users: UsersTable;
   screener_settings: ScreenerSettingsTable;
@@ -387,4 +402,6 @@ export interface Database {
   bars_5m: Bars5mTable;
   bars_1h: Bars1hTable;
   bars_4h: Bars4hTable;
+  bars_15m: Bars15mTable;
+  bars_1d: Bars1dTable;
 }

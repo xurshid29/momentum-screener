@@ -9,7 +9,7 @@
 // OFF (CROSS_ONLY) so the cross channel is tested in isolation, exactly as
 // before the reclaim channel existed.
 // Run: npx tsx scripts/verify-ema-cross.ts
-import { EmaCrossTracker, EMA_CROSS, EMA_CROSS_1H, EMA_CROSS_4H, adjustSplitHistory, type EmaCrossConfig, type EmaCrossEvent } from '../src/services/ema-cross.js';
+import { EmaCrossTracker, EMA_CROSS, EMA_CROSS_15M, EMA_CROSS_1H, EMA_CROSS_4H, EMA_CROSS_1D, adjustSplitHistory, type EmaCrossConfig, type EmaCrossEvent } from '../src/services/ema-cross.js';
 
 const T0 = 1_750_000_200; // aligned to a 5m boundary — a SUNDAY ~11:10 ET, so
                           // gap-decay never applies and pre-decay scenarios
@@ -18,8 +18,11 @@ const T0_SESSION = 1_750_168_800; // Tuesday 2025-06-17 10:00 ET (EDT), 5m-align
                                   // — mid-session weekday for gap-decay scenarios
 
 // The cross channel in isolation — the Sim default, keeping every
-// pre-reclaim scenario's counts byte-identical.
-const CROSS_ONLY: EmaCrossConfig = { ...EMA_CROSS, reclaim_detect: false };
+// pre-reclaim scenario's counts byte-identical. cross_detect is forced ON:
+// prod retired the crossover (2026-07-26) but the machinery stays tested.
+const CROSS_ONLY: EmaCrossConfig = { ...EMA_CROSS, reclaim_detect: false, cross_detect: true };
+// Both channels on — for the independence scenario.
+const BOTH_ON: EmaCrossConfig = { ...EMA_CROSS, cross_detect: true };
 
 let failures = 0;
 function check(name: string, cond: boolean, detail = ''): void {
@@ -254,7 +257,7 @@ console.log('S11 — intrabar respects the floors: thin-tape dollars and the coo
 console.log('S12 — 4h config: same machine at interval 14400, tf-stamped, offset-aligned buckets');
 {
   const OFF = 3600; // the EST anchor — buckets must land on offset-shifted boundaries
-  const s = new Sim('TEST', { ...EMA_CROSS_4H, bucket_offset_sec: OFF });
+  const s = new Sim('TEST', { ...EMA_CROSS_4H, cross_detect: true, reclaim_detect: false, bucket_offset_sec: OFF });
   warmDipped(s, 1.0, 10_000);
   check('4h bar closes land on the offset grid', (s.lastCloseTs - OFF) % 14_400 === 0,
     `closeTs ${s.lastCloseTs}`);
@@ -320,7 +323,7 @@ console.log('S14 — golden reference: tracker EMAs match an independent impleme
 
 console.log('S15 — 1h config: same machine at interval 3600, tf-stamped');
 {
-  const s = new Sim('TEST', EMA_CROSS_1H);
+  const s = new Sim('TEST', { ...EMA_CROSS_1H, cross_detect: true, reclaim_detect: false });
   warmDipped(s, 1.0, 10_000);
   s.bar(0.95, 1_000);
   const nom = s.tick(1.35, 4_000);
@@ -544,7 +547,7 @@ console.log('S25 — reseedFromHistory: warm-symbol consolidated re-seed (CPHI/s
 
 console.log('S27 — price-reclaim channel: fires BEFORE the crossover, confirms on volume, independent funnels');
 {
-  const s = new Sim('TEST', EMA_CROSS); // reclaim ON — the prod 5m config
+  const s = new Sim('TEST', BOTH_ON); // both channels on — independence test
   warmDipped(s, 1.0, 10_000);   // dipped close 0.9 sits below both EMAs → armed
   s.bar(0.97, 10_000); // pops above BOTH EMAs (fast ~0.90, slow ~0.955); queued event
   const nom = s.events.find((e) => e.signal === 'reclaim');
@@ -606,6 +609,31 @@ console.log('S29 — pending reclaim (AMIX): a thin-window burst pends and conve
   t.bar(0.86, 3_000);      // the 0.85 close lands back below the stack → pend dies
   check('pending reclaim dies when price closes back inside the stack',
     t.tracker.snapshot('TEST')?.pending_reclaim === false && t.count('nominate', 'reclaim') === 0);
+}
+
+console.log('S30 — prod configs are reclaim-only: the crossover pattern emits no cross events');
+{
+  const s = new Sim('TEST', EMA_CROSS); // prod 5m: cross_detect false
+  warmDipped(s, 1.0, 10_000);
+  s.bars(5, 1.2, 10_000);   // the classic S2 crossover pattern
+  s.bar(1.25, 35_000);
+  s.bar(1.25, 10_000);
+  check('no cross-channel events', s.count('nominate', 'cross') === 0 && s.count('confirm', 'cross') === 0,
+    `${s.events.length} events`);
+  check('reclaim channel carried the detection',
+    s.count('nominate', 'reclaim') + s.count('confirm', 'reclaim') >= 1);
+}
+
+console.log('S31 — 15m and 1d configs: reclaim fires tf-stamped on the new grids');
+{
+  for (const [cfg, tf] of [[EMA_CROSS_15M, '15m'], [EMA_CROSS_1D, '1d']] as const) {
+    const s = new Sim('TEST', cfg);
+    warmDipped(s, 1.0, 10_000);
+    s.bar(0.97, 10_000); // pops above both EMAs — intrabar reclaim
+    const nom = s.events.find((e) => e.signal === 'reclaim');
+    check(`${tf} reclaim nominates with tf stamped`,
+      nom?.type === 'nominate' && nom.tf === tf, `got ${nom?.type ?? 'nothing'}/${nom?.tf ?? '-'}`);
+  }
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);

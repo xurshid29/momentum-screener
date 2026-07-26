@@ -110,7 +110,7 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
   const newsRadar = (payload?.news_radar ?? []).filter((n) => !hidden.has(n.ticker));
   // EMA-cross layers, grouped per timeframe (each tf gets its own section).
   const emaCrosses = (payload?.ema_crosses ?? []).filter((x) => !hidden.has(x.ticker));
-  const emaGroups = (['5m', '1h', '4h'] as const)
+  const emaGroups = (['5m', '15m', '1h', '4h', '1d'] as const)
     .map((tf) => ({ tf, items: emaCrosses.filter((x) => x.tf === tf) }))
     .filter((g) => g.items.length > 0);
   // Hiding LIVE TICKS / the ignition list frees their space for the EMA
@@ -421,7 +421,7 @@ function EmaCrossRow({ item, selected, onSelect, onOpenCatalyst }: {
   // Freshly confirmed — pulse the row so the payoff event catches the eye.
   // Window scales with the timeframe (a 4h confirm stays "new" longer than
   // a 5m one); same isFreshArrival convention as ignition rows.
-  const FRESH_CONFIRM_SEC = { '5m': 300, '1h': 900, '4h': 1800 } as const;
+  const FRESH_CONFIRM_SEC = { '5m': 300, '15m': 600, '1h': 900, '4h': 1800, '1d': 3600 } as const;
   const freshConfirm = confirmed && isFreshArrival(item.confirmed_at, FRESH_CONFIRM_SEC[item.tf]);
   // "ago" always anchors on the CROSS bar so it reads like the TV chart the
   // operator compares against; the ✅ multiple marks the confirmation itself.

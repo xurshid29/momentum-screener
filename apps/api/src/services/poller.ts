@@ -318,7 +318,7 @@ export interface NewsRadarItem {
 // 'confirmed' when volume expands vs its sibling candles with price holding
 // (the operator's manual TV loop, automated). Unconfirmed nominations are
 // pruned silently. See services/ema-cross.ts + onEmaCrossEvent.
-export type EmaCrossTf = '5m' | '1h' | '4h';
+export type EmaCrossTf = '5m' | '15m' | '1h' | '4h' | '1d';
 
 export interface EmaCrossItem {
   ticker: string;
@@ -355,13 +355,15 @@ const CROSS_THIN_TAPE_NOTIONAL = 5_000;
 // unlike 5m where unconfirmed rows prune fast. Per-tf display caps keep one
 // noisy timeframe from crowding out the others in the payload.
 const CROSS_DISPLAY_MS: Record<Exclude<EmaCrossTf, '5m'>, number> = {
+  '15m': 90 * 60 * 1000,
   '1h': 3 * 3600 * 1000,
   '4h': 6 * 3600 * 1000,
+  '1d': 24 * 3600 * 1000,
 };
-const CROSS_DISPLAY_CAP: Record<EmaCrossTf, number> = { '5m': 10, '1h': 8, '4h': 8 };
+const CROSS_DISPLAY_CAP: Record<EmaCrossTf, number> = { '5m': 10, '15m': 8, '1h': 8, '4h': 8, '1d': 6 };
 
 function emaCrossTfOf(v: unknown): EmaCrossTf {
-  return v === '4h' ? '4h' : v === '1h' ? '1h' : '5m';
+  return v === '1d' ? '1d' : v === '4h' ? '4h' : v === '1h' ? '1h' : v === '15m' ? '15m' : '5m';
 }
 
 export interface CyclePayload {
@@ -2418,7 +2420,7 @@ class PollerService {
     emaCrossList.sort((a, b) =>
       (a.status === 'confirmed' ? 0 : 1) - (b.status === 'confirmed' ? 0 : 1)
       || (b.confirmed_at ?? b.cross_at).localeCompare(a.confirmed_at ?? a.cross_at));
-    const crossTfCount: Record<EmaCrossTf, number> = { '5m': 0, '1h': 0, '4h': 0 };
+    const crossTfCount: Record<EmaCrossTf, number> = { '5m': 0, '15m': 0, '1h': 0, '4h': 0, '1d': 0 };
     const emaCrossDisplay = emaCrossList.filter((x) => ++crossTfCount[x.tf] <= CROSS_DISPLAY_CAP[x.tf]);
 
     // After-hours: re-impose a volume gate on the momentum list. Finviz drops

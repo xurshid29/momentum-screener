@@ -344,7 +344,7 @@ export interface NewsRadarItem {
 // tool — rows linger ~6h, the nomination itself is the signal).
 export interface EmaCrossItem {
   ticker: string;
-  tf: '5m' | '1h' | '4h';
+  tf: '5m' | '15m' | '1h' | '4h' | '1d';
   // Nomination channel: the EMA10×EMA65 crossover, or the price-reclaims-
   // both-EMAs channel (↗, parallel A/B trial since 2026-07-24).
   signal: 'cross' | 'reclaim';

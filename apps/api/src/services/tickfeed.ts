@@ -14,7 +14,7 @@ import { createInterface, type Interface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { TickDetector, type TickBar } from './tick-detect.js';
-import { EmaCrossTracker, EMA_CROSS, EMA_CROSS_1H, EMA_CROSS_4H, adjustSplitHistory, type SeedHistoryBar } from './ema-cross.js';
+import { EmaCrossTracker, EMA_CROSS, EMA_CROSS_15M, EMA_CROSS_1H, EMA_CROSS_4H, EMA_CROSS_1D, adjustSplitHistory, type SeedHistoryBar } from './ema-cross.js';
 import { universe } from './universe.js';
 import { poller } from './poller.js';
 import { getDb } from '../db/index.js';
@@ -161,6 +161,12 @@ function etBucketOffsetSec(): number {
   return etUtcOffsetHours() === 5 ? 3600 : 0;
 }
 
+// Daily buckets anchor at 04:00 ET (the ETH day open, matching the news-day
+// roll): 08:00 UTC under EDT, 09:00 under EST.
+function etDailyOffsetSec(): number {
+  return ((4 + etUtcOffsetHours()) % 24) * 3600;
+}
+
 // Epoch seconds of the most recent 04:00 ET session open — the EMA trackers'
 // stale-guard anchor (see EmaCrossConfig.stale_gap_bars).
 function lastSessionOpenSec(): number {
@@ -210,13 +216,15 @@ async function fetchYahoo5m(ticker: string): Promise<Array<{ closeTs: number; cl
 // stale and the EMAs never saw the day's move. Same volume-scale caveat as
 // the 5m fallback: consolidated volumes read sibling ratios LOW (misses,
 // never false confirms).
-async function fetchYahoo1hAgg(
+async function fetchYahooHtfAgg(
   ticker: string,
+  yahooInterval: string,
+  yahooRange: string,
   bucketSec: number,
   offsetSec: number,
 ): Promise<Array<{ closeTs: number; close: number; volume: number }> | null> {
   try {
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1h&range=60d&includePrePost=true`;
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=${yahooInterval}&range=${yahooRange}&includePrePost=true`;
     const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
     if (!res.ok) return null;
     const json = await res.json() as {
@@ -259,7 +267,7 @@ function etDate(d = new Date()): string {
 interface HtfLayer {
   cfg: import('./ema-cross.js').EmaCrossConfig;
   tracker: EmaCrossTracker;
-  table: 'bars_1h' | 'bars_4h';
+  table: 'bars_15m' | 'bars_1h' | 'bars_4h' | 'bars_1d';
   buffer: { ticker: string; bar_ts: Date; close: number; volume: number }[];
   attempted: Map<string, number>; // last backfill attempt (ms) — retry after ATTEMPT_RETRY_MS
   spanDays: number;          // backfill fetch depth (EMA-convergence, not warmup)
@@ -267,6 +275,9 @@ interface HtfLayer {
   minBars: number;           // banked bars that count as "converged"
   deepDays: number;          // or banked history reaching this far back
   offset: () => number;      // bucket anchor (recomputed at midnight for DST)
+  schema: 'ohlcv-1m' | 'ohlcv-1h';  // Databento source granularity
+  yahooInterval: string;     // Yahoo fallback interval + range for this grid
+  yahooRange: string;
 }
 
 // Minimum spacing between backfill attempts for one symbol on an HTF layer.
@@ -297,7 +308,10 @@ const SPARSE_5M_MAX_PER_SCAN = 400;
 function makeHtfLayer(
   cfg: import('./ema-cross.js').EmaCrossConfig,
   table: HtfLayer['table'],
-  opts: { spanDays: number; retentionDays: number; deepDays: number; offset: () => number },
+  opts: {
+    spanDays: number; retentionDays: number; deepDays: number; offset: () => number;
+    schema: HtfLayer['schema']; yahooInterval: string; yahooRange: string;
+  },
 ): HtfLayer {
   const layer: HtfLayer = {
     cfg, table, buffer: [], attempted: new Map(),
@@ -305,6 +319,7 @@ function makeHtfLayer(
     // EMA(65) needs ~190 banked bars for the SMA seed's influence to drop
     // under ~2% (was 150 for EMA50) — round up for margin.
     minBars: 200, deepDays: opts.deepDays, offset: opts.offset,
+    schema: opts.schema, yahooInterval: opts.yahooInterval, yahooRange: opts.yahooRange,
     tracker: null as unknown as EmaCrossTracker,
   };
   layer.tracker = new EmaCrossTracker(
@@ -330,8 +345,13 @@ class TickFeedService {
   // product. 1h buckets are hour-aligned everywhere (offset 0); 4h anchors
   // to the ET session grid.
   private htfLayers: HtfLayer[] = [
-    makeHtfLayer(EMA_CROSS_1H, 'bars_1h', { spanDays: 30, retentionDays: 35, deepDays: 25, offset: () => 0 }),
-    makeHtfLayer(EMA_CROSS_4H, 'bars_4h', { spanDays: 120, retentionDays: 130, deepDays: 100, offset: etBucketOffsetSec }),
+    makeHtfLayer(EMA_CROSS_15M, 'bars_15m', { spanDays: 10, retentionDays: 12, deepDays: 7, offset: () => 0, schema: 'ohlcv-1m', yahooInterval: '15m', yahooRange: '60d' }),
+    makeHtfLayer(EMA_CROSS_1H, 'bars_1h', { spanDays: 30, retentionDays: 35, deepDays: 25, offset: () => 0, schema: 'ohlcv-1h', yahooInterval: '1h', yahooRange: '60d' }),
+    makeHtfLayer(EMA_CROSS_4H, 'bars_4h', { spanDays: 120, retentionDays: 130, deepDays: 100, offset: etBucketOffsetSec, schema: 'ohlcv-1h', yahooInterval: '1h', yahooRange: '60d' }),
+    // 1d (2026-07-26): the swing layer. 240d of ohlcv-1h re-bucketed to the
+    // 04:00-ET day grid; deepDays (not minBars=200 ≈ 10 months) is the
+    // realistic convergence skip; Yahoo daily as fallback.
+    makeHtfLayer(EMA_CROSS_1D, 'bars_1d', { spanDays: 240, retentionDays: 260, deepDays: 160, offset: etDailyOffsetSec, schema: 'ohlcv-1h', yahooInterval: '1d', yahooRange: '1y' }),
   ];
   private barBuffer: { ticker: string; bar_ts: Date; close: number; volume: number }[] = [];
   private barFlushTimer: NodeJS.Timeout | null = null;
@@ -469,7 +489,7 @@ class TickFeedService {
   // (DB keeps raw truth; the adjustment is read-side — see
   // adjustSplitHistory for why raw seed history breaks the EMA scale).
   private async seedTrackerFromTable(
-    table: 'bars_5m' | 'bars_1h' | 'bars_4h',
+    table: 'bars_5m' | 'bars_15m' | 'bars_1h' | 'bars_4h' | 'bars_1d',
     windowMs: number,
     tracker: EmaCrossTracker,
     label: string,
@@ -692,7 +712,7 @@ class TickFeedService {
       if (targets.length >= 1600) break;
     }
     if (targets.length === 0) return;
-    console.log(`[ema-backfill] ${l.cfg.tf}: ${targets.length} known runners below convergence depth or stale — Databento ohlcv-1h (${l.spanDays}d), Yahoo fallback`);
+    console.log(`[ema-backfill] ${l.cfg.tf}: ${targets.length} known runners below convergence depth or stale — Databento ${l.schema} (${l.spanDays}d), Yahoo fallback`);
     let ok = 0, seeded = 0, persisted = 0, viaYahoo = 0;
     const CHUNK = 100;
     const off = l.offset();
@@ -700,7 +720,7 @@ class TickFeedService {
       if (!this.running) return;
       const chunk = targets.slice(i, i + CHUNK);
       chunk.forEach((t) => l.attempted.set(t, Date.now()));
-      const batch = await fetchDatabentoAgg(chunk, 'ohlcv-1h', l.spanDays, l.cfg.interval_sec, off);
+      const batch = await fetchDatabentoAgg(chunk, l.schema, l.spanDays, l.cfg.interval_sec, off);
       if (!batch) {
         // One failed chunk must not starve the rest of the fleet (the first
         // live pass aborted entirely on a transient 422). These symbols
@@ -718,7 +738,7 @@ class TickFeedService {
         // crossed. Take whichever series is longer/fresher.
         const dbLatest = bars?.length ? bars[bars.length - 1].closeTs * 1000 : 0;
         if (!bars || bars.length < l.cfg.warmup_bars || dbLatest < freshEnoughMs) {
-          const y = await fetchYahoo1hAgg(tk, l.cfg.interval_sec, off);
+          const y = await fetchYahooHtfAgg(tk, l.yahooInterval, l.yahooRange, l.cfg.interval_sec, off);
           await new Promise((r) => setTimeout(r, 1_500));
           const yLatest = y?.length ? y[y.length - 1].closeTs * 1000 : 0;
           if (y && y.length > 0 && (y.length > (bars?.length ?? 0) || yLatest > dbLatest)) {

@@ -108,6 +108,14 @@ export interface EmaCrossConfig {
   // volume-confirm rules — the A/B against the crossover funnel is graded
   // from tier_events meta.signal. Cross-channel semantics are untouched.
   reclaim_detect: boolean;
+  // The EMA10×EMA65 crossover channel's kill switch (2026-07-26, operator's
+  // call): the price-reclaim channel replaced it as the sole nomination
+  // signal after three days of watching both live — crosses fired later and
+  // noisier on the shapes that mattered. OFF everywhere; the machinery
+  // (blocks 1/1.5/2, pendings, decay-flip pends) stays intact so a
+  // data-driven revisit is one flag, and all historical tier_events
+  // (meta.signal absent = cross) remain interpretable.
+  cross_detect: boolean;
   // Bucket anchor offset in seconds. 5m buckets divide the hour so 0 always
   // works; 4h buckets must align to the ET session grid (04:00/08:00/12:00/
   // 16:00 ET — how TV draws 4h ETH bars), which is offset 0 under EDT but
@@ -154,7 +162,34 @@ export const EMA_CROSS: EmaCrossConfig = {
   intrabar_detect: true,
   gap_decay: true,
   reclaim_detect: true,
+  cross_detect: false,
   bucket_offset_sec: 0,
+};
+
+// The 15m layer (2026-07-26): the operator's mid ladder between 5m and 1h.
+// Reclaim-only, like every layer since the crossover retired.
+export const EMA_CROSS_15M: EmaCrossConfig = {
+  tf: '15m',
+  interval_sec: 900,
+  fast: 10,
+  slow: 65,
+  warmup_bars: 65,          // ~1 ETH day of 15m bars
+  sibling_bars: 12,         // ~3h of volume context
+  sibling_min_sh: 50,
+  observe_bars: 6,          // ~1.5h observation
+  confirm_vol_x: 3,
+  confirm_price_ext: 0.005,
+  instant_vol_x: 5,
+  confirm_min_notional: 10_000,
+  nominate_min_notional: 500,
+  junk_outlier_pct: 0.05,
+  stale_gap_bars: 3,
+  renominate_cooldown_sec: 3_600, // four bars
+  intrabar_detect: true,
+  gap_decay: true,
+  reclaim_detect: true,
+  cross_detect: false,
+  bucket_offset_sec: 0,     // 900s divides the hour — grid-safe in any tz
 };
 
 // The 1h layer (2026-07-21): the middle timeframe, added when the operator
@@ -179,8 +214,8 @@ export const EMA_CROSS_1H: EmaCrossConfig = {
   renominate_cooldown_sec: 7_200, // two bars
   intrabar_detect: true,
   gap_decay: true,
-  reclaim_detect: true,    // detection+dashboard+grading; Telegram is 5m-only
-                           // until the A/B reads out (the X4H precedent)
+  reclaim_detect: true,
+  cross_detect: false,
   bucket_offset_sec: 0,
 };
 
@@ -208,9 +243,41 @@ export const EMA_CROSS_4H: EmaCrossConfig = {
   renominate_cooldown_sec: 14_400, // one bar — a dud re-arms next bar
   intrabar_detect: true,
   gap_decay: true,
-  reclaim_detect: true,    // detection+dashboard+grading; Telegram is 5m-only
-                           // until the A/B reads out (the X4H precedent)
+  reclaim_detect: true,
+  cross_detect: false,
   bucket_offset_sec: 0,     // set live by the tick feed (EDT 0 / EST 3600)
+};
+
+// The 1d layer (2026-07-26): the swing end of the ladder — a daily-bar
+// reclaim of EMA 10/65 is the classic multi-week breakout arming, detected
+// intrabar the moment price clears both (a 1d bucket only CLOSES on the
+// next day's first print, so the intrabar path is the real-time signal).
+// Buckets span one ETH day anchored at 04:00 ET (offset set live by the
+// tick feed — EDT 08:00 UTC / EST 09:00 UTC). Warmup ~65 trading days is
+// impossible live → bars_1d + the Databento/Yahoo daily backfill are
+// load-bearing.
+export const EMA_CROSS_1D: EmaCrossConfig = {
+  tf: '1d',
+  interval_sec: 86_400,
+  fast: 10,
+  slow: 65,
+  warmup_bars: 65,
+  sibling_bars: 12,         // ~2.5 trading weeks of volume context
+  sibling_min_sh: 50,
+  observe_bars: 6,          // ~6 trading days observation
+  confirm_vol_x: 3,
+  confirm_price_ext: 0.005,
+  instant_vol_x: 5,
+  confirm_min_notional: 10_000,
+  nominate_min_notional: 500,
+  junk_outlier_pct: 0.05,
+  stale_gap_bars: 3,
+  renominate_cooldown_sec: 86_400, // one bar — a dud re-arms next day
+  intrabar_detect: true,
+  gap_decay: true,
+  reclaim_detect: true,
+  cross_detect: false,
+  bucket_offset_sec: 0,     // set live by the tick feed (04:00 ET day grid)
 };
 
 export interface EmaCrossEvent {
@@ -437,7 +504,7 @@ export class EmaCrossTracker {
     st.decayedTo = targetBucketStart;
     if (st.prevDiff != null) st.prevDiff = st.emaF - st.emaS;
     if (
-      !silent && flippedAt > 0 && st.bars > this.cfg.warmup_bars &&
+      !silent && this.cfg.cross_detect && flippedAt > 0 && st.bars > this.cfg.warmup_bars &&
       !st.watch && !st.pending && !st.confirmedToday && flippedAt >= st.lockedUntil
     ) {
       st.pending = { crossTs: flippedAt, crossPrice: P };
@@ -737,6 +804,7 @@ export class EmaCrossTracker {
     // queue) — the cross path's guards and early returns below must never
     // gate it, and vice versa.
     this.intrabarReclaimCheck(ticker, st, tsSec, c);
+    if (!this.cfg.cross_detect) return null;
     const w = st.watch;
     if (w) {
       if (w.sibMedian <= 0) return null;
@@ -1096,7 +1164,7 @@ export class EmaCrossTracker {
       !st.watch && !st.confirmedToday && closeTs >= st.lockedUntil
     ) {
       const diff = st.emaF - st.emaS;
-      if (st.prevDiff <= 0 && diff > 0 && c * v < this.cfg.nominate_min_notional) {
+      if (this.cfg.cross_detect && st.prevDiff <= 0 && diff > 0 && c * v < this.cfg.nominate_min_notional) {
         // Junk-dollar cross bar. Two fates (the ZBAO vs LBTYK distinction):
         // an OUTLIER price on junk dollars is a phantom print the SIP tape
         // never carried → discarded outright; a COHERENT price on junk
@@ -1112,7 +1180,7 @@ export class EmaCrossTracker {
           console.log(`[ema-cross] cross pending — junk bar $${Math.round(c * v)} ${ticker} (${this.cfg.tf}) awaiting dollars`);
         }
       }
-      if (st.prevDiff <= 0 && diff > 0 && sibMedian < this.cfg.sibling_min_sh
+      if (this.cfg.cross_detect && st.prevDiff <= 0 && diff > 0 && sibMedian < this.cfg.sibling_min_sh
         && c * v >= this.cfg.nominate_min_notional) {
         // Real dollars over a dead sibling window (the CPHI class,
         // 2026-07-23): the cross is genuine but its volume baseline is
@@ -1122,7 +1190,7 @@ export class EmaCrossTracker {
         st.pending = { crossTs: closeTs, crossPrice: c };
         console.log(`[ema-cross] cross pending — thin sibling window (${sibMedian} sh) ${ticker} (${this.cfg.tf})`);
       }
-      if (st.prevDiff <= 0 && diff > 0 && sibMedian >= this.cfg.sibling_min_sh
+      if (this.cfg.cross_detect && st.prevDiff <= 0 && diff > 0 && sibMedian >= this.cfg.sibling_min_sh
         && c * v >= this.cfg.nominate_min_notional
       ) {
         const ratio = v / sibMedian;
