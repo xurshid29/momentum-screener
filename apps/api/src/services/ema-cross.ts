@@ -385,6 +385,12 @@ export function adjustSplitHistory(bars: SeedHistoryBar[]): SeedHistoryBar[] {
   for (let i = 1; i < bars.length; i++) {
     const prev = bars[i - 1], cur = bars[i];
     if (cur.closeTs - prev.closeTs < 6 * 3600) continue; // same session — never a split
+    // A boundary spanning many days (sparse HTF series) is organic price
+    // action, not a split (2026-07-27, the PFSA 4h poison: stacked false
+    // "splits" across multi-week gaps in a jumpy sparse series inflated the
+    // seeded EMA65 to $2,455 on a $1.70 stock). Real splits manifest at a
+    // 1–3 day boundary (weekends included).
+    if (cur.closeTs - prev.closeTs > 4.5 * 86_400) continue;
     if (!(prev.close > 0) || !(cur.close > 0)) continue;
     const r = cur.close / prev.close;
     if (r >= 4.85) {
@@ -655,13 +661,17 @@ export class EmaCrossTracker {
     // it on the new basis (the split-adjuster handles the seam read-side).
     // Better an hour blind than a phantom nomination.
     if (st.lastCloseTs > 0 && st.lastClose > 0 && tsSec - st.lastCloseTs >= 6 * 3600) {
+      // ≥4.85× ONLY (2026-07-27, same-day lesson): the first cut also reset
+      // on 1.94–4.85× near-whole ratios, and all four of day-one's resets
+      // were FALSE positives on genuine doublers — PFSA $1.65→$3.22 (1.952×,
+      // "1:2 split") nuked mid-burst, LGHL 2.003× lost three layers mid-move.
+      // Live, a +100% gapper and a 1:2 split are indistinguishable by price
+      // ratio, and this universe doubles for real routinely. Small-ratio
+      // split days may now fire vs old-basis EMAs (≤4× overshoot, ⚠️ rows,
+      // the $10k confirm floor still applies) — the acceptable side of the
+      // trade.
       const r = close / st.lastClose;
-      const nearWhole = (x: number) => {
-        const n = Math.round(x);
-        return n >= 2 && Math.abs(x - n) / n <= 0.025;
-      };
-      const splitLike = r >= 4.85 || (r >= 1.94 && nearWhole(r))
-        || r <= 1 / 4.85 || (r <= 1 / 1.94 && nearWhole(1 / r));
+      const splitLike = r >= 4.85 || r <= 1 / 4.85;
       if (splitLike) {
         console.log(`[ema-cross] basis break (split?) ${ticker} (${this.cfg.tf}) — $${st.lastClose} → $${close}; state reset, awaiting reseed`);
         this.state.delete(ticker);

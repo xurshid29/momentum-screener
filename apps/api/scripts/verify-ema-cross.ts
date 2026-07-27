@@ -648,8 +648,19 @@ console.log('S32 — basis break (FFAI split): an overnight regime jump resets s
   const t = new Sim('TEST', EMA_CROSS);
   warmDipped(t, 1.0, 10_000);
   t.skip(96);
-  t.bar(2.07, 30_000);          // +130% overnight gap, non-integer ratio — REAL news gap
-  check('a real non-integer overnight gap does NOT reset', !t.tracker.canSeed('TEST'));
+  t.bar(1.80, 30_000);          // an EXACT 2.0× overnight double — the PFSA/LGHL class
+  check('a real 2× overnight double does NOT reset', !t.tracker.canSeed('TEST'));
+}
+
+console.log('S33 — split adjuster: multi-day sparse boundaries with big moves are organic');
+{
+  const D = 86_400;
+  const mk = (a: [number, number, number][]) => a.map(([closeTs, close, volume]) => ({ closeTs, close, volume }));
+  const sparse = adjustSplitHistory(mk([[0, 1.0, 1000], [D, 1.05, 1000], [11 * D, 5.2, 9000]]));
+  check('5× across a 10-day sparse boundary untouched', sparse[0].close === 1.0 && sparse[1].close === 1.05,
+    `${sparse[0].close}/${sparse[1].close}`);
+  const wok = adjustSplitHistory(mk([[0, 0.10, 1000], [D, 1.90, 50]]));
+  check('next-day 19× still adjusts', Math.abs(wok[0].close - 0.10 * 19) < 1e-9, `${wok[0].close}`);
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);
