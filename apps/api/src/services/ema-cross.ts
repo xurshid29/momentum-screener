@@ -782,10 +782,14 @@ export class EmaCrossTracker {
     if (!st.prevBelowBoth) return;
     if (!(c > st.emaF && c > st.emaS)) return;
     if (c * st.bucketVol < this.cfg.nominate_min_notional) return;
-    if (this.sessionOpenTs > 0 && st.lastCloseTs > 0) {
-      const anchor = Math.max(st.lastCloseTs, this.sessionOpenTs);
-      if (tsSec - anchor > this.cfg.stale_gap_bars * this.cfg.interval_sec) return;
-    }
+    // NO stale-EMA guard here (2026-07-27, the VTAK cost — operator's call):
+    // the guard predates gap-decay, which now keeps EMAs honest through
+    // silence, and a resume print clearing the decayed stack IS the
+    // quiet-curl signal. Keeping it cost ~4 min on VTAK's 2482× burst (the
+    // whole [08:00,08:05) bucket waited for the close). Dead-tape resumes
+    // (PBM class) fire their ⚠️ nominations a few minutes earlier intrabar
+    // instead of at the bar close — same floors, same containment. The
+    // cross channel's intrabar path keeps its guard unchanged.
     const sibMedian = median(st.sibVols);
     if (sibMedian < this.cfg.sibling_min_sh) {
       // Dead sibling window at a live reclaim: with real bucket dollars

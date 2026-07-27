@@ -663,5 +663,17 @@ console.log('S33 — split adjuster: multi-day sparse boundaries with big moves 
   check('next-day 19× still adjusts', Math.abs(wok[0].close - 0.10 * 19) < 1e-9, `${wok[0].close}`);
 }
 
+console.log('S34 — reclaim intrabar ignores the stale guard (the VTAK 4-minute cost)');
+{
+  const s = new Sim('TEST', EMA_CROSS, T0_SESSION); // prod reclaim-only, in-session epoch
+  s.tracker.setSessionOpen(T0_SESSION);
+  warmDipped(s, 1.0, 10_000);      // ends dipped — closes below both EMAs, armed
+  s.skip(30);                      // 2.5h of in-session silence: stale by the old rule
+  s.bar(1.05, 10_000);             // resume tick pops above both (decayed) EMAs
+  const nom = s.events.find((e) => e.signal === 'reclaim');
+  check('reclaim nominates on the resume tick, intrabar (no stale wait)',
+    nom?.type === 'nominate' && nom.intrabar === true, `got ${nom?.type ?? 'nothing'}`);
+}
+
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

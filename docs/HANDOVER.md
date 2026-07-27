@@ -117,6 +117,20 @@ Journal; **attribution join still the open payoff**) · 06-17 tick feed go-live.
 
 ## What shipped this session (newest first, all on prod unless noted)
 
+XVTAK. **Reclaim intrabar drops the stale-EMA guard (2026-07-27,
+operator's call — the VTAK cost).** VTAK's 2482× burst confirmed at
+08:05:09 — the first bar CLOSE — because the stale guard suppressed
+intrabar detection after hours of MINI silence, costing ~4 min on top of
+the tape-visibility gap (MINI saw NOTHING of the 07:40-08:00 consolidated
+curl; first banked bar WAS the burst bucket). The guard predates
+gap-decay, which keeps EMAs honest through silence — a resume print
+clearing the decayed stack IS the quiet-curl signal. Removed for the
+reclaim intrabar path only (cross path unchanged); PBM-class dead-tape
+⚠️ rows fire minutes earlier intrabar, same floors/containment. S34.
+⚠️ Reclaim semantics changed again → its clean segment starts 07-28.
+Residual VTAK-class lag (~5 min of consolidated-only curl) is the feed
+boundary — SIP/PLUS remains the only true fix.
+
 XSPLIT. **The FFAI split phantom — basis-break guard + weekend-clean
 backfills (2026-07-27, Monday premarket).** The 1d layer's FIRST live fire
 was a phantom: FFAI reverse-split (~1:90) effective Monday; our daily EMAs
