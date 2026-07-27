@@ -636,5 +636,21 @@ console.log('S31 — 15m and 1d configs: reclaim fires tf-stamped on the new gri
   }
 }
 
+console.log('S32 — basis break (FFAI split): an overnight regime jump resets state, no phantom');
+{
+  const s = new Sim('TEST', EMA_CROSS); // prod reclaim-only config
+  warmDipped(s, 1.0, 10_000);   // last close 0.9 sits below both EMAs — armed
+  s.skip(96);                   // 8h of silence — an overnight boundary
+  const ev = s.bar(85.0, 10_000); // ~94× the last close: the split print
+  check('no event on the split print', ev == null && s.events.length === 0, `${s.events.length} events`);
+  check('state reset — symbol is seedable again', s.tracker.canSeed('TEST'));
+
+  const t = new Sim('TEST', EMA_CROSS);
+  warmDipped(t, 1.0, 10_000);
+  t.skip(96);
+  t.bar(2.07, 30_000);          // +130% overnight gap, non-integer ratio — REAL news gap
+  check('a real non-integer overnight gap does NOT reset', !t.tracker.canSeed('TEST'));
+}
+
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

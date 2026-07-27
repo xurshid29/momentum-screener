@@ -127,6 +127,7 @@ async function fetchDatabentoAgg(
       const vol = Number(c[8]);
       const sym = c[9]?.trim();
       if (!sym || !Number.isFinite(sec) || !(close > 0)) continue;
+      if (isEtWeekendSec(sec)) continue; // exchange test-session prints
       const bStart = Math.floor((sec - offsetSec) / bucketSec) * bucketSec + offsetSec;
       if (bStart + bucketSec > nowSec - 30) continue; // still-open bucket
       let m = buckets.get(sym);
@@ -170,6 +171,16 @@ function etDailyOffsetSec(): number {
 // ET day-of-week now (0=Sun … 6=Sat, epoch day 0 = Thursday).
 function etDowNow(): number {
   return (Math.floor((Date.now() / 1000 - etUtcOffsetHours() * 3600) / 86_400) + 4) % 7;
+}
+
+// ET-weekend check for an arbitrary epoch second. The HISTORICAL fetchers
+// must drop weekend source rows too (2026-07-27, the FFAI lesson): the live
+// sidecar gate can't help a backfill, and Saturday's exchange test prints
+// (pre-04:00 ET) landed INSIDE Friday's still-open daily bucket — FFAI's
+// Friday close banked as $6.50 (post-split test basis) instead of $0.074.
+function isEtWeekendSec(sec: number): boolean {
+  const dow = (Math.floor((sec - etUtcOffsetHours() * 3600) / 86_400) + 4) % 7;
+  return dow === 0 || dow === 6;
 }
 
 // Epoch ms of the most recent WEEKDAY 20:00 ET — the last moment a live bar
@@ -218,6 +229,7 @@ async function fetchYahoo5m(ticker: string): Promise<Array<{ closeTs: number; cl
     for (let i = 0; i < ts.length; i++) {
       const c = q.close?.[i];
       if (c == null || !(c > 0)) continue;
+      if (isEtWeekendSec(ts[i])) continue; // exchange test-session prints
       const closeTs = Math.floor(ts[i] / 300) * 300 + 300;
       if (closeTs > nowSec - 30) continue; // still-open bucket
       out.push({ closeTs, close: c, volume: q.volume?.[i] ?? 0 });
@@ -258,6 +270,7 @@ async function fetchYahooHtfAgg(
     for (let i = 0; i < ts.length; i++) {
       const c = q.close?.[i];
       if (c == null || !(c > 0)) continue;
+      if (isEtWeekendSec(ts[i])) continue; // exchange test-session prints
       const bStart = Math.floor((ts[i] - offsetSec) / bucketSec) * bucketSec + offsetSec;
       if (bStart + bucketSec > nowSec - 30) continue; // still-open bucket
       const b = buckets.get(bStart);

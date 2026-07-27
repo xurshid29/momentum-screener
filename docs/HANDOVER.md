@@ -117,6 +117,26 @@ Journal; **attribution join still the open payoff**) · 06-17 tick feed go-live.
 
 ## What shipped this session (newest first, all on prod unless noted)
 
+XSPLIT. **The FFAI split phantom — basis-break guard + weekend-clean
+backfills (2026-07-27, Monday premarket).** The 1d layer's FIRST live fire
+was a phantom: FFAI reverse-split (~1:90) effective Monday; our daily EMAs
+sat on the old basis ($0.13/$0.28 vs Friday's $0.074 close) and the first
+post-split print at $6.95 "reclaimed" both by 25×. Two root causes, both
+fixed: (1) **basis breaks** — `EmaCrossTracker.addBar` now detects
+split-like overnight jumps (mirrors adjustSplitHistory: ≥4.85×
+unconditional, 1.94–4.85× near-whole, symmetric for forward splits,
+same-session moves exempt) and RESETS the symbol's state — warmup blocks
+events until the backfill reseeds on the new basis; better an hour blind
+than a phantom (S32). (2) **Saturday test prints leaked via the HISTORICAL
+path** — the live-sidecar weekend gate can't help a backfill; Sat pre-04:00
+ET test prints landed inside Friday's still-open DAILY bucket (FFAI's
+Friday bar banked as $6.50) — all three historical fetchers now drop
+ET-weekend source rows. Cleanup: bars_1d TRUNCATED for a clean rebuild
+(the Friday-bucket contamination class isn't row-filterable), FFAI's
+phantom event deleted (SDOT's too — overzealous: its banked basis was
+already post-split, that reclaim was likely real). 1d layer re-warms over
+~1h Monday morning; suite → 32 scenarios / 108 checks.
+
 XRCL2. **Crossover retired; reclaim-only on FIVE timeframes (2026-07-26,
 operator's call).** After three days watching both channels live, the
 operator kept the ↗ price-reclaim and killed the 10/65 crossover as a

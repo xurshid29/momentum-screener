@@ -644,6 +644,30 @@ export class EmaCrossTracker {
     const bucket = Math.floor((tsSec - this.bucketOff) / iv) * iv + this.bucketOff;
     if (bucket < st.bucketStart) return null; // stale/out-of-order tick — ignore
     if (bucket <= st.seededUpTo) return null; // bar already covered by boot seed
+    // Basis-break guard (2026-07-27, the FFAI ~1:90 reverse split): the tape
+    // can change price basis overnight while our EMA state sits on the old
+    // one — the first post-split print then clears every EMA by 10-100× and
+    // fires phantom signals (FFAI's daily "reclaim" at $6.95 vs EMAs at
+    // $0.13/$0.28). Detection mirrors adjustSplitHistory exactly
+    // (same-session moves exempt; ≥4.85× unconditional, 1.94–4.85× only
+    // near a whole ratio; symmetric for forward splits): on a break, RESET
+    // the symbol — warmup then blocks all events until the backfill reseeds
+    // it on the new basis (the split-adjuster handles the seam read-side).
+    // Better an hour blind than a phantom nomination.
+    if (st.lastCloseTs > 0 && st.lastClose > 0 && tsSec - st.lastCloseTs >= 6 * 3600) {
+      const r = close / st.lastClose;
+      const nearWhole = (x: number) => {
+        const n = Math.round(x);
+        return n >= 2 && Math.abs(x - n) / n <= 0.025;
+      };
+      const splitLike = r >= 4.85 || (r >= 1.94 && nearWhole(r))
+        || r <= 1 / 4.85 || (r <= 1 / 1.94 && nearWhole(1 / r));
+      if (splitLike) {
+        console.log(`[ema-cross] basis break (split?) ${ticker} (${this.cfg.tf}) — $${st.lastClose} → $${close}; state reset, awaiting reseed`);
+        this.state.delete(ticker);
+        return null;
+      }
+    }
     if (st.bucketStart === -1) {
       // Decay across any silence since the newest committed (or seeded) bar
       // before the live tape resumes — the provisional EMAs the intrabar
