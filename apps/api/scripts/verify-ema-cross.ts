@@ -566,14 +566,30 @@ console.log('S27 — price-reclaim channel: fires BEFORE the crossover, confirms
   check('reclaim channel done for the day', s.count('nominate', 'reclaim') === 1 && s.count('confirm', 'reclaim') === 1);
 }
 
-console.log('S28 — reclaim arms only from below BOTH EMAs; a confirm ends its day');
+console.log('S28 — reclaim needs a below-BOTH arming; the gradual walk is now STAGED, not excluded');
 {
+  // ⚠️ Semantics changed 2026-07-28 (the FIEE staircase). This scenario used
+  // to assert that a bar landing between the EMAs KILLED the arming, so a
+  // gradual walk could never fire. That was the bug: FIEE cleared EMA10 at
+  // 19:35 and EMA65 twenty minutes later, and the layer stayed silent
+  // through a +156% burst. The arming now survives in-band bars.
   const s = new Sim('TEST', EMA_CROSS);
   warmDipped(s, 1.0, 10_000);
-  s.bar(0.93, 10_000);  // recovers above the fast EMA but NOT the slow — not armed
-  const ev = s.bar(1.0, 10_000); // clears both, but prev bar was between the EMAs
-  check('no reclaim without prev-below-BOTH (gradual walk excluded)',
-    ev == null && s.count('nominate', 'reclaim') === 0, `${s.events.length} events`);
+  s.bar(0.93, 10_000);  // recovers above the fast EMA but NOT the slow — staged
+  s.bar(1.0, 10_000);   // clears both a bar later → the staircase fires
+  const walk = s.events.find((e) => e.signal === 'reclaim');
+  check('the gradual walk fires once it clears both', walk != null,
+    `got ${walk?.type ?? 'nothing'}`);
+  check('and carries staged_bars=1 (one bar spent in-band)', walk?.staged_bars === 1,
+    `staged_bars=${walk?.staged_bars}`);
+
+  // The arming itself is still required: a name that never sits at/below
+  // both EMAs has no reclaim to make, however hard it pops.
+  const n = new Sim('TEST', EMA_CROSS);
+  for (let i = 0; i < 80; i++) n.bar(1.0 + i * 0.01, 10_000); // rides above both throughout
+  n.bar(2.5, 90_000);
+  check('never-armed name never reclaims', n.count('nominate', 'reclaim') === 0
+    && n.count('confirm', 'reclaim') === 0, `${n.events.length} events`);
 
   const t = new Sim('TEST', EMA_CROSS);
   warmDipped(t, 1.0, 10_000);
@@ -694,6 +710,84 @@ console.log('S35 — junk-dollar reclaim bar pends instead of disarming (the EDB
   t.bar(1.1, 4);               // +10% outlier junk print above both
   t.bar(1.0, 10_000);          // closes it — outlier junk is DISCARDED, no pend
   check('outlier junk print never pends', t.tracker.snapshot('TEST')?.pending_reclaim === false);
+}
+
+console.log('S36 — staged arming: the FIEE staircase (clears the fast EMA first, the slow one bars later)');
+{
+  // A decline leaves EMA10 BELOW EMA65 — the band the staircase climbs
+  // through. FIEE: armed below both, popped over EMA10 at 19:35, rode
+  // between the two for five bars, cleared EMA65 at 20:00 and ran to $10.
+  const s = new Sim('TEST', EMA_CROSS);
+  s.bars(55, 1.0, 10_000);
+  s.bars(25, 0.80, 10_000);        // EMA10 ≈ 0.80 < EMA65 ≈ 0.93; armed below both
+  const snap0 = s.tracker.snapshot('TEST')!;
+  check('armed below both after the decline', snap0.armed === true && snap0.armed_staged === 0);
+  const f = snap0.ema_fast!, sl = snap0.ema_slow!;
+  check('a real band exists to stage through', f < sl, `fast ${f.toFixed(3)} < slow ${sl.toFixed(3)}`);
+  const mid = (f + sl) / 2;
+  s.bars(4, mid, 10_000);          // four closed bars INSIDE the band
+  const snap1 = s.tracker.snapshot('TEST')!;
+  check('arming survives in-band bars', snap1.armed === true && snap1.armed_staged > 0,
+    `staged ${snap1.armed_staged}`);
+  check('no fire while still inside the band', s.events.length === 0, `${s.events.length} events`);
+  s.bar(sl * 1.05, 90_000);        // the punch through EMA65 — dollars behind it
+  const ev = s.events.find((e) => e.signal === 'reclaim');
+  check('fires when the slow EMA finally goes', ev != null, `got ${ev?.type ?? 'nothing'}`);
+  check('staged_bars records the staircase for grading', (ev?.staged_bars ?? 0) > 0,
+    `staged_bars=${ev?.staged_bars}`);
+}
+
+console.log('S37 — the staging window is bounded, and same-bar reclaims still read staged_bars 0');
+{
+  const s = new Sim('TEST', EMA_CROSS);
+  s.bars(55, 1.0, 10_000);
+  s.bars(25, 0.80, 10_000);
+  const snap = s.tracker.snapshot('TEST')!;
+  const f = snap.ema_fast!, sl = snap.ema_slow!;
+  s.bars(EMA_CROSS.staged_arm_bars + 2, (f + sl) / 2, 10_000); // loiter past the window
+  check('arming expires after staged_arm_bars in-band bars',
+    s.tracker.snapshot('TEST')?.armed === false);
+  s.bar(sl * 1.2, 90_000);
+  check('a stale staircase does not fire', s.events.length === 0, `${s.events.length} events`);
+
+  // The pre-2026-07-28 shape — one bar below both, the next above both —
+  // must be unchanged and must self-identify as staged_bars 0.
+  const t = new Sim('TEST', EMA_CROSS);
+  warmDipped(t, 1.0, 10_000);
+  t.bar(1.05, 90_000);
+  t.bar(1.06, 90_000);
+  const ev = t.events.find((e) => e.signal === 'reclaim');
+  check('same-bar reclaim still fires', ev != null, `got ${ev?.type ?? 'nothing'}`);
+  check('and is tagged staged_bars 0 (segmentable from the new population)',
+    ev?.staged_bars === 0, `staged_bars=${ev?.staged_bars}`);
+}
+
+console.log('S38 — consolidated replay is gap-decay-free: bars are bars (the FIEE over-decay)');
+{
+  // Same closes, two spacings, both seeded in-session where gap-decay WOULD
+  // engage. A consolidated series is already every bar TV draws, so its
+  // holes are the market's, not our feed's — spacing must not change the
+  // EMAs at all. (Feed-scale history keeps decaying: that is the CPHI fix.)
+  const closes = Array.from({ length: 80 }, (_, i) => 1 + Math.sin(i / 7) * 0.1);
+  const emaOf = (spacingIv: number, consolidated: boolean) => {
+    const tr = new EmaCrossTracker(EMA_CROSS, () => {});
+    tr.setEtOffset(-4);
+    tr.setSessionOpen(T0_SESSION);
+    closes.forEach((c, i) => {
+      tr.seedBar('TEST', T0_SESSION + i * 300 * spacingIv + 300, c, 10_000, consolidated);
+    });
+    const s = tr.snapshot('TEST')!;
+    return { f: s.ema_fast!, s: s.ema_slow! };
+  };
+  const contiguous = emaOf(1, true);
+  const gapped = emaOf(3, true);
+  check('consolidated: 3×-spaced bars give identical EMAs to contiguous ones',
+    Math.abs(contiguous.f - gapped.f) < 1e-9 && Math.abs(contiguous.s - gapped.s) < 1e-9,
+    `fast ${contiguous.f.toFixed(6)} vs ${gapped.f.toFixed(6)}`);
+  const gappedFeed = emaOf(3, false);
+  check('feed-scale history still decays through its gaps (CPHI unchanged)',
+    Math.abs(gappedFeed.s - gapped.s) > 1e-6,
+    `slow ${gappedFeed.s.toFixed(6)} vs ${gapped.s.toFixed(6)}`);
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);

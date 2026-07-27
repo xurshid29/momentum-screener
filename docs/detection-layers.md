@@ -145,9 +145,13 @@ promote (via, minutes, pts) vs expire (peak_pts).
 ## ↗ EMA price-reclaim layer (`ema-cross.ts`; **TRIAL**, sole nomination signal since 2026-07-26)
 
 **What/why.** The operator's TV alert pair, automated: **price Crossing Up
-EMA(10) AND price Crossing Up EMA(65) on one bar** — the previous CLOSED
-bar's close at/below BOTH EMAs (the arming), the live price above both (the
-fire). Price/EMA geometry alone has no selection power (twice measured at
+EMA(10) AND price Crossing Up EMA(65)** — a closed bar at/below BOTH EMAs
+(the arming), then price above both (the fire). Since 2026-07-28 the arming
+**survives up to `staged_arm_bars` closed bars spent INSIDE the band**
+(above one EMA, not yet both): TV evaluates its two "Crossing Up" alerts
+INDEPENDENTLY, and real curls stage them — FIEE cleared EMA10 at 10:35 ET
+and EMA65 twenty minutes later, so a same-bar-only rule sat out a +156%
+burst. Price/EMA geometry alone has no selection power (twice measured at
 chance for the crossover; the reclaim inherits the same architecture), so
 the reclaim strictly **nominates** and volume expansion vs sibling candles
 **confirms**. Runs identically on FIVE timeframes; each is an independent
@@ -159,7 +163,7 @@ retired 2026-07-26 (see the history note at the end).
 
 | TF | Warmup store (retention) | Backfill | Cooldown | Display window/cap |
 |---|---|---|---|---|
-| 5m | bars_5m (6d) | Databento 1m 3d → Yahoo 5m; sparse re-seed <120 bars/24h, 2h retry, stalest-first | 30 min | prunes fast / 10 |
+| 5m | bars_5m (6d) | Databento 1m 3d → Yahoo 5m (range widens 5d→1mo→60d until ≥2× warmup bars); sparse re-seed <120 bars/24h incl. below-warmup, 2h retry, sparsest-24h first | 30 min | prunes fast / 10 |
 | 15m | bars_15m (12d) | Databento 1m 10d → Yahoo 15m | 1h | 90 min / 8 |
 | 1h | bars_1h (35d) | Databento 1h 30d → Yahoo 1h | 2h | 3h / 8 |
 | 4h | bars_4h (130d) | Databento 1h 120d → Yahoo 1h; ET grid 04/08/12/16 | 4h | 6h / 8 |
@@ -202,9 +206,17 @@ at the ORIGINAL arming — `cross_ts_sec`/`pending_min` in meta), and die at
 any close back inside the stack.
 
 **EMA integrity stack** (what keeps the 10/65 honest on a MINI subset
-feed): gap-decay (empty in-session buckets fold the last close — TV-parity
-horizons on sparse tapes; nights/weekends decay nothing) · stalest-first 2h
-Yahoo consolidated re-anchor for MINI-sparse names (<120 banked bars/24h) ·
+feed): gap-decay on FEED-scale bars only (empty in-session buckets fold the
+last close — TV-parity horizons on sparse tapes; nights/weekends decay
+nothing; **never applied when replaying a CONSOLIDATED series** — that
+series is already every bar TV draws, so its holes are the market's, and
+decaying them anyway dragged FIEE's EMA65 to 2.77 vs TV's 3.67 and
+un-armed the channel entirely) · sparsest-24h-first 2h Yahoo consolidated
+re-anchor for MINI-sparse names (<120 banked bars/24h), **including
+below-warmup names**, with the fetch window widening 5d → 1mo → 60d until
+the BAR COUNT clears warmup (warmup is a bar count, so a calendar window
+can't satisfy it on a trickle tape: FIEE's whole consolidated week was 86
+bars) ·
 weekend test-session prints dropped at the live gate AND in every
 historical fetcher · basis-break guard (a ≥4.85× overnight jump = split →
 state reset until reseed; deliberately NOT the 1.94-4.85× near-integer band
@@ -218,7 +230,11 @@ any bar ≥20× off the series median → discard, Yahoo fallback).
   are invisible until real lots print — SIP/PLUS is the only fix.
 - **Already-above-the-stack ignitions** (OMH, EDBL on 5m): no crossing
   transition exists on that tf — TV's pair alert is equally silent; the
-  coarser timeframes and the 👀/🛰️ tick tier are the catchers.
+  coarser timeframes and the 👀/🛰️ tick tier are the catchers. ⚠️ Verify
+  this is genuinely the shape before filing a miss here: FIEE looked like
+  this class and wasn't — its EMA65 was simply null (never warmed), which
+  reads identically from the outside. `ema-debug` distinguishes them in one
+  call: `ema_slow: null` = a warmup hole, not a blind spot.
 - **Dead-tape ⚠️ nominations** (PBM): can nominate, can never confirm
   ($10k unreachable); operator chose to keep them (no sib×price floor).
 
@@ -232,11 +248,18 @@ guard line in `pushCrossAlert`). Dashboard sounds/title-flash EMA-only.
 **Grading.** `tier='cross'`, `meta.signal='reclaim'` (absent = the retired
 crossover's history). Cuts: `tf`, `intrabar`, `sib_median`/`notional`
 (thin-tape band; pend-conversions carry inflated ratios — segment on
-sib_median), `pending_min`, `in_ladder`, catalyst-vs-not via join to
-`news_articles`. **Clean segment starts 2026-07-28**; the 07-22→07-27
-semantics boundary log lives in HANDOVER (THE PENDING TASK). Audit tools:
-`GET /api/screener/ema-debug?ticker=X` (live EMAs per tf vs the TV chart)
-and `npx tsx scripts/verify-ema-cross.ts` (35 scenarios / 115 checks).
+sib_median), `pending_min`, `in_ladder`, **`staged_bars`** (0 = a fire the
+pre-07-28 same-bar arming would also have made; >0 = a staircase only the
+staged arming catches — grade the two populations separately before
+promoting anything to Telegram), catalyst-vs-not via join to
+`news_articles`. **Clean segment starts 2026-07-29** (07-28 moved it: the
+FIEE fixes changed arming semantics and warmup coverage); the
+07-22→07-28 semantics boundary log lives in HANDOVER (THE PENDING TASK).
+Audit tools: `GET /api/screener/ema-debug?ticker=X` (live EMAs per tf vs
+the TV chart — `armed`/`armed_staged` included),
+`npx tsx scripts/verify-ema-cross.ts` (38 scenarios / 128 checks), and
+`scripts/research/reclaim-staged-arming-replay.ts TICKER` (replay any
+name's real consolidated tape through old vs new arming).
 
 **History — the retired crossover.** This layer began 2026-07-10 as the
 EMA(6/50→10/65) crossover nominator; three weeks of live calibration

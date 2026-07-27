@@ -879,6 +879,12 @@ class PollerService {
         // Pending conversions (the ZBAO mechanism): how long the cross waited
         // for dollars — a first-class grading cut.
         pending_min: e.cross_ts_sec ? Math.round((e.ts_sec - e.cross_ts_sec) / 60) : null,
+        // Staged arming (2026-07-28, the FIEE staircase): bars the arming had
+        // spent inside the EMA band. 0 = the pre-07-28 semantics would have
+        // caught this too; >0 = a staircase curl only staged arming catches.
+        // THE cut for "did widening the arming pay?" — grade the two
+        // populations separately before promoting anything to Telegram.
+        staged_bars: e.staged_bars ?? null,
       });
       // Every event displays. The old "in-ladder names skip 5m display" rule
       // died 2026-07-22 (the LABT confusion): the Telegram fired but the row
@@ -919,6 +925,7 @@ class PollerService {
         tf, signal, price: e.price, cross_price: e.cross_price, vol_ratio: e.vol_ratio,
         vol: e.volume, sib_median: e.sib_median, notional: Math.round(e.price * e.volume),
         bars: e.bars_since_cross, intrabar: e.intrabar ?? false,
+        staged_bars: e.staged_bars ?? null,
       });
       console.log(
         `[ema-cross] ${glyph}✅ confirm ${e.ticker}${tfTag} ${signal === 'reclaim' ? '(reclaim) ' : ''}` +

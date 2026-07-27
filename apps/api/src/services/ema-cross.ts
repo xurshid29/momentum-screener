@@ -108,6 +108,18 @@ export interface EmaCrossConfig {
   // volume-confirm rules — the A/B against the crossover funnel is graded
   // from tier_events meta.signal. Cross-channel semantics are untouched.
   reclaim_detect: boolean;
+  // How many CLOSED bars the arming survives INSIDE the EMA band — above one
+  // EMA but not yet both (2026-07-28, the FIEE staircase). v1 armed on a
+  // single bar (prev close ≤ BOTH) and disarmed the moment price cleared
+  // either EMA, so it only fired when both crossings landed on ONE bar.
+  // Real curls stage them: FIEE walked 2.95 → above EMA10 (3.01) at 19:35,
+  // rode between the two for five bars, then punched EMA65 (3.67) at 20:00
+  // and ran to $10 — the operator's own TV pair alerted twice, 20 minutes
+  // apart, because TV evaluates the two "Crossing Up" conditions
+  // INDEPENDENTLY. Holding the arming across in-band bars reproduces that,
+  // and the volume-confirm funnel is unchanged, so nomination widens while
+  // the alert surface stays gated. 0 = the old same-bar semantics.
+  staged_arm_bars: number;
   // The EMA10×EMA65 crossover channel's kill switch (2026-07-26, operator's
   // call): the price-reclaim channel replaced it as the sole nomination
   // signal after three days of watching both live — crosses fired later and
@@ -162,6 +174,7 @@ export const EMA_CROSS: EmaCrossConfig = {
   intrabar_detect: true,
   gap_decay: true,
   reclaim_detect: true,
+  staged_arm_bars: 6,       // 30 min — FIEE staged its two crossings over five bars
   cross_detect: false,
   bucket_offset_sec: 0,
 };
@@ -188,6 +201,7 @@ export const EMA_CROSS_15M: EmaCrossConfig = {
   intrabar_detect: true,
   gap_decay: true,
   reclaim_detect: true,
+  staged_arm_bars: 6,       // 90 min
   cross_detect: false,
   bucket_offset_sec: 0,     // 900s divides the hour — grid-safe in any tz
 };
@@ -215,6 +229,7 @@ export const EMA_CROSS_1H: EmaCrossConfig = {
   intrabar_detect: true,
   gap_decay: true,
   reclaim_detect: true,
+  staged_arm_bars: 4,       // 4h — HTF bars stage less (each spans many 5m curls)
   cross_detect: false,
   bucket_offset_sec: 0,
 };
@@ -244,6 +259,7 @@ export const EMA_CROSS_4H: EmaCrossConfig = {
   intrabar_detect: true,
   gap_decay: true,
   reclaim_detect: true,
+  staged_arm_bars: 3,
   cross_detect: false,
   bucket_offset_sec: 0,     // set live by the tick feed (EDT 0 / EST 3600)
 };
@@ -276,6 +292,7 @@ export const EMA_CROSS_1D: EmaCrossConfig = {
   intrabar_detect: true,
   gap_decay: true,
   reclaim_detect: true,
+  staged_arm_bars: 3,
   cross_detect: false,
   bucket_offset_sec: 0,     // set live by the tick feed (04:00 ET day grid)
 };
@@ -300,6 +317,12 @@ export interface EmaCrossEvent {
                          // time — display anchors "cross X ago" here, honestly
   peak_ratio?: number;   // expire telemetry: best vol ratio seen in the window
   peak_price?: number;   // expire telemetry: best close seen in the window
+  // Reclaim only: closed bars the arming had already spent INSIDE the EMA
+  // band when this fired (see cfg.staged_arm_bars). 0 = a same-bar reclaim,
+  // i.e. what the pre-2026-07-28 semantics would also have caught; >0 = a
+  // staircase curl only the staged arming catches. The grading cut for
+  // "did widening the arming pay?".
+  staged_bars?: number;
 }
 
 interface Observation {
@@ -339,12 +362,15 @@ interface SymState {
   // any close back inside the stack.
   pendingR: { crossTs: number; crossPrice: number } | null;
   prevDiff: number | null; // emaF - emaS at the previous closed bar
-  // Previous CLOSED bar's close sat at/below BOTH EMAs (as they stood after
-  // that bar) — the arming condition for the price-reclaim channel. TV's
-  // AND-ed "Crossing Up" pair needs both crossings on the same bar, which
-  // is exactly prev-below-both → now-above-both. Invariant under gap-decay
-  // (decay moves the EMAs toward the last close but never across it).
-  prevBelowBoth: boolean;
+  // Reclaim ARMING (staged since 2026-07-28 — see cfg.staged_arm_bars). Set
+  // when a closed bar sits at/below BOTH EMAs; survives up to
+  // staged_arm_bars closed bars spent INSIDE the band (above one EMA, not
+  // both) so a staircase curl still fires when it finally clears the stack;
+  // cleared by a close above both (that IS the fire) or by running out of
+  // staging. Invariant under gap-decay (decay moves the EMAs toward the
+  // last close but never across it).
+  armed: boolean;
+  armedStaged: number;   // closed bars spent in-band since the arming bar
   // Parallel price-reclaim observation state — deliberately separate from
   // the cross channel's watch/confirmedToday/lockedUntil so the two funnels
   // never gate each other (the A/B must stay clean).
@@ -528,6 +554,7 @@ export class EmaCrossTracker {
     confirmed_today: boolean; locked_until: number;
     observing_reclaim: boolean; confirmed_today_reclaim: boolean;
     pending_reclaim: boolean;
+    armed: boolean; armed_staged: number;
     open_bucket_ts: number | null;
     open_bucket_close: number | null; open_bucket_vol: number | null;
   } | null {
@@ -547,6 +574,8 @@ export class EmaCrossTracker {
       observing_reclaim: st.watchR != null,
       confirmed_today_reclaim: st.confirmedTodayR,
       pending_reclaim: st.pendingR != null,
+      armed: st.armed,
+      armed_staged: st.armedStaged,
       open_bucket_ts: st.bucketStart === -1 ? null : st.bucketStart,
       open_bucket_close: st.bucketStart === -1 ? null : st.bucketClose,
       open_bucket_vol: st.bucketStart === -1 ? null : st.bucketVol,
@@ -565,9 +594,12 @@ export class EmaCrossTracker {
   // counter math but emits no events, starts no observations, and does not
   // re-persist. Bars must arrive in time order per symbol. Marks the bucket
   // so a live tick belonging to an already-seeded bar can't double-process.
-  seedBar(ticker: string, closeTs: number, close: number, volume: number): void {
+  // `consolidated` marks history from a CONSOLIDATED source (Yahoo) rather
+  // than the MINI feed — such a series is already every bar TV draws, so its
+  // gaps must not be gap-decayed (see processClosedBar).
+  seedBar(ticker: string, closeTs: number, close: number, volume: number, consolidated = false): void {
     const st = this.ensure(ticker);
-    this.processClosedBar(ticker, st, closeTs, close, volume, true);
+    this.processClosedBar(ticker, st, closeTs, close, volume, true, consolidated);
     st.seededUpTo = closeTs - this.cfg.interval_sec;
   }
 
@@ -581,7 +613,7 @@ export class EmaCrossTracker {
   // read every live ratio low for the next sibling window (the documented
   // Yahoo skew) — and live ticks at/before the reseeded history are dropped
   // by the seededUpTo guard, exactly like a boot seed.
-  reseedFromHistory(ticker: string, bars: SeedHistoryBar[]): boolean {
+  reseedFromHistory(ticker: string, bars: SeedHistoryBar[], consolidated = false): boolean {
     if (bars.length === 0) return false;
     const cur = this.state.get(ticker);
     if (cur && (cur.watch || cur.watchR || cur.pending || cur.pendingR)) return false;
@@ -595,7 +627,7 @@ export class EmaCrossTracker {
     this.state.delete(ticker);
     const st = this.ensure(ticker);
     for (const b of bars) {
-      this.processClosedBar(ticker, st, b.closeTs, b.close, b.volume, true);
+      this.processClosedBar(ticker, st, b.closeTs, b.close, b.volume, true, consolidated);
       st.seededUpTo = b.closeTs - this.cfg.interval_sec;
     }
     if (keep) {
@@ -631,7 +663,7 @@ export class EmaCrossTracker {
         bucketStart: -1, bucketClose: 0, bucketVol: 0,
         emaF: null, emaS: null, seedSumF: 0, seedSumS: 0,
         bars: 0, lastCloseTs: 0, lastClose: 0, pending: null, pendingR: null,
-        prevDiff: null, prevBelowBoth: false,
+        prevDiff: null, armed: false, armedStaged: 0,
         watchR: null, confirmedTodayR: false, lockedUntilR: 0,
         decayedTo: 0, sibVols: [], watch: null, confirmedToday: false, lockedUntil: 0,
         seededUpTo: -1,
@@ -708,8 +740,9 @@ export class EmaCrossTracker {
   }
 
   // Price-reclaim channel, intrabar side (2026-07-24 — see
-  // EmaCrossConfig.reclaim_detect). Arms when the previous CLOSED bar sat
-  // at/below both EMAs; fires when the live price clears both. Note the
+  // EmaCrossConfig.reclaim_detect). Arms when a CLOSED bar sits at/below
+  // both EMAs (held across in-band bars — see staged_arm_bars); fires when
+  // the live price clears both. Note the
   // algebra: price above the provisionally-folded EMA is equivalent to
   // price above the committed EMA (c > c·k + e·(1−k) ⟺ c > e), so the
   // committed values are compared directly. Same junk floor, stale guard,
@@ -779,9 +812,10 @@ export class EmaCrossTracker {
       });
       return;
     }
-    if (!st.prevBelowBoth) return;
+    if (!st.armed) return;
     if (!(c > st.emaF && c > st.emaS)) return;
     if (c * st.bucketVol < this.cfg.nominate_min_notional) return;
+    const staged = st.armedStaged;
     // NO stale-EMA guard here (2026-07-27, the VTAK cost — operator's call):
     // the guard predates gap-decay, which now keeps EMAs honest through
     // silence, and a resume print clearing the decayed stack IS the
@@ -811,7 +845,7 @@ export class EmaCrossTracker {
         type: 'confirm', ticker, signal: 'reclaim', tf: this.cfg.tf, ts_sec: tsSec, price: c,
         cross_price: c, vol_ratio: +ratio.toFixed(1),
         volume: st.bucketVol, sib_median: sibMedian,
-        bars_since_cross: 0, intrabar: true,
+        bars_since_cross: 0, intrabar: true, staged_bars: staged,
       });
       return;
     }
@@ -824,7 +858,7 @@ export class EmaCrossTracker {
       type: 'nominate', ticker, signal: 'reclaim', tf: this.cfg.tf, ts_sec: tsSec, price: c,
       cross_price: c, vol_ratio: +ratio.toFixed(1),
       volume: st.bucketVol, sib_median: sibMedian,
-      bars_since_cross: 0, intrabar: true,
+      bars_since_cross: 0, intrabar: true, staged_bars: staged,
     });
   }
 
@@ -960,11 +994,23 @@ export class EmaCrossTracker {
     };
   }
 
-  private processClosedBar(ticker: string, st: SymState, closeTs: number, c: number, v: number, silent: boolean): EmaCrossEvent | null {
+  private processClosedBar(ticker: string, st: SymState, closeTs: number, c: number, v: number, silent: boolean, consolidated = false): EmaCrossEvent | null {
     // Decay across empty buckets between the previous bar and this one; the
     // real bar then supersedes the decay for its own bucket. Runs for seed
-    // replays too — live and reseeded state stay bit-identical.
-    this.applyGapDecay(ticker, st, closeTs - this.cfg.interval_sec, silent);
+    // replays of FEED-scale history too — live and reseeded state stay
+    // bit-identical.
+    //
+    // EXCEPT when replaying a CONSOLIDATED series (2026-07-28, the FIEE
+    // over-decay). Gap-decay exists to synthesise the bars our MINI subset
+    // feed missed but the consolidated tape carried (CPHI). A consolidated
+    // series has no such bars to synthesise: its gaps are gaps in the
+    // MARKET, and TV — which draws one bar per print and decays nothing
+    // between them — has exactly the same holes. Decaying them anyway
+    // compounds hundreds of phantom steps on a thin name and drags the slow
+    // EMA down through the price: FIEE's EMA65 read 2.77 decayed vs 3.41
+    // undecayed (TV: 3.67), and since the price then sat ABOVE the whole
+    // stack the channel was never armed and could not fire on a +156% burst.
+    if (!consolidated) this.applyGapDecay(ticker, st, closeTs - this.cfg.interval_sec, silent);
     st.decayedTo = closeTs;
     st.bars++;
     st.lastCloseTs = closeTs;
@@ -1257,8 +1303,9 @@ export class EmaCrossTracker {
     }
 
     // 2R) Price-reclaim detection, closed-bar backstop (see reclaim_detect):
-    // the previous close sat at/below both EMAs, this close clears both —
-    // TV's AND-ed "Crossing Up" pair on one bar. Junk-dollar bars just skip
+    // the channel is ARMED (a recent close sat at/below both EMAs and the
+    // arming has not been spent — see cfg.staged_arm_bars) and this close
+    // clears both. Junk-dollar bars just skip
     // (the condition re-arms on the next dip-below-both cycle); a real-dollar
     // reclaim over a DEAD sibling window pends instead — the AMIX lesson: a
     // vertical ignition never dips back below the stack, so "wait for the
@@ -1267,20 +1314,21 @@ export class EmaCrossTracker {
       !silent && this.cfg.reclaim_detect &&
       st.emaF != null && st.emaS != null &&
       st.bars > this.cfg.warmup_bars &&
-      st.prevBelowBoth &&
+      st.armed &&
       !st.watchR && !st.pendingR && !st.confirmedTodayR && closeTs >= st.lockedUntilR &&
       c > st.emaF && c > st.emaS
     ) {
+      const staged = st.armedStaged;
       if (c * v < this.cfg.nominate_min_notional) {
         // Junk-dollar reclaim bar (2026-07-27, the EDBL disarm): a 4-share
-        // print closing above both EMAs used to CONSUME the arming
-        // (prevBelowBoth flips below) while being too small to nominate —
-        // EDBL's 06:42/07:00 odd-lot pokes ($7-50) disarmed the 5m/15m/1h
-        // channels, and the real $200k burst at 08:16 found nothing armed.
-        // ZBAO rules apply: coherent junk PENDS and converts when dollars
-        // arrive (anchored at this bar); outlier junk is discarded (the
-        // phantom-print class — note it still disarms via the mechanical
-        // prevBelowBoth update; rare and accepted).
+        // print closing above both EMAs used to CONSUME the arming while
+        // being too small to nominate — EDBL's 06:42/07:00 odd-lot pokes
+        // ($7-50) disarmed the 5m/15m/1h channels, and the real $200k burst
+        // at 08:16 found nothing armed. ZBAO rules apply: coherent junk
+        // PENDS and converts when dollars arrive (anchored at this bar);
+        // outlier junk is discarded (the phantom-print class — note it
+        // still disarms via the mechanical arming update below; rare and
+        // accepted).
         const outlier = prevClose > 0 && Math.abs(c / prevClose - 1) > this.cfg.junk_outlier_pct;
         if (outlier) {
           console.log(`[ema-cross] reclaim discarded — outlier junk print $${Math.round(c * v)} ${ticker} (${this.cfg.tf})`);
@@ -1301,7 +1349,7 @@ export class EmaCrossTracker {
           this.queued.push({
             type: 'confirm', ticker, signal: 'reclaim', tf: this.cfg.tf, ts_sec: closeTs, price: c,
             cross_price: c, vol_ratio: +ratio.toFixed(1),
-            volume: v, sib_median: sibMedian, bars_since_cross: 0,
+            volume: v, sib_median: sibMedian, bars_since_cross: 0, staged_bars: staged,
           });
         } else {
           st.watchR = {
@@ -1312,7 +1360,7 @@ export class EmaCrossTracker {
           this.queued.push({
             type: 'nominate', ticker, signal: 'reclaim', tf: this.cfg.tf, ts_sec: closeTs, price: c,
             cross_price: c, vol_ratio: +ratio.toFixed(1),
-            volume: v, sib_median: sibMedian, bars_since_cross: 0,
+            volume: v, sib_median: sibMedian, bars_since_cross: 0, staged_bars: staged,
           });
         }
       }
@@ -1321,8 +1369,32 @@ export class EmaCrossTracker {
     if (st.emaF != null && st.emaS != null) st.prevDiff = st.emaF - st.emaS;
     // Arm/disarm the reclaim channel off this bar's close vs the post-fold
     // EMAs. Gap-decay preserves the flag's truth: decay moves the EMAs
-    // toward the last close but never across it.
-    st.prevBelowBoth = st.emaF != null && st.emaS != null && c <= st.emaF && c <= st.emaS;
+    // toward the last close but never across it. Three zones (2026-07-28,
+    // the FIEE staircase): BELOW both = (re)arm fresh; ABOVE both = the
+    // reclaim itself already had its chance on this bar, so disarm; INSIDE
+    // the band = hold the arming for up to staged_arm_bars bars, which is
+    // what lets a curl that clears the fast EMA first still fire when it
+    // punches the slow one. staged_arm_bars = 0 restores same-bar semantics.
+    if (st.emaF == null || st.emaS == null) {
+      st.armed = false;
+      st.armedStaged = 0;
+    } else {
+      const lo = Math.min(st.emaF, st.emaS);
+      const hi = Math.max(st.emaF, st.emaS);
+      if (c <= lo) {
+        st.armed = true;
+        st.armedStaged = 0;
+      } else if (c > hi) {
+        st.armed = false;
+        st.armedStaged = 0;
+      } else if (st.armed) {
+        st.armedStaged++;
+        if (st.armedStaged > this.cfg.staged_arm_bars) {
+          st.armed = false;
+          st.armedStaged = 0;
+        }
+      }
+    }
 
     // The just-closed bar becomes a sibling for the next ones.
     st.sibVols.push(v);

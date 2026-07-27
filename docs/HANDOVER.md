@@ -1,4 +1,4 @@
-# Session Handover — updated 2026-07-27
+# Session Handover — updated 2026-07-28
 
 A running handover so a fresh session can continue without re-deriving context.
 **Read `docs/web-dashboard.md` first** (the canonical status doc); this file is
@@ -16,8 +16,11 @@ data revisit). The chain otherwise runs in full (🤫 accum → ↗ reclaim →
 every transition in `tier_events`; sidebar reseeds on boot).
 - **↗ reclaim layer, current shape:** price crossing up BOTH EMA 10/65 on
   5m/15m/1h/4h/1d (bars_* warmup stores per tf; 1d on the 04:00-ET day
-  grid, intrabar = its real-time path), intrabar everywhere with NO stale
-  wait (XVTAK), gap-decay EMAs with stalest-first 2h Yahoo re-anchor,
+  grid, intrabar = its real-time path), **arming staged across in-band bars
+  (XSTAGE)**, intrabar everywhere with NO stale
+  wait (XVTAK), gap-decay on feed-scale bars only — never on consolidated
+  replay (XFIEE) — with sparsest-first 2h Yahoo re-anchor whose range
+  widens until the bar count clears warmup,
   pend-through-insufficient-evidence in all three shapes (thin sibling
   window / junk-dollar arming bar / decay-flip), basis-break guard ≥4.85×
   (splits reset state, real doublers don't), weekend test prints dropped
@@ -44,20 +47,29 @@ every transition in `tier_events`; sidebar reseeds on boot).
 **THE PENDING TASK — the grading pass.** The cross-vs-reclaim A/B is MOOT
 (crossover retired by operator instinct 07-26). Grade the ↗ reclaim funnel
 per timeframe once it has a few clean sessions: **the clean segment starts
-2026-07-28** (semantics churned daily 07-22→07-27; boundary log: 07-22
+2026-07-29** (semantics churned daily 07-22→07-28; boundary log: 07-22
 10/65 params · 07-23 gap-decay+pends · 07-24 reclaim channel added · 07-25
 weekend gate · 07-26 reclaim-only + 15m/1d · 07-27 split/basis guards, no
-stale wait, junk-disarm pend). Cuts in tier_events meta: `tf`, `intrabar`,
+stale wait, junk-disarm pend · 07-28 staged arming + the three FIEE warmup
+holes). Cuts in tier_events meta: `tf`, `intrabar`,
 `sib_median`/`notional` (thin-tape band; ⚠️ pend-conversions carry inflated
-ratios — segment on sib_median), `pending_min`, `in_ladder`, catalyst-vs-not
+ratios — segment on sib_median), `pending_min`, `in_ladder`, **`staged_bars`
+(0 = old semantics would have caught it too; >0 = staircase-only — the
+keep/kill cut for the 07-28 widening)**, catalyst-vs-not
 via join to `news_articles`. Decide per tf: keep/kill, Telegram promotion
 (15m/1h/4h/1d currently dashboard-only), and whether the dead-tape band
-(sib_median×price < ~$2k) earns its conditional floor. Also still owed:
+(sib_median×price < ~$2k) earns its conditional floor. **Watch the 5m
+nomination rate first** — 07-28 both widened arming AND warmed a class of
+thin names that never nominated before; if it floods, the dials are
+`staged_arm_bars` and `nominate_min_notional`, in that order. Also still owed:
 (b) 👀 evidence-gate cost audit (`watch_suppressed low_evidence` that later
 confirmed); (c) accum v2 precision re-check. (Radar grading is moot while
 Benzinga is parked.)
 
-**Recent focus trail** (each has a dated entry below): 07-27 the shakedown
+**Recent focus trail** (each has a dated entry below): 07-28 XFIEE (the
+trickle-tape day: a +156% run the 5m layer could not see — below-warmup
+reseed hole, calendar-vs-bar-count fetch window, gap-decay on consolidated
+replay) + XSTAGE (staged arming) · 07-27 the shakedown
 day — XSPLIT (FFAI split phantom → basis-break guard + weekend-clean
 backfills) + PFSA (guard calibrated to real doublers; corrupt mixed-scale
 source → guard) + XVTAK (reclaim intrabar drops the stale wait) + XEDBL
@@ -124,6 +136,67 @@ Journal; **attribution join still the open payoff**) · 06-17 tick feed go-live.
 ---
 
 ## What shipped this session (newest first, all on prod unless noted)
+
+XFIEE. **The FIEE miss — THREE stacked holes, all in the 5m layer's ability
+to see a trickle tape (2026-07-28, operator-caught).** FIEE ran +156%
+(~$2.75 → $10.33, 10:35–11:30 ET); only the 1d (11:24, $7.04) and 4h
+(12:00, $8.37) layers fired. Operator asked why the 5m didn't, pointing at
+a visible reclaim on their chart. `ema-debug` gave the first answer:
+**`ema_slow: null` — the 5m and 15m trackers had never warmed** (30 and 39
+bars vs 65 needed), so those layers were structurally incapable of firing,
+which from the outside is indistinguishable from the documented
+already-above-the-stack blind spot. Three independent causes, each fixed:
+(1) **The below-warmup backfill threw its own data away.** It fetches
+history, then seeds only `if (canSeed)` — false the moment a symbol has
+produced one live bar. A trickle name streams a few bars a day, so it was
+never seedable, and the sparse re-seed (which HAS the
+`reseedFromHistory` fallback) explicitly required past-warmup names.
+FIEE sat in the gap forever. Now the below-warmup path reseeds too, and
+the sparse sweep's past-warmup floor is gone.
+(2) **Warmup is a BAR COUNT; the fetch window was a CALENDAR window.**
+`fetchYahoo5m` asked for `range=5d`, which assumes ~192 buckets/day of
+prints — FIEE's entire consolidated week was 86 bars. No number of retries
+could ever reach 65. The range now escalates 5d → 1mo → 60d until the count
+clears 2× warmup (FIEE: 86 → 178 → 688). Dense names never escalate.
+(3) **Gap-decay was being applied to CONSOLIDATED replay history — and it
+un-armed the channel.** Decay exists to synthesise bars our MINI subset
+missed but the consolidated tape carried (CPHI). A consolidated series has
+none to synthesise: its holes are the MARKET's, and TV decays nothing
+between prints either. Compounding hundreds of phantom steps on a thin
+name dragged FIEE's EMA65 to **2.77 vs TV's 3.67** — below the price, so
+the channel was never armed. Decay is now skipped when replaying a
+consolidated series (feed-scale history still decays; CPHI intact, pinned
+by S38). Measured on FIEE's real tape: seeded EMA10 2.88 / EMA65 3.45 vs
+the operator's TV 3.01 / 3.67, **armed=true** — vs `null` before.
+Also shipped alongside: **staged arming** (see XSTAGE) and **sparse-sweep
+ordering by 24h density** instead of pure staleness — stalest-first
+assumed a fresh newest bar means the live tape is self-correcting, but a
+trickle name prints every ~20 min: always "fresh", never dense, and FIEE
+sat behind ~800 staler names on the day of its burst. Sorting on last-24h
+bar count keeps the OMH lesson for free (a silent name has n24 ≈ 0 and
+still sorts first). Suite → 38 scenarios / 128 checks. New durable tool:
+`scripts/research/reclaim-staged-arming-replay.ts TICKER` replays any
+name's real consolidated tape through old vs new semantics.
+⚠️ **The clean grading segment moves to 2026-07-29.**
+
+XSTAGE. **Staged reclaim arming — the staircase curl (2026-07-28).** The
+arming was a single-bar flag: prev close ≤ BOTH EMAs, else disarmed. So the
+channel only fired when both crossings landed on ONE bar — but TV evaluates
+the operator's two "Crossing Up" alerts INDEPENDENTLY, and real curls stage
+them. FIEE cleared EMA10 at 10:35 ET and EMA65 twenty minutes later; every
+in-band bar between them killed the arming. The arming now survives up to
+`staged_arm_bars` closed bars spent inside the band (5m/15m 6, 1h 4, 4h/1d
+3), and is cleared by a close above both (the fire) or by running out of
+staging. `staged_bars` rides in every reclaim event and in tier_events meta:
+**0 = a fire the old semantics would also have made, >0 = a staircase only
+this catches** — grade the two populations separately before promoting
+anything to Telegram, since this widens nomination (the volume-confirm
+funnel is untouched, so the alert surface stays gated). S28 was rewritten
+(it asserted the old exclusion), S36/S37 pin the new contract. Honest
+scope note: on FIEE itself the warmup/decay fixes were the load-bearing
+ones — with a warm tracker the layer fires at 09:45 either way; staged
+arming adds a second, later nomination. Its justification is the general
+shape, not this one case, which is exactly why it ships instrumented.
 
 XEDBL. **Junk prints can no longer disarm the reclaim + amplitude guard
 (2026-07-27 afternoon, both operator-caught).** (1) EDBL burst +140% at

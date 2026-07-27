@@ -240,9 +240,9 @@ function lastSessionOpenSec(): number {
 // Yahoo's bucket-OPEN convention to our bar-CLOSE one. ⚠️ Yahoo volumes are
 // consolidated-tape scale (vs our MINI-scale live bars) — the sibling-volume
 // window self-heals within ~1h of live tape.
-async function fetchYahoo5m(ticker: string): Promise<Array<{ closeTs: number; close: number; volume: number }> | null> {
+async function fetchYahoo5mRange(ticker: string, range: string): Promise<Array<{ closeTs: number; close: number; volume: number }> | null> {
   try {
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=5m&range=5d&includePrePost=true`;
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=5m&range=${range}&includePrePost=true`;
     const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
     if (!res.ok) return null;
     const json = await res.json() as {
@@ -266,6 +266,27 @@ async function fetchYahoo5m(ticker: string): Promise<Array<{ closeTs: number; cl
   } catch {
     return null;
   }
+}
+
+// Warmup is a BAR COUNT, so the fetch window has to be too (2026-07-28, the
+// FIEE hole). A fixed 5-day range silently assumes ~192 buckets/day of
+// prints; a name that trades in bursts returns a fraction of that and can
+// NEVER reach the 65-bar warmup, however often we refetch — FIEE's whole
+// consolidated week was 86 bars, so its slow EMA stayed null through a +156%
+// move. Widen the calendar until the bar count is there: 5d covers dense
+// names in one call (they never escalate), 1mo carries the trickle class
+// (FIEE: 178), 60d is the floor for the very thinnest (FIEE: 688). Both
+// callers below are thin-by-construction, so the escalation is the common
+// path for them and free for everyone else.
+async function fetchYahoo5m(ticker: string, minBars = 0): Promise<Array<{ closeTs: number; close: number; volume: number }> | null> {
+  let bars = await fetchYahoo5mRange(ticker, '5d');
+  for (const range of ['1mo', '60d']) {
+    if ((bars?.length ?? 0) >= minBars) break;
+    await new Promise((r) => setTimeout(r, 400));
+    const deeper = await fetchYahoo5mRange(ticker, range);
+    if (deeper && deeper.length > (bars?.length ?? 0)) bars = deeper;
+  }
+  return bars;
 }
 
 // Yahoo 1h history re-bucketed to an HTF grid — the HTF layers' consolidated
@@ -631,6 +652,7 @@ class TickFeedService {
           for (const tk of chunk) {
             if (!this.running) return;
             let bars = batch?.get(tk) ?? null;
+            let fromYahoo = false;
             if (bars && seriesLooksCorrupt(bars)) {
               console.log(`[ema-backfill] 5m ${tk}: Databento series looks corrupt (mixed scales) — using Yahoo`);
               bars = null;
@@ -643,16 +665,19 @@ class TickFeedService {
               // structurally invisible. Take whichever series is longer.
               // Consolidated volumes skew the sibling window (ratios read
               // LOW — misses, never false confirms) and self-heal live.
-              const yahoo = await fetchYahoo5m(tk);
+              // Ask for enough bars to actually clear warmup with margin —
+              // the range escalates until the count is there (see fetchYahoo5m).
+              const yahoo = await fetchYahoo5m(tk, EMA_CROSS.warmup_bars * 2);
               await new Promise((r) => setTimeout(r, 1_500));
               if (yahoo && yahoo.length > (bars?.length ?? 0)) {
                 bars = yahoo;
+                fromYahoo = true;
                 viaYahoo++;
               }
             }
             if (!bars || bars.length === 0) continue;
             ok++;
-            const r = this.applyBackfillBars(tk, bars);
+            const r = this.applyBackfillBars(tk, bars, fromYahoo);
             seeded += r.seeded;
             persisted += r.persisted;
           }
@@ -689,26 +714,31 @@ class TickFeedService {
     // density criterion reads 0 for everything, which would churn the whole
     // sparse set through Yahoo every 2h all weekend.
     if (etDowNow() === 0 || etDowNow() === 6) return;
-    const cand: Array<{ tk: string; n: number; latestMs: number }> = [];
+    const cand: Array<{ tk: string; n: number; n24: number; latestMs: number }> = [];
     for (const tk of poller.getKnownRunners()) {
       const lastTry = this.sparseAttempted.get(tk) ?? 0;
       if (Date.now() - lastTry < ATTEMPT_RETRY_MS) continue;
       const s = stats.get(tk);
-      if (!s || s.n < EMA_CROSS.warmup_bars || s.n24 >= SPARSE_5M_MIN_BARS_24H) continue;
-      cand.push({ tk, n: s.n, latestMs: s.latestMs });
+      // No past-warmup floor since 2026-07-28 (the FIEE hole): below-warmup
+      // names are the MOST divergent, and the once-per-ET-day below-warmup
+      // pass is too slow a re-anchor for a name whose whole tape is a
+      // trickle. Both passes now converge them; this one repeats every 2h.
+      if (!s || s.n24 >= SPARSE_5M_MIN_BARS_24H) continue;
+      cand.push({ tk, n: s.n, n24: s.n24, latestMs: s.latestMs });
     }
     if (cand.length === 0) return;
-    // STALEST banked tape first (2026-07-24, the OMH lesson — flipped from
-    // most-recent-first): a name whose MINI tape is fresh is the LOWEST-
-    // divergence candidate (its own live bars keep correcting the EMAs),
-    // while a name silent for hours is the blindest — the consolidated tape
-    // can move (OMH: the whole premarket dip-below-stack + curl that armed
-    // TV's cross AND reclaim) while our EMAs sit frozen on stale carries.
-    // OMH sat behind 912 fresher names when its burst came 15 min after
-    // boot. Stalest-first also makes deploy resets of the in-memory retry
-    // map harmless: the highest-value names re-anchor in the first minutes
-    // of every boot; truly dead names cost one cheap skip each.
-    cand.sort((a, b) => a.latestMs - b.latestMs);
+    // SPARSEST 24h tape first, stalest as the tie-break (2026-07-28, the
+    // FIEE lesson — refines 07-24's pure stalest-first). Blindness is a
+    // DENSITY property, not a recency one: pure stalest-first assumed a
+    // fresh newest bar means the live tape is correcting the EMAs, but a
+    // trickle name prints a bar every 20 minutes — always "fresh", never
+    // dense, and it sat permanently behind ~800 staler names (FIEE: 15
+    // bars on the day of a +156% burst, never once swept). Sorting on
+    // last-24h bar count preserves the OMH lesson for free — a name silent
+    // for hours has n24 ≈ 0 and still sorts first — while lifting the
+    // trickle class off the floor of the queue. Deploy resets of the retry
+    // map stay harmless for the same reason as before.
+    cand.sort((a, b) => (a.n24 - b.n24) || (a.latestMs - b.latestMs));
     const batch = cand.slice(0, SPARSE_5M_MAX_PER_SCAN);
     if (cand.length > batch.length) {
       console.log(`[ema-backfill] sparse: ${cand.length - batch.length} names deferred to the next scan`);
@@ -718,14 +748,14 @@ class TickFeedService {
     for (const { tk, n } of batch) {
       if (!this.running) return;
       this.sparseAttempted.set(tk, Date.now());
-      const yahoo = await fetchYahoo5m(tk);
+      const yahoo = await fetchYahoo5m(tk, EMA_CROSS.warmup_bars * 2);
       await new Promise((r) => setTimeout(r, 1_500));
       if (!yahoo || yahoo.length <= n) continue; // consolidated adds nothing over the banked series
       const adj = adjustSplitHistory(yahoo).slice(-200);
       if (this.emaCross.canSeed(tk)) {
-        for (const b of adj) this.emaCross.seedBar(tk, b.closeTs, b.close, b.volume);
+        for (const b of adj) this.emaCross.seedBar(tk, b.closeTs, b.close, b.volume, true);
         reseeded++;
-      } else if (this.emaCross.reseedFromHistory(tk, adj)) {
+      } else if (this.emaCross.reseedFromHistory(tk, adj, true)) {
         reseeded++;
       } else {
         inFlight++; // an observation/pending is live — never disturb it
@@ -781,7 +811,20 @@ class TickFeedService {
       const lastTry = l.attempted.get(tk) ?? 0;
       if (Date.now() - lastTry < ATTEMPT_RETRY_MS) continue;
       const h = have.get(tk);
-      if (h && (h.n >= l.minBars || h.earliestMs <= deepEnoughMs) && h.latestMs >= freshEnoughMs) continue;
+      // Convergence needs DENSITY, not just reach (2026-07-28, the FIEE
+      // hole). The `earliestMs` branch exists so a recently-listed name
+      // isn't refetched forever chasing minBars it can never have — but on
+      // a trickle tape it read a nearly-empty series as converged: FIEE's
+      // 15m table held 38 bars inside the 12-day window, reaching back past
+      // deepDays (7), so the layer skipped it on every scan while its
+      // EMA65 sat null and the layer could not fire. A series below the
+      // layer's own warmup bar count is never converged, whatever its span
+      // — and the Yahoo consolidated fallback below is exactly what fixes
+      // such names, so the retry is productive rather than a spin.
+      const converged = h != null
+        && h.n >= l.cfg.warmup_bars
+        && (h.n >= l.minBars || h.earliestMs <= deepEnoughMs);
+      if (converged && h!.latestMs >= freshEnoughMs) continue;
       targets.push(tk);
       if (targets.length >= 1600) break;
     }
@@ -815,12 +858,14 @@ class TickFeedService {
         // series lagged the day's move so far behind that the EMAs never
         // crossed. Take whichever series is longer/fresher.
         const dbLatest = bars?.length ? bars[bars.length - 1].closeTs * 1000 : 0;
+        let fromYahoo = false;
         if (!bars || bars.length < l.cfg.warmup_bars || dbLatest < freshEnoughMs) {
           const y = await fetchYahooHtfAgg(tk, l.yahooInterval, l.yahooRange, l.cfg.interval_sec, off);
           await new Promise((r) => setTimeout(r, 1_500));
           const yLatest = y?.length ? y[y.length - 1].closeTs * 1000 : 0;
           if (y && y.length > 0 && (y.length > (bars?.length ?? 0) || yLatest > dbLatest)) {
             bars = y;
+            fromYahoo = true;
             viaYahoo++;
           }
         }
@@ -828,9 +873,9 @@ class TickFeedService {
         ok++;
         const adj = adjustSplitHistory(bars);
         if (l.tracker.canSeed(tk)) {
-          for (const b of adj) l.tracker.seedBar(tk, b.closeTs, b.close, b.volume);
+          for (const b of adj) l.tracker.seedBar(tk, b.closeTs, b.close, b.volume, fromYahoo);
           seeded++;
-        } else if (l.tracker.reseedFromHistory(tk, adj)) {
+        } else if (l.tracker.reseedFromHistory(tk, adj, fromYahoo)) {
           // Warm but sparse/stale (the CPHI 1h class: EMA65 2.73 vs fast
           // 1.92 off a weeks-deep MINI horizon) — the denser consolidated
           // series replaces the EMA state; in-flight observations refuse.
@@ -849,13 +894,28 @@ class TickFeedService {
     console.log(`[ema-backfill] ${l.cfg.tf} done — ${ok}/${targets.length} backfilled (${viaYahoo} via Yahoo), ${seeded} tracker-seeded, ${persisted} bars persisted`);
   }
 
-  // Apply fetched history for one symbol: direct-seed the tracker only while
-  // it has produced no live bar (ordering safety, re-checked here — after the
-  // fetch), and persist the recent 72h slice for the next boot's replay.
-  private applyBackfillBars(tk: string, bars: Array<{ closeTs: number; close: number; volume: number }>): { seeded: number; persisted: number } {
+  // Apply fetched history for one symbol: direct-seed the tracker while it
+  // has produced no live bar (ordering safety, re-checked here — after the
+  // fetch), otherwise REPLACE its state with the fetched history, and
+  // persist the recent 72h slice for the next boot's replay.
+  //
+  // The reseed branch is load-bearing (2026-07-28, the FIEE hole): this path
+  // targets names BELOW warmup, and `canSeed` is false the moment a symbol
+  // has produced one live bar — so a trickle-tape name that streams a
+  // handful of bars a day fetched its history here and then THREW IT AWAY,
+  // every scan, forever. FIEE banked 38 five-minute bars in five days: never
+  // seedable (live bars exist), never swept (the sparse pass required
+  // past-warmup), so its EMA65 was permanently null and the 5m layer was
+  // structurally incapable of firing on it — the burst to $10 was invisible
+  // to the operator's primary timeframe. reseedFromHistory refuses while an
+  // observation or pending is in flight, so live detection state is safe.
+  private applyBackfillBars(tk: string, bars: Array<{ closeTs: number; close: number; volume: number }>, consolidated = false): { seeded: number; persisted: number } {
     let seeded = 0;
+    const recentFirst = bars.slice(-200);
     if (this.emaCross.canSeed(tk)) {
-      for (const b of bars.slice(-200)) this.emaCross.seedBar(tk, b.closeTs, b.close, b.volume);
+      for (const b of recentFirst) this.emaCross.seedBar(tk, b.closeTs, b.close, b.volume, consolidated);
+      seeded = 1;
+    } else if (this.emaCross.reseedFromHistory(tk, recentFirst, consolidated)) {
       seeded = 1;
     }
     const recent = bars.filter((b) => b.closeTs * 1000 > Date.now() - 5 * 86_400_000);
