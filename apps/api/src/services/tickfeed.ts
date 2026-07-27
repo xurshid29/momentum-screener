@@ -188,7 +188,17 @@ function seriesLooksCorrupt(bars: Array<{ close: number }>): boolean {
     const r = bars[i].close / bars[i - 1].close;
     if (r >= 2 || r <= 0.5) wild++;
   }
-  return wild / (bars.length - 1) > 0.10;
+  if (wild / (bars.length - 1) > 0.10) return true;
+  // Amplitude criterion (2026-07-27, the EDBL poison): a SINGLE wildly
+  // off-scale print (EDBL's 4h series carried a bar that pushed its seeded
+  // EMA65 to $4.3M) slips past the flip-flop frequency test above. Any bar
+  // ≥20× or ≤1/20 of the series median is data corruption, not price
+  // action — genuine 20×-range multi-month runners exist, and they simply
+  // take the Yahoo fallback instead, which is accurate for them too.
+  const sorted = bars.map((b) => b.close).sort((a, b) => a - b);
+  const med = sorted[Math.floor(sorted.length / 2)];
+  if (!(med > 0)) return true;
+  return sorted[sorted.length - 1] / med >= 20 || sorted[0] / med <= 1 / 20;
 }
 
 // ET-weekend check for an arbitrary epoch second. The HISTORICAL fetchers
