@@ -173,6 +173,24 @@ function etDowNow(): number {
   return (Math.floor((Date.now() / 1000 - etUtcOffsetHours() * 3600) / 86_400) + 4) % 7;
 }
 
+// Corrupt-series guard (2026-07-27, the PFSA 4h poison): Databento's raw
+// ohlcv for some symbols interleaves TWO price scales (~25× apart, months
+// long — premarket/AH buckets vs regular-session buckets; publisher/
+// instrument mixing in the source). No real series has a large share of
+// consecutive bars moving ±100%, and the split-adjuster "correcting" the
+// endless flip-flops inflated PFSA's seeded 4h EMA65 to $2,455 on a $1.70
+// stock. A series that trips this is discarded so the Yahoo (consolidated,
+// clean) fallback takes over.
+function seriesLooksCorrupt(bars: Array<{ close: number }>): boolean {
+  if (bars.length < 8) return false;
+  let wild = 0;
+  for (let i = 1; i < bars.length; i++) {
+    const r = bars[i].close / bars[i - 1].close;
+    if (r >= 2 || r <= 0.5) wild++;
+  }
+  return wild / (bars.length - 1) > 0.10;
+}
+
 // ET-weekend check for an arbitrary epoch second. The HISTORICAL fetchers
 // must drop weekend source rows too (2026-07-27, the FFAI lesson): the live
 // sidecar gate can't help a backfill, and Saturday's exchange test prints
@@ -603,6 +621,10 @@ class TickFeedService {
           for (const tk of chunk) {
             if (!this.running) return;
             let bars = batch?.get(tk) ?? null;
+            if (bars && seriesLooksCorrupt(bars)) {
+              console.log(`[ema-backfill] 5m ${tk}: Databento series looks corrupt (mixed scales) — using Yahoo`);
+              bars = null;
+            }
             if (!bars || bars.length < EMA_CROSS.warmup_bars) {
               // MINI history too sparse to warm the EMAs — not just empty.
               // The LICN lesson (2026-07-22): 16 five-minute bars in 3 days
@@ -774,6 +796,10 @@ class TickFeedService {
       for (const tk of chunk) {
         if (!this.running) return;
         let bars = batch.get(tk) ?? null;
+        if (bars && seriesLooksCorrupt(bars)) {
+          console.log(`[ema-backfill] ${l.cfg.tf} ${tk}: Databento series looks corrupt (mixed scales) — using Yahoo`);
+          bars = null;
+        }
         // Consolidated fallback: MINI-quiet names (sparse OR stale series)
         // get Yahoo's tape — the ELPW/CRIS/MASK/TMDE class, where the MINI
         // series lagged the day's move so far behind that the EMAs never
