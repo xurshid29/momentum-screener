@@ -117,6 +117,21 @@ Journal; **attribution join still the open payoff**) · 06-17 tick feed go-live.
 
 ## What shipped this session (newest first, all on prod unless noted)
 
+XEDBL. **Junk prints can no longer disarm the reclaim + amplitude guard
+(2026-07-27 afternoon, both operator-caught).** (1) EDBL burst +140% at
+08:16; only the 4h + tick tiers fired. The operator's 2m zoom showed
+prior pops over both EMAs at 06:42/07:00 — those were 2-15 SHARE prints
+($7-50): the junk floor rightly refused to nominate, but the bars still
+closed above the stack and flipped prevBelowBoth — dust consumed the
+arming, so the real burst found 5m/15m/1h disarmed. Now a coherent
+junk-dollar bar closing above both EMAs PENDS (pendingR, anchored there)
+and converts intrabar when dollars arrive; outlier junk still discards
+(S35). (2) EDBL's 4h slow EMA read $4.3M — a single off-scale poison
+print in a fetched series slips past the flip-flop corrupt test; the
+guard gained an amplitude criterion (any bar ≥20× off the series median
+→ corrupt → Yahoo fallback) and 751 zero-volume spike bars were purged
+from bars_4h across ~10 tickers. Suite → 35 scenarios / 115 checks.
+
 XVTAK. **Reclaim intrabar drops the stale-EMA guard (2026-07-27,
 operator's call — the VTAK cost).** VTAK's 2482× burst confirmed at
 08:05:09 — the first bar CLOSE — because the stale guard suppressed
