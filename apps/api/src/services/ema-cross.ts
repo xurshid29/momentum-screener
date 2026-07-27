@@ -1269,10 +1269,26 @@ export class EmaCrossTracker {
       st.bars > this.cfg.warmup_bars &&
       st.prevBelowBoth &&
       !st.watchR && !st.pendingR && !st.confirmedTodayR && closeTs >= st.lockedUntilR &&
-      c > st.emaF && c > st.emaS &&
-      c * v >= this.cfg.nominate_min_notional
+      c > st.emaF && c > st.emaS
     ) {
-      if (sibMedian < this.cfg.sibling_min_sh) {
+      if (c * v < this.cfg.nominate_min_notional) {
+        // Junk-dollar reclaim bar (2026-07-27, the EDBL disarm): a 4-share
+        // print closing above both EMAs used to CONSUME the arming
+        // (prevBelowBoth flips below) while being too small to nominate —
+        // EDBL's 06:42/07:00 odd-lot pokes ($7-50) disarmed the 5m/15m/1h
+        // channels, and the real $200k burst at 08:16 found nothing armed.
+        // ZBAO rules apply: coherent junk PENDS and converts when dollars
+        // arrive (anchored at this bar); outlier junk is discarded (the
+        // phantom-print class — note it still disarms via the mechanical
+        // prevBelowBoth update; rare and accepted).
+        const outlier = prevClose > 0 && Math.abs(c / prevClose - 1) > this.cfg.junk_outlier_pct;
+        if (outlier) {
+          console.log(`[ema-cross] reclaim discarded — outlier junk print $${Math.round(c * v)} ${ticker} (${this.cfg.tf})`);
+        } else {
+          st.pendingR = { crossTs: closeTs, crossPrice: c };
+          console.log(`[ema-cross] reclaim pending — junk bar $${Math.round(c * v)} ${ticker} (${this.cfg.tf}) awaiting dollars`);
+        }
+      } else if (sibMedian < this.cfg.sibling_min_sh) {
         // Real dollars over a dead sibling window → PEND (block 1.5R
         // converts it as dollars accrue). No coherence gate on the closed
         // path — a full bar of real dollars is not a phantom print.

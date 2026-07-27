@@ -675,5 +675,26 @@ console.log('S34 — reclaim intrabar ignores the stale guard (the VTAK 4-minute
     nom?.type === 'nominate' && nom.intrabar === true, `got ${nom?.type ?? 'nothing'}`);
 }
 
+console.log('S35 — junk-dollar reclaim bar pends instead of disarming (the EDBL case)');
+{
+  const s = new Sim('TEST', EMA_CROSS);
+  s.bars(70, 1.0, 10_000);     // flat converged stack — armed at equality (EDBL's shape)
+  s.bar(1.01, 40);             // 40-share junk poke above both EMAs
+  s.bar(1.012, 30);            // closes the junk bar (~$40, coherent +1%) → PEND
+  check('junk bar pended, not silently disarmed',
+    s.events.length === 0 && s.tracker.snapshot('TEST')?.pending_reclaim === true,
+    `${s.events.length} events`);
+  s.bar(1.05, 30_000);         // the real dollars arrive → intrabar conversion
+  const nom = s.events.find((e) => e.signal === 'reclaim');
+  check('converted on dollars, anchored at the junk-bar arming',
+    nom?.type === 'nominate' && nom.cross_ts_sec != null, `got ${nom?.type ?? 'nothing'}`);
+
+  const t = new Sim('TEST', EMA_CROSS);
+  t.bars(70, 1.0, 10_000);
+  t.bar(1.1, 4);               // +10% outlier junk print above both
+  t.bar(1.0, 10_000);          // closes it — outlier junk is DISCARDED, no pend
+  check('outlier junk print never pends', t.tracker.snapshot('TEST')?.pending_reclaim === false);
+}
+
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);
