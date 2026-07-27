@@ -1,4 +1,4 @@
-# Session Handover — updated 2026-07-24
+# Session Handover — updated 2026-07-27
 
 A running handover so a fresh session can continue without re-deriving context.
 **Read `docs/web-dashboard.md` first** (the canonical status doc); this file is
@@ -7,55 +7,63 @@ the "where we are right now + what's open" layer on top of it.
 detection chain** (📰/🤫/📈/👀/🛰️ — how each layer works, knobs, grading SQL).
 Memory files under `…/memory/` also carry the durable facts.
 
-**CURRENT FOCUS (2026-07-23): the 📈 EMA-cross layer is the operator's PRIMARY
-instrument, and the ONLY alerting component.** The chain still runs in full
-(📰 radar → 🤫 accum → 📈 cross → 👀 watch → 🛰️ confirm → screens; every
-transition in `tier_events`; sidebar reseeds on boot), but the posture
-changed 2026-07-22:
-- **📈 cross layer, current shape:** EMA **10/65** on THREE timeframes
-  (5m/1h/4h, config-driven `htfLayers`), intrabar TV-parity detection,
-  volume-vs-siblings confirm ($10k floor), $500 nomination junk floor with
-  the outlier/pending split (LBTYK phantoms discarded; ZBAO quiet-curl
-  crosses PEND until dollars arrive), stale-EMA guard, thin-tape ⚠️, news
-  enrichment + CatalystBadge on rows, per-tf sidebar sections. Full spec:
+**CURRENT FOCUS (2026-07-27): the ↗ price-reclaim layer — reclaim-ONLY on
+FIVE timeframes — is the operator's PRIMARY instrument and the only
+Telegram-alerting component.** The 10/65 crossover channel is RETIRED
+(2026-07-26, `cross_detect: false` everywhere; machinery kept + tested for a
+data revisit). The chain otherwise runs in full (🤫 accum → ↗ reclaim →
+👀 watch → 🛰️ confirm → screens; 📰 radar is DARK while Benzinga is parked;
+every transition in `tier_events`; sidebar reseeds on boot).
+- **↗ reclaim layer, current shape:** price crossing up BOTH EMA 10/65 on
+  5m/15m/1h/4h/1d (bars_* warmup stores per tf; 1d on the 04:00-ET day
+  grid, intrabar = its real-time path), intrabar everywhere with NO stale
+  wait (XVTAK), gap-decay EMAs with stalest-first 2h Yahoo re-anchor,
+  pend-through-insufficient-evidence in all three shapes (thin sibling
+  window / junk-dollar arming bar / decay-flip), basis-break guard ≥4.85×
+  (splits reset state, real doublers don't), weekend test prints dropped
+  live + in backfills, corrupt-source guard (flip-flop + amplitude) → Yahoo
+  fallback, split-adjusted seeds bounded to 1–3 day seams. Volume confirm
+  unchanged: sibling ≥3×/5× + $10k notional, $500 junk floor. Full spec:
   `docs/detection-layers.md`.
-- **Alert posture (operator's call):** droplet `.env` `ALERTS_DISABLED`
-  mutes ALL Telegram components except `ema_cross` (📈✅ confirm pushes,
-  any tf); dashboard sounds/notifications/title-flash are EMA-only via
-  kill-switch maps (`useScreenerAlerts` / `useTabTitleFlash`; observe =
-  soft E5 tone, confirm = B5→F#6 pair + pulse-green row). Everything else
-  is computed + graded but silent — do NOT read alert silence as detection
+- **Alert posture (operator's call):** Telegram = ↗✅ 5m reclaim confirms
+  ONLY (`ema_reclaim` slug; HTF reclaims are dashboard+grading — promote by
+  deleting one guard line in `pushCrossAlert` when graded). Everything else
+  muted via `ALERTS_DISABLED` (the dormant `ema_cross` slug fires nothing).
+  Dashboard sounds/title-flash are EMA-only. Alert silence ≠ detection
   failure.
-- **Feed decision (2026-07-22): staying on Databento EQUS.MINI.** Thin-tape
-  names lag/diverge vs TV by design (MINI ⊂ consolidated); ⚠️ rows mark it;
-  Yahoo consolidated fallbacks keep warmups converged. SIP/PLUS upgrade
-  path documented in `tick_feed_scoping` memory if revisited.
-  **07-23 (XGAPD): the divergence is now structurally mitigated** — gap-decay
-  (empty in-session buckets decay EMAs like flat carry bars → TV-parity
-  horizons on sparse tapes), thin-sibling crosses PEND + convert intrabar
-  (were consumed silently by the 50-sh floor), and warm-but-sparse names get
-  a Yahoo consolidated EMA re-seed (5m + HTF). CPHI replay: nominate 09:35
-  @$1.73 vs the live 09:50:53 @$2.04 — the TV alert matched.
+- **Paid APIs parked (2026-07-25):** Benzinga + Anthropic tokens commented
+  out in the droplet .env (key presence IS the toggle) — radar dark,
+  classification rules-only, news = Finviz/Yahoo/SEC/halts. ~$150+/mo saved;
+  re-enable = uncomment + `up -d api`.
+- **Feed: Databento EQUS.MINI stays** (07-22 decision). The divergence
+  stack is now heavily mitigated (gap-decay, re-anchors, guards) but the
+  irreducible residual remains: consolidated-only tape (odd-lot curls,
+  VTAK/EDBL premarket) is invisible until real lots print on MINI —
+  SIP/PLUS (~$825/mo, via support) is the only true fix.
 
-**THE PENDING TASK — the grading pass (run from ~2026-07-17, needs a few full
-sessions of tier_events):** (a) keep/kill the 📈 cross layer — nominate→confirm
-rate, confirmed-cross forward outcomes, overlap with 🤫/👀 (day-1 2026-07-14:
-37 nominations → 13 confirms / 14 expires; ⚠️ semantics changed 2026-07-16 —
-cooldown re-arm + confirm notional floor, see entry XMETA — segment at the
-date and count the funnel per observation, not per ticker; ⚠️ EMA params
-changed 6/50→**10/65** on 2026-07-22 (operator's evolved TV setup, all
-timeframes; warmup 50→65 bars, HTF convergence target 150→200; 5m re-arm
-cooldown also 60→30 min same day, measured: re-arm carries 27% of confirms,
-late rallies re-cross median ~4.5h later) — a DIFFERENT signal; ⚠️ AND
-semantics changed again 07-23 (XGAPD: gap-decay + thin-sibling pend +
-sparse re-seed) — **the clean segment starts 2026-07-24**); (b) audit the 👀
-evidence gate's
-cost — `watch_suppressed reason='low_evidence'` tickers that later confirmed;
-(c) re-check accum v2 precision (persistence gate promised ~65% promote / 24%
-≥+20pts) + whether the news-gated 🤫 Telegram picks winners; (d) radar
-precision by catalyst type. Then promote/demote Telegram gates accordingly.
+**THE PENDING TASK — the grading pass.** The cross-vs-reclaim A/B is MOOT
+(crossover retired by operator instinct 07-26). Grade the ↗ reclaim funnel
+per timeframe once it has a few clean sessions: **the clean segment starts
+2026-07-28** (semantics churned daily 07-22→07-27; boundary log: 07-22
+10/65 params · 07-23 gap-decay+pends · 07-24 reclaim channel added · 07-25
+weekend gate · 07-26 reclaim-only + 15m/1d · 07-27 split/basis guards, no
+stale wait, junk-disarm pend). Cuts in tier_events meta: `tf`, `intrabar`,
+`sib_median`/`notional` (thin-tape band; ⚠️ pend-conversions carry inflated
+ratios — segment on sib_median), `pending_min`, `in_ladder`, catalyst-vs-not
+via join to `news_articles`. Decide per tf: keep/kill, Telegram promotion
+(15m/1h/4h/1d currently dashboard-only), and whether the dead-tape band
+(sib_median×price < ~$2k) earns its conditional floor. Also still owed:
+(b) 👀 evidence-gate cost audit (`watch_suppressed low_evidence` that later
+confirmed); (c) accum v2 precision re-check. (Radar grading is moot while
+Benzinga is parked.)
 
-**Recent focus trail** (each has a dated entry below): 07-26 XRCL2
+**Recent focus trail** (each has a dated entry below): 07-27 the shakedown
+day — XSPLIT (FFAI split phantom → basis-break guard + weekend-clean
+backfills) + PFSA (guard calibrated to real doublers; corrupt mixed-scale
+source → guard) + XVTAK (reclaim intrabar drops the stale wait) + XEDBL
+(junk prints can't disarm the reclaim; amplitude corrupt-guard) · 07-25
+SPRO (NASDAQ-qualified TV links) + weekend test-print gate + Benzinga/
+Anthropic parked · 07-26 XRCL2
 (crossover retired — reclaim-only; + 15m & 1d layers) · 07-24 XRECL (↗
 price-reclaim parallel channel — the operator's TV price-crossing alert
 pair; A/B vs the crossover via tier_events meta.signal) · 07-23 XGAPD (the
@@ -689,20 +697,24 @@ history (temp tables `ir_entry` / `scored`, joined `ignition_results` →
 
 ---
 
-## Other deferred / known (refreshed 2026-07-23)
+## Other deferred / known (refreshed 2026-07-27)
 
-- **The grading pass** — the single next task; the clean 10/65 cross segment
-  starts **2026-07-24** (semantics churned 07-22 AND 07-23 — XGAPD shipped
-  gap-decay + thin-sibling pend + sparse re-seed). The ↗ reclaim channel
-  (XRECL) grades from the same date — A/B on meta.signal. New first-class
-  cuts available in tier_events meta: `tf` (5m/1h/4h), `intrabar`,
-  `notional`/`sib_median` (thin-tape derivable: sib_median×cross_price<$5k;
-  ⚠️ thin-sibling conversions carry inflated ratios — segment on sib_median),
-  `pending_min` (ZBAO + gap-flip + thin-sibling conversions), `in_ladder`,
-  and catalyst-vs-not via SQL join to `news_articles` on (ticker, day).
-  Also watch post-XGAPD: cross volume/day (pend-conversions add fires on
-  sparse names — if noisy, the dials are `SPARSE_5M_MIN_BARS`, the coherence
-  gate, and `nominate_min_notional`).
+- **The grading pass** — the single next task; see THE PENDING TASK above
+  (reclaim precision per tf, clean segment from 2026-07-28). Watch reclaim
+  volume/day post-07-27 (junk-arming pends + no-stale-wait add fires on
+  sparse names — dials: `SPARSE_5M_MIN_BARS_24H`, the coherence gate,
+  `nominate_min_notional`).
+- **Databento data-quality findings worth a support ticket:** (a) weekend
+  test-session prints stream on live EQUS.MINI and appear in historical
+  ohlcv (we filter both ends now); (b) PFSA ohlcv-1h interleaves two price
+  scales ~25× apart for months (premarket/AH vs regular buckets); (c)
+  single wildly off-scale poison prints (EDBL). All contained by our
+  guards + Yahoo fallbacks, but the vendor should know.
+- **CI deploy flakiness (watch):** two incident classes on 07-25/27 — a
+  Buildx-setup infra flake failing the whole run (rerun fixes), and
+  deploys that succeed WITHOUT recreating the api container (image digest
+  unchanged or compose no-op). After any deploy that matters, verify by
+  grepping a code marker in the container's dist/, not by run status.
 - **Dead-tape nominations stay (operator's call, 2026-07-24, the PBM case):**
   odd-lot-only trickles on consolidated-sparse names can nominate (cross +
   reclaim) with ⚠️ and can never confirm ($10k floor unreachable) — the
@@ -742,11 +754,6 @@ history (temp tables `ir_entry` / `scored`, joined `ignition_results` →
   — its top-up is Finviz/Yahoo); classification stays rules-only. This
   consciously suspends the "compute always" principle for the radar layer
   to save the subscription. Re-enable: uncomment the token + `up -d api`.
-- ⚠️ **Anthropic API credits EXHAUSTED (noticed 2026-07-22)** —
-  `[catalyst-claude] 400 credit balance is too low` in api logs; the LLM
-  catalyst refinement is dead and classification is rules-only until the
-  operator tops up the balance (impact/hype scores skew accordingly).
-  Detection unaffected.
 - **Yahoo's unofficial API is now load-bearing** for thin-tape EMA warmups
   (5m sparse fallback + HTF consolidated fallback, hourly scans; since
   07-23 also the warm-but-sparse 5m/HTF re-seeds — the daily sparse sweep
@@ -757,9 +764,10 @@ history (temp tables `ir_entry` / `scored`, joined `ignition_results` →
   `sparse done` counts in `[ema-backfill]` logs. The clean escape remains
   the Databento SIP/PLUS upgrade (or metered EQUS.PLUS historical polling).
 - **Deploy-loss residuals (tracker memory):** 5m 'observing' rows drop on
-  reseed (HTF rows survive their display windows); PENDING crosses are lost
-  on deploy (re-fire needs a genuine re-cross); detector quiet baselines
-  rebuild ~1-2 min. All logged classes, all self-correcting.
+  reseed (HTF rows survive their display windows); PENDING reclaims (thin
+  window / junk-arming / decay-flip) are lost on deploy — re-fire needs the
+  geometry to recur; detector quiet baselines rebuild ~1-2 min. All logged
+  classes, all self-correcting.
 - **Trade Journal attribution join (TJ)** — trades ↔ `screener_outcomes` +
   detections on `(ticker, et_date)`; the report-system payoff, untouched since
   06-21.
@@ -790,7 +798,6 @@ history (temp tables `ir_entry` / `scored`, joined `ignition_results` →
 - **Deeper Finviz relief** (share the AH v=152 overlay across screens) and
   **retune swing/dual-signal thresholds from outcomes** — both still open,
   both non-urgent.
-- Git state at handover: `main` @ `3c457a5` + this docs commit, in sync;
-  working tree has only the operator's untracked scratch files
-  (`watchlist-*.txt` now gitignored after the 07-21 accidental commit —
-  scrubbed from HEAD, still present in history if that ever matters).
+- Git state at handover: `main` in sync with origin as of this 2026-07-27
+  grooming commit; working tree clean apart from the operator's gitignored
+  scratch files.
