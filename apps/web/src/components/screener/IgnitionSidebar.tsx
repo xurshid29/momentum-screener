@@ -425,10 +425,23 @@ function EmaCrossRow({ item, selected, onSelect, onOpenCatalyst }: {
   const freshConfirm = confirmed && isFreshArrival(item.confirmed_at, FRESH_CONFIRM_SEC[item.tf]);
   // "ago" always anchors on the CROSS bar so it reads like the TV chart the
   // operator compares against; the ✅ multiple marks the confirmation itself.
+  const fmtAgo = (ms: number) => (ms < 60_000 ? `${Math.round(ms / 1000)}s`
+    : ms < 3_600_000 ? `${Math.round(ms / 60_000)}m`
+    : `${(ms / 3_600_000).toFixed(1)}h`);
   const agoMs = Date.now() - new Date(item.cross_at).getTime();
-  const ago = agoMs < 60_000 ? `${Math.round(agoMs / 1000)}s`
-    : agoMs < 3_600_000 ? `${Math.round(agoMs / 60_000)}m`
-    : `${(agoMs / 3_600_000).toFixed(1)}h`;
+  const ago = fmtAgo(agoMs);
+  // Confirm age, shown alongside (2026-07-28). A row enters the panel when it
+  // CONFIRMS, but its label is anchored at the reclaim — so a late confirm
+  // (thin tape needing ~30 min to clear the $10k floor) appeared out of
+  // nowhere reading "reclaim 33m ago" and looked like a stale detection.
+  // Both ages together say exactly what happened: the geometry fired then,
+  // the volume evidence landed now.
+  const confirmAgoMs = confirmed && item.confirmed_at
+    ? Date.now() - new Date(item.confirmed_at).getTime()
+    : null;
+  // Only worth the extra text once the two diverge — a same-bar confirm
+  // would otherwise read "reclaim 1m ago · confirmed 1m ago".
+  const showConfirmAgo = confirmAgoMs != null && agoMs - confirmAgoMs > 120_000;
   return (
     <div
       onClick={() => onSelect(item.ticker)}
@@ -470,6 +483,7 @@ function EmaCrossRow({ item, selected, onSelect, onOpenCatalyst }: {
         )}
         <span style={{ marginLeft: 6, fontSize: 10, color: freshConfirm ? '#95de64' : '#8c8c8c', fontWeight: freshConfirm ? 600 : undefined }}>
           {confirmed ? `✅ ${Math.round(item.vol_ratio)}× vol` : isHtf ? (item.signal === 'reclaim' ? 'reclaim' : 'cross') : '… observing'} · {item.signal === 'reclaim' ? 'reclaim ' : isHtf ? '' : 'cross '}{ago} ago
+          {showConfirmAgo && ` · confirmed ${fmtAgo(confirmAgoMs!)} ago`}
         </span>
         {item.thin_tape && (
           <Tooltip title="Thin tape on our feed — our EMAs may diverge from TV's here; verify the cross on the chart">

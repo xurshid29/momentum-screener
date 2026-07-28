@@ -361,6 +361,11 @@ const CROSS_DISPLAY_MS: Record<Exclude<EmaCrossTf, '5m'>, number> = {
   '1d': 24 * 3600 * 1000,
 };
 const CROSS_DISPLAY_CAP: Record<EmaCrossTf, number> = { '5m': 10, '15m': 8, '1h': 8, '4h': 8, '1d': 6 };
+// Slots each tf holds back for rows still OBSERVING, so a busy stretch of
+// confirms can't hide the fresh reclaims (2026-07-28 — see the selection
+// block in the payload build). Unused reservations fall through to the other
+// status, so a quiet tf still fills its cap.
+const CROSS_MIN_OBSERVING: Record<EmaCrossTf, number> = { '5m': 4, '15m': 3, '1h': 3, '4h': 3, '1d': 2 };
 
 function emaCrossTfOf(v: unknown): EmaCrossTf {
   return v === '1d' ? '1d' : v === '4h' ? '4h' : v === '1h' ? '1h' : v === '15m' ? '15m' : '5m';
@@ -2424,11 +2429,38 @@ class PollerService {
         news_published_at: xc.news_published_at, catalyst: xc.catalyst,
       });
     }
-    emaCrossList.sort((a, b) =>
-      (a.status === 'confirmed' ? 0 : 1) - (b.status === 'confirmed' ? 0 : 1)
-      || (b.confirmed_at ?? b.cross_at).localeCompare(a.confirmed_at ?? a.cross_at));
-    const crossTfCount: Record<EmaCrossTf, number> = { '5m': 0, '15m': 0, '1h': 0, '4h': 0, '1d': 0 };
-    const emaCrossDisplay = emaCrossList.filter((x) => ++crossTfCount[x.tf] <= CROSS_DISPLAY_CAP[x.tf]);
+    // Selection + ordering (rewritten 2026-07-28, the WLDS/LION report).
+    //
+    // The old rule sorted CONFIRMED rows ahead of observing ones
+    // unconditionally, then capped per tf — so once the cap's worth of
+    // confirms was alive, observing rows got ZERO slots. Measured at the
+    // moment of the report: 11 confirmed 5m rows alive against a cap of 10,
+    // so WLDS's 32-minute observation (10:54→11:27) was never displayable.
+    // The operator only ever met a name at its confirm, wearing a 16-32 min
+    // reclaim age — which inverts the whole point of the layer, since the
+    // NOMINATION is the early signal and confirms already have their own
+    // Telegram/sound/pulse channel.
+    //
+    // Now: each tf reserves a floor of slots for each status (so neither can
+    // starve the other), and everything shown is ordered by its LATEST event
+    // — a reclaim that just fired sits at the top next to a fresh confirm,
+    // and stale confirms drift down as they age out.
+    const byRecency = (a: EmaCrossItem, b: EmaCrossItem) =>
+      (b.confirmed_at ?? b.cross_at).localeCompare(a.confirmed_at ?? a.cross_at);
+    const emaCrossDisplay: EmaCrossItem[] = [];
+    for (const tf of Object.keys(CROSS_DISPLAY_CAP) as EmaCrossTf[]) {
+      const cap = CROSS_DISPLAY_CAP[tf];
+      const inTf = emaCrossList.filter((x) => x.tf === tf);
+      const confirmed = inTf.filter((x) => x.status === 'confirmed').sort(byRecency);
+      const observing = inTf.filter((x) => x.status !== 'confirmed').sort(byRecency);
+      // Reserve for whichever side is short; the other takes the remainder,
+      // so a quiet tf still fills its cap from a single status.
+      const obsFloor = Math.min(observing.length, CROSS_MIN_OBSERVING[tf]);
+      const confTake = Math.min(confirmed.length, cap - obsFloor);
+      const obsTake = Math.min(observing.length, cap - confTake);
+      emaCrossDisplay.push(...confirmed.slice(0, confTake), ...observing.slice(0, obsTake));
+    }
+    emaCrossDisplay.sort(byRecency);
 
     // After-hours: re-impose a volume gate on the momentum list. Finviz drops
     // its relvol filter at the close, so names that ticked >5% on a few AH
