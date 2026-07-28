@@ -783,6 +783,31 @@ history (temp tables `ir_entry` / `scored`, joined `ignition_results` →
   scales ~25× apart for months (premarket/AH vs regular buckets); (c)
   single wildly off-scale poison prints (EDBL). All contained by our
   guards + Yahoo fallbacks, but the vendor should know.
+- **⚠️ The droplet is memory-tight — 2 GB total, and the API is the whole
+  budget (2026-07-28).** Symptom that led here: "dashboard stays empty for a
+  while after reload". Measured mid-incident: Node **RSS 877 MB + 1.53 GB
+  SWAPPED**, host 102 MB free, **80–90% iowait** during background sweeps —
+  the request path itself was fine between bursts (p50 0.36s), so this
+  presents as INTERMITTENT slowness, not steady slowness. Root cause was the
+  1d refetch storm (fixed — see below); after the fix + restart: RSS 294 MB,
+  swap 0, 1.1 GB available. **Watch RSS over days** — before the fix the
+  process climbed to 2.4 GB in 10 hours. Boot alone replays ~1.6M persisted
+  bars through the trackers (peak 436k rows in ONE array in
+  `seedTrackerFromTable`), and there are 5 EMA layers + a 3.4k-symbol tick
+  feed. If it creeps back into swap the levers are, in order: trim bar
+  retention (bars_1d 260d / bars_4h 130d are the big ones), chunk the boot
+  seed per symbol instead of one array per table, or resize 2→4 GB
+  (~$12→$24/mo). Diagnose with `free -m`, `VmRSS`/`VmSwap` in
+  `/proc/<node-pid>/status`, and `vmstat 1 3` (watch `si`/`wa`).
+- **HTF freshness must scale with the bar interval (fixed 2026-07-28):** the
+  backfill's "stale" test was a flat 12h for every layer, but a 1d bucket
+  closes once per ET day and never across a weekend — so **all 1,507 daily
+  series read stale permanently (min age 71h)** and every sweep refetched
+  each one's 240d of ohlcv-1h (~40 min, ~350k upserts, metered Databento).
+  Passes ran 60–100 min against an hourly timer = continuous load. Now
+  `max(12h, 4 × interval)` (1d 96h, 4h 16h, 15m/1h unchanged): 1d stale
+  1507 → 18. **If another coarse layer is ever added, check this rule
+  first** — the same trap is waiting for it.
 - **CI deploy flakiness (watch):** two incident classes on 07-25/27 — a
   Buildx-setup infra flake failing the whole run (rerun fixes), and
   deploys that succeed WITHOUT recreating the api container (image digest
