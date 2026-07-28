@@ -12,13 +12,61 @@ import { getDb } from '../db/index.js';
 
 const router = Router();
 
-// GET /api/screener/latest — last cycle's payload from memory.
-router.get('/latest', authMiddleware, (_req, res) => {
+// GET /api/screener/latest — last cycle's payload.
+//
+// Served from the poller's in-memory cache, falling back to the last
+// PERSISTED cycle when that cache is cold (2026-07-28). The cache only fills
+// on the first completed poll, so for up to one cycle (~20s) after every API
+// restart both this endpoint and the SSE on-connect replay had nothing to
+// send — and since the dashboard seeds exclusively from these, a reload
+// right after any deploy showed an empty board. Measured: 6.4s to first
+// payload on a cold cache vs 0.67s warm. The DB always holds the previous
+// cycle, so the fallback makes a reload instant regardless of process age.
+//
+// Only the PERSISTED sections are reconstructed (momentum rows, ignition,
+// polled_at/session/config). The live-state sections — tick ladder, EMA
+// reclaims, radar, swing/continuation caches — stay empty here: they are
+// rebuilt in memory by seedTierState/the cached builders and arrive with the
+// first real SSE cycle seconds later. Better a board that renders instantly
+// with its two main tables than a blank one that waits for everything.
+router.get('/latest', authMiddleware, async (_req, res) => {
   const p = poller.getLastPayload();
-  if (!p) {
-    return res.json({ data: { rows: [], polled_at: null, config: poller.getConfig(), banners: { new_with_catalyst: [], fresh_news: [] }, fresh_news: [] } });
+  if (p) return res.json({ data: p });
+
+  const empty = {
+    cycle_id: '', polled_at: null, session: 'closed' as const, config: poller.getConfig(),
+    rows: [], ignition: [], swing: [], continuation: [],
+    banners: { new_with_catalyst: [], fresh_news: [] },
+    fresh_news: [], tick_catches: [], news_radar: [], ema_crosses: [],
+  };
+  try {
+    const db = getDb();
+    const cycle = await db
+      .selectFrom('screener_cycles')
+      .select(['id', 'polled_at', 'session'])
+      .orderBy('polled_at', 'desc')
+      .limit(1)
+      .executeTakeFirst();
+    if (!cycle) return res.json({ data: empty });
+
+    const [rows, ignition] = await Promise.all([
+      db.selectFrom('screener_results').selectAll().where('cycle_id', '=', cycle.id).execute(),
+      db.selectFrom('ignition_results').selectAll().where('cycle_id', '=', cycle.id)
+        .orderBy('runner_score', 'desc').execute(),
+    ]);
+    res.json({
+      data: {
+        ...empty,
+        cycle_id: cycle.id,
+        polled_at: cycle.polled_at,
+        session: cycle.session ?? empty.session,
+        rows,
+        ignition,
+      },
+    });
+  } catch {
+    res.json({ data: empty }); // never fail the first paint over a DB hiccup
   }
-  res.json({ data: p });
 });
 
 // GET /api/screener/tv-map — Nasdaq-listed tickers (from SEC's exchange
