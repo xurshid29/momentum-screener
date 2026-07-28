@@ -19,6 +19,7 @@ import { SwingTable } from './SwingTable';
 import { ContinuationTable } from './ContinuationTable';
 import { HistoryByDayPanel } from './HistoryByDayPanel';
 import { OutcomesPanel } from './OutcomesPanel';
+import { EmaReclaimPanel } from './EmaReclaimPanel';
 
 const { Text } = Typography;
 
@@ -48,7 +49,7 @@ const SESSION_COLOR: Record<TradingSession, string> = {
   closed: '#8c8c8c',
 };
 
-type ScreenerTab = 'momentum' | 'swing' | 'continuation' | 'history';
+type ScreenerTab = 'ema' | 'momentum' | 'swing' | 'continuation' | 'history';
 
 // First-appeared time in the operator's TZ (UTC+5), HH:MM, plus how long ago.
 // The "ago" is the staleness cue: a top-of-list +600% name first seen 9h ago is
@@ -94,7 +95,9 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
   const { selected, setSelected } = useSelection();
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [catalystModal, setCatalystModal] = useState<{ ticker: string; catalyst: CatalystInfo | null } | null>(null);
-  const [activeTab, setActiveTab] = useState<ScreenerTab>('momentum');
+  // The ↗ reclaim layer is the operator's primary instrument, so it opens
+  // here (2026-07-28) — it used to be squeezed into the left sidebar.
+  const [activeTab, setActiveTab] = useState<ScreenerTab>('ema');
   const { hidden, hide, unhide } = useHiddenTickers();
   const { momentumNewsOnly, setMomentumNewsOnly } = useLayout();
   const isWarned = useIsWarned();
@@ -409,6 +412,16 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
         tabBarStyle={{ margin: 0, padding: '0 8px', borderBottom: '1px solid #303030' }}
         tabBarExtraContent={extraControls}
         items={[
+          {
+            key: 'ema',
+            label: `↗ EMA${payload?.ema_crosses?.length ? ` · ${payload.ema_crosses.length}` : ''}`,
+            children: (
+              <EmaReclaimPanel
+                crosses={payload?.ema_crosses ?? []}
+                onOpenCatalyst={(ticker, catalyst) => setCatalystModal({ ticker, catalyst })}
+              />
+            ),
+          },
           {
             key: 'momentum',
             label: `Momentum · ${rows.length}`,

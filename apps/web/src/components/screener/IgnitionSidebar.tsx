@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Typography, Tooltip, Empty, Button, Popover, List } from 'antd';
 import { CloseOutlined, EyeInvisibleOutlined } from '@ant-design/icons';
-import type { CatalystInfo, CyclePayload, EmaCrossItem, IgnitionRow, NewsRadarItem, TickCatch } from '../../api/types';
+import type { CatalystInfo, CyclePayload, IgnitionRow, NewsRadarItem, TickCatch } from '../../api/types';
 import { useSelection } from '../../context/SelectionContext';
 import { useLayout } from '../../context/LayoutContext';
 import { useHiddenTickers } from '../../hooks/useHiddenTickers';
@@ -108,14 +108,9 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
   const tickCatches = (payload?.tick_catches ?? []).filter((t) => !hidden.has(t.ticker));
   // News radar — fresh catalysts on known runners that aren't moving yet.
   const newsRadar = (payload?.news_radar ?? []).filter((n) => !hidden.has(n.ticker));
-  // EMA-cross layers, grouped per timeframe (each tf gets its own section).
-  const emaCrosses = (payload?.ema_crosses ?? []).filter((x) => !hidden.has(x.ticker));
-  const emaGroups = (['5m', '15m', '1h', '4h', '1d'] as const)
-    .map((tf) => ({ tf, items: emaCrosses.filter((x) => x.tf === tf) }))
-    .filter((g) => g.items.length > 0);
-  // Hiding LIVE TICKS / the ignition list frees their space for the EMA
-  // sections (display-only — the server keeps computing and alerting).
-  const emaMaxHeight = hideIgnitionList ? undefined : '20%';
+  // The ↗ EMA reclaim layers moved OUT of this sidebar and into their own
+  // (default) screener tab on 2026-07-28 — see EmaReclaimPanel. Five
+  // timeframes never fit here, and it is the operator's primary instrument.
   const hiddenList = [...hidden].sort();
 
   const renderRow = (r: IgnitionRow) => (
@@ -181,7 +176,7 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
             📰
           </Button>
         </Tooltip>
-        <Tooltip title={hideIgnitionList ? 'Ignition list hidden (still computing server-side) — click to show' : 'Hide the ignition NEW/TOP list (display only — more room for EMA crosses)'}>
+        <Tooltip title={hideIgnitionList ? 'Ignition list hidden (still computing server-side) — click to show' : 'Hide the ignition NEW/TOP list (display only — more room for LIVE TICKS / radar)'}>
           <Button
             type="text"
             size="small"
@@ -271,32 +266,6 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
           ))}
         </div>
       )}
-
-      {/* EMA-cross layers — one section per timeframe (5M / 1H / 4H). With
-          the ignition list hidden they grow freely into the freed space. */}
-      {emaGroups.map((g) => (
-        <div
-          key={g.tf}
-          style={{
-            flex: '0 1 auto',
-            maxHeight: emaMaxHeight,
-            overflow: 'auto',
-            background: '#0f1a12',
-            borderBottom: '2px solid #237804',
-          }}
-        >
-          <SectionHeader label={`📈 EMA ${g.tf.toUpperCase()}`} count={g.items.length} color="#95de64" />
-          {g.items.map((x) => (
-            <EmaCrossRow
-              key={`${x.tf}|${x.signal}|${x.ticker}`}
-              item={x}
-              selected={x.ticker === selected}
-              onSelect={setSelected}
-              onOpenCatalyst={() => setCatalystModal({ ticker: x.ticker, catalyst: x.catalyst ?? null })}
-            />
-          ))}
-        </div>
-      ))}
 
       {hideIgnitionList ? (
         <div style={{ flex: '1 1 auto' }} />
@@ -402,97 +371,6 @@ function TickItem({ tc, selected, onSelect }: { tc: TickCatch; selected: boolean
         <Text style={{ color: (num(tc.change_pct) ?? 0) >= 0 ? '#52c41a' : '#ff4d4f', fontWeight: 600 }}>
           {fmtPct(tc.change_pct)}
         </Text>
-      </span>
-    </div>
-  );
-}
-
-// An EMA-cross row — a 10/65 crossover, either under its volume
-// volume observation (dim, "…observing") or volume-confirmed (bright green,
-// shows the expansion multiple). Click to chart it.
-function EmaCrossRow({ item, selected, onSelect, onOpenCatalyst }: {
-  item: EmaCrossItem;
-  selected: boolean;
-  onSelect: (t: string) => void;
-  onOpenCatalyst: () => void;
-}) {
-  const confirmed = item.status === 'confirmed';
-  const isHtf = item.tf !== '5m';
-  // Freshly confirmed — pulse the row so the payoff event catches the eye.
-  // Window scales with the timeframe (a 4h confirm stays "new" longer than
-  // a 5m one); same isFreshArrival convention as ignition rows.
-  const FRESH_CONFIRM_SEC = { '5m': 300, '15m': 600, '1h': 900, '4h': 1800, '1d': 3600 } as const;
-  const freshConfirm = confirmed && isFreshArrival(item.confirmed_at, FRESH_CONFIRM_SEC[item.tf]);
-  // "ago" always anchors on the CROSS bar so it reads like the TV chart the
-  // operator compares against; the ✅ multiple marks the confirmation itself.
-  const fmtAgo = (ms: number) => (ms < 60_000 ? `${Math.round(ms / 1000)}s`
-    : ms < 3_600_000 ? `${Math.round(ms / 60_000)}m`
-    : `${(ms / 3_600_000).toFixed(1)}h`);
-  const agoMs = Date.now() - new Date(item.cross_at).getTime();
-  const ago = fmtAgo(agoMs);
-  // Confirm age, shown alongside (2026-07-28). A row enters the panel when it
-  // CONFIRMS, but its label is anchored at the reclaim — so a late confirm
-  // (thin tape needing ~30 min to clear the $10k floor) appeared out of
-  // nowhere reading "reclaim 33m ago" and looked like a stale detection.
-  // Both ages together say exactly what happened: the geometry fired then,
-  // the volume evidence landed now.
-  const confirmAgoMs = confirmed && item.confirmed_at
-    ? Date.now() - new Date(item.confirmed_at).getTime()
-    : null;
-  // Only worth the extra text once the two diverge — a same-bar confirm
-  // would otherwise read "reclaim 1m ago · confirmed 1m ago".
-  const showConfirmAgo = confirmAgoMs != null && agoMs - confirmAgoMs > 120_000;
-  return (
-    <div
-      onClick={() => onSelect(item.ticker)}
-      className={freshConfirm ? 'ema-confirm-fresh' : undefined}
-      style={{
-        display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
-        padding: '4px 8px', borderBottom: '1px solid #162b1a', cursor: 'pointer',
-        borderLeft: `3px solid ${confirmed ? '#52c41a' : '#3f6600'}`,
-        background: selected ? '#1c3a22' : undefined,
-        opacity: confirmed ? 1 : 0.75,
-      }}
-    >
-      <span style={{ minWidth: 0 }}>
-        <span style={{ marginRight: 6, display: 'inline-flex', verticalAlign: 'middle' }}>
-          <TickerLinks ticker={item.ticker} />
-        </span>
-        <TickerLink
-          ticker={item.ticker}
-          onSelect={onSelect}
-          stopPropagation
-          style={{ color: confirmed ? '#95de64' : '#8c9b8c', fontWeight: 600, fontSize: 13 }}
-        />
-        {(item.catalyst || item.news_title) && (
-          <span style={{ marginLeft: 4, display: 'inline-flex', verticalAlign: 'middle' }}>
-            <CatalystBadge
-              score={item.catalyst?.score ?? null}
-              hype={item.catalyst?.hype}
-              reason={item.catalyst?.reason}
-              type={item.catalyst?.type}
-              onOpen={onOpenCatalyst}
-              size={12}
-            />
-          </span>
-        )}
-        {item.signal === 'reclaim' && (
-          <Tooltip title="Price-reclaim channel: price crossed up through BOTH EMAs (10 & 65) on one bar — the parallel trial, not the EMA crossover">
-            <span style={{ marginLeft: 4, fontSize: 10, color: '#69c0ff', fontWeight: 600, cursor: 'help' }}>↗</span>
-          </Tooltip>
-        )}
-        <span style={{ marginLeft: 6, fontSize: 10, color: freshConfirm ? '#95de64' : '#8c8c8c', fontWeight: freshConfirm ? 600 : undefined }}>
-          {confirmed ? `✅ ${Math.round(item.vol_ratio)}× vol` : isHtf ? (item.signal === 'reclaim' ? 'reclaim' : 'cross') : '… observing'} · {item.signal === 'reclaim' ? 'reclaim ' : isHtf ? '' : 'cross '}{ago} ago
-          {showConfirmAgo && ` · confirmed ${fmtAgo(confirmAgoMs!)} ago`}
-        </span>
-        {item.thin_tape && (
-          <Tooltip title="Thin tape on our feed — our EMAs may diverge from TV's here; verify the cross on the chart">
-            <span style={{ marginLeft: 4, fontSize: 10, cursor: 'help' }}>⚠️</span>
-          </Tooltip>
-        )}
-      </span>
-      <span style={{ flex: '0 0 auto' }}>
-        <Text type="secondary" style={{ fontSize: 11 }}>{fmtPrice(item.price)}</Text>
       </span>
     </div>
   );

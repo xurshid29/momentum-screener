@@ -360,12 +360,17 @@ const CROSS_DISPLAY_MS: Record<Exclude<EmaCrossTf, '5m'>, number> = {
   '4h': 6 * 3600 * 1000,
   '1d': 24 * 3600 * 1000,
 };
-const CROSS_DISPLAY_CAP: Record<EmaCrossTf, number> = { '5m': 10, '15m': 8, '1h': 8, '4h': 8, '1d': 6 };
+// Per-timeframe row caps. Raised 2026-07-28 when the reclaim layers moved
+// out of the cramped left sidebar into their own full-width tab (five lanes,
+// full panel height) — the old 10/8/8/8/6 were sized for ~200px of sidebar
+// and threw away rows the operator now has room to see. Each lane scrolls, so
+// these bound payload size rather than the viewport.
+const CROSS_DISPLAY_CAP: Record<EmaCrossTf, number> = { '5m': 40, '15m': 30, '1h': 30, '4h': 25, '1d': 20 };
 // Slots each tf holds back for rows still OBSERVING, so a busy stretch of
 // confirms can't hide the fresh reclaims (2026-07-28 — see the selection
 // block in the payload build). Unused reservations fall through to the other
 // status, so a quiet tf still fills its cap.
-const CROSS_MIN_OBSERVING: Record<EmaCrossTf, number> = { '5m': 4, '15m': 3, '1h': 3, '4h': 3, '1d': 2 };
+const CROSS_MIN_OBSERVING: Record<EmaCrossTf, number> = { '5m': 15, '15m': 12, '1h': 12, '4h': 10, '1d': 8 };
 
 function emaCrossTfOf(v: unknown): EmaCrossTf {
   return v === '1d' ? '1d' : v === '4h' ? '4h' : v === '1h' ? '1h' : v === '15m' ? '15m' : '5m';
