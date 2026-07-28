@@ -803,9 +803,23 @@ class TickFeedService {
     // wall-clock rule degenerates (2026-07-26, a Saturday: every series read
     // "stale" and 1,533 pointless 1h re-fetches queued, retrying every 2h)
     // — fresh then means "has Friday's close".
+    // Freshness has to scale with the layer's BAR INTERVAL (2026-07-28 —
+    // found while chasing a swap-thrashing droplet). A flat 12h threshold is
+    // right for 15m/1h but nonsense for the coarse grids: a 1d bucket only
+    // closes once per ET day and not at all across a weekend, so the newest
+    // legitimately-banked daily bar is ALWAYS >12h old — measured, all 1,507
+    // daily series read "stale", minimum age 71h. The 1d pass therefore
+    // re-fetched every known runner's 240 days of ohlcv-1h on EVERY sweep
+    // (~40 min, ~350k row upserts, metered Databento), and 4h misfired the
+    // same way overnight. 4× the interval clears the weekend gap for 1d
+    // (96h) and the overnight gap for 4h (16h), while leaving 15m/1h at the
+    // original 12h. Depth (minBars/deepDays) still governs under-converged
+    // series — this only stops re-fetching series that are already as fresh
+    // as they can possibly be.
+    const staleAfterMs = Math.max(12 * 3600_000, 4 * l.cfg.interval_sec * 1000);
     const freshEnoughMs = etDowNow() === 0 || etDowNow() === 6
-      ? lastSessionCloseMs() - 3600_000
-      : Date.now() - 12 * 3600_000;
+      ? Math.min(lastSessionCloseMs() - 3600_000, Date.now() - staleAfterMs)
+      : Date.now() - staleAfterMs;
     const targets: string[] = [];
     for (const tk of poller.getKnownRunners()) {
       const lastTry = l.attempted.get(tk) ?? 0;
