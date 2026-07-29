@@ -1,4 +1,4 @@
-# Session Handover — updated 2026-07-28
+# Session Handover — updated 2026-07-29
 
 A running handover so a fresh session can continue without re-deriving context.
 **Read `docs/web-dashboard.md` first** (the canonical status doc); this file is
@@ -136,6 +136,40 @@ Journal; **attribution join still the open payoff**) · 06-17 tick feed go-live.
 ---
 
 ## What shipped this session (newest first, all on prod unless noted)
+
+XFLOOR. **The GSUN escape + the 'no in-flight predictor' result
+(2026-07-29).** Two findings from the operator working the new EMA tab live.
+(1) **GSUN**: 5m reclaim nominated 09:52 at $0.191 on a **55.5×** volume
+bar — the strongest evidence the layer can see — but at $0.19/share that is
+$1,909, under the flat $10k confirm floor, so no confirm and no alert while
+it ran to $0.29 (+52%). The floor is price-blind and a sub-$1 name cannot
+clear it on a 5m bar however violent the burst. Measured before changing
+anything: confirms sit at p10 $10,313 / median $14,461 (the floor IS the
+gate) but the median NOMINATION bar is $1,161 (the floor earns its keep) —
+dropping it to $2,500 admits ~150/day vs ~86/day today. Shipped instead as a
+bounded escape: **ratio ≥30× AND ≥$1,500 AND sib_median ≥2× the dead-tape
+floor** (~7/day). The verify suite caught the flaw in a ratio-only version:
+a ratio is most inflated where the baseline is DUST (S26/S29's 10-share
+median makes any bar 300×), so it would have confirmed exactly the dead-tape
+trickles the operator chose to keep nominate-only (PBM). ⚠️ Dashboard +
+grading only, no Telegram (X4H precedent) — they are the confirms with
+`meta.notional < 10000`. Suite → 39 scenarios.
+(2) **No in-flight predictor exists.** A 'holding' tier shipped that morning
+lit 32 of 40 rows on the 5m lane; measuring properly showed why nothing
+could work: confirmed vs expired observations differ by only 1.4× on price
+(median +0.65% vs +0.44%), volume ratio is circular, and the confirm hazard
+is FLAT in age (~2%/bucket, 89.5% never confirm). Retiered as descriptive
+`◆ moving` (live price ≥3% off the reclaim, ~6% of rows). **Do not build
+another "about to confirm" tier** — it is the founding result restated.
+Also this session: the ↗ EMA tab (five lanes, default view, caps
+40/30/30/25/20), rows refreshed live with % since reclaim, `/latest` DB
+fallback so a reload paints in ~4s instead of ~39s, and the confirmed-first
+sort replaced (it was starving fresh reclaims out of view entirely — 11
+confirmed rows alive against a cap of 10 meant observing rows got ZERO
+slots).
+⚠️ **A mid-session deploy costs in-flight 5m observations** — GSUN's died
+5.7 min into its window when the API restarted. Reseeded 5m observing rows
+are dropped by design; prefer deploying outside 09:30-16:00 ET.
 
 XFIEE. **The FIEE miss — THREE stacked holes, all in the 5m layer's ability
 to see a trickle tape (2026-07-28, operator-caught).** FIEE ran +156%

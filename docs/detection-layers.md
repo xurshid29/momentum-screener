@@ -189,6 +189,20 @@ otherwise observe 6 bars — confirm on any bar ≥3× + close ≥ reclaim ×
 1.005 + ≥$10k; silent expire with peak telemetry otherwise; a confirm ends
 the symbol's day on that tf, an expire re-arms after the cooldown.
 
+**Exceptional-expansion escape** (2026-07-29, the GSUN case): the $10k floor
+is price-blind — GSUN's reclaim bar ran **55.5×** its normal volume but at
+$0.19/share that is $1,909, so it could not confirm while the name ran
++52%. A confirm now also passes on dollars at **ratio ≥30× AND ≥$1,500 AND
+sibling median ≥2× the dead-tape floor**. All three clauses matter: the
+median *nomination* bar is $1,161 so the floor earns its keep (dropping it
+to $2,500 would admit ~150/day against ~86/day of confirms), and the
+baseline guard exists because **a ratio is most inflated exactly where the
+baseline is dust** — without it the escape confirms the dead-tape trickles
+the operator deliberately left nominate-only (the PBM decision). Measured
+cost: ~7/day. ⚠️ **Dashboard + grading only, no Telegram** until graded (the
+X4H precedent); they are the confirms with `meta.notional < 10000`.
+Dials: `exceptional_vol_x`, `exceptional_min_notional`.
+
 **Pending shapes — evidence arrives later, the geometry is not consumed:**
 1. **Thin sibling window** (AMIX): real-dollar reclaim over a <50-share
    median pends; a vertical ignition never re-dips to re-arm, so waiting
@@ -237,6 +251,18 @@ any bar ≥20× off the series median → discard, Yahoo fallback).
   call: `ema_slow: null` = a warmup hole, not a blind spot.
 - **Dead-tape ⚠️ nominations** (PBM): can nominate, can never confirm
   ($10k unreachable); operator chose to keep them (no sib×price floor).
+
+**⚠️ There is no in-flight predictor of the confirm** (measured 2026-07-29,
+after a display tier was shipped implying otherwise). On 5m over 40h:
+confirmed observations moved a median +0.65% from the reclaim vs +0.44% for
+expired ones (65% vs 47% clearing 0.5%) — a 1.4× lift that does not widen at
+a higher bar; volume ratio is circular (a confirm requires ≥3×); and the
+confirm hazard is FLAT in age (~2%/bucket, **89.5% of nominations never
+confirm**). This is the layer's founding result restated — the geometry
+nominates, the burst is genuinely unpredictable until it arrives. Any future
+"about to confirm" tier will fail the same way; the dashboard's `◆ moving`
+tier is deliberately DESCRIPTIVE (live price ≥3% off the reclaim, ~6% of
+rows) and claims nothing about what follows.
 
 **Surfacing.** One sidebar section per timeframe (↗ tag, "reclaim Xm ago"
 anchored at the arming bar, thin-tape ⚠️ when sibling notional <$5k,
