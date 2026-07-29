@@ -327,10 +327,21 @@ export interface EmaCrossItem {
   // price-reclaims-both-EMAs channel (2026-07-24, parallel A/B trial —
   // same volume-confirm rules, separate funnel, graded via meta.signal).
   signal: 'cross' | 'reclaim';
-  status: 'observing' | 'confirmed';
+  // 'building' (2026-07-29) is an in-flight observation whose PRICE has
+  // cleared the confirm gate (≥ reclaim × 1.005) — it is holding above the
+  // reclaim and waiting only on volume dollars. Measured on 30h of expires:
+  // 88% of dead observations still hit the 3× volume ratio, so volume
+  // separates nothing, but their median peak was +0.42% above the reclaim
+  // and only 46% ever cleared the price gate. Price is the discriminator,
+  // so this tier splits the long observing list roughly in half.
+  status: 'observing' | 'building' | 'confirmed';
   price: number;
   cross_price: number;
   vol_ratio: number;      // latest bar volume / sibling median
+  // Live, refreshed every cycle while observing (null once confirmed or when
+  // the tracker has no live bucket): price move since the reclaim bar, so a
+  // row says whether the name is going anywhere without opening a chart.
+  pct_since_reclaim?: number | null;
   cross_at: string;
   confirmed_at: string | null;
   // Thin-tape honesty marker (2026-07-22, the SKYQ divergence): true when
@@ -2426,10 +2437,31 @@ class PollerService {
         this.emaCrosses.delete(t);
         continue;
       }
+      // Refresh in-flight observations from the tracker (2026-07-29). A row
+      // used to be frozen at its nomination, so a name that reclaimed and
+      // then went nowhere looked identical to one pushing higher and the
+      // operator had to open each chart. Live price + the % since the
+      // reclaim answer it in the row; clearing the confirm's PRICE gate
+      // promotes the row to 'building' — measured as the discriminator (of
+      // dead observations, 88% still hit the 3× volume ratio but only 46%
+      // ever cleared this gate).
+      let status = xc.status;
+      let price = xc.price;
+      let ratio = xc.vol_ratio;
+      let pctSince: number | null = null;
+      if (status !== 'confirmed') {
+        const p = this.reclaimProgressFn?.(xc.ticker, xc.tf) ?? null;
+        if (p) {
+          price = p.cur_price;
+          pctSince = +p.pct_since.toFixed(2);
+          if (p.ratio > 0) ratio = p.ratio;
+          if (p.price_gate_met) status = 'building';
+        }
+      }
       emaCrossList.push({
-        ticker: xc.ticker, tf: xc.tf, signal: xc.signal, status: xc.status, price: xc.price, cross_price: xc.cross_price,
-        vol_ratio: xc.vol_ratio, cross_at: xc.cross_at, confirmed_at: xc.confirmed_at,
-        thin_tape: xc.thin_tape,
+        ticker: xc.ticker, tf: xc.tf, signal: xc.signal, status, price, cross_price: xc.cross_price,
+        vol_ratio: ratio, cross_at: xc.cross_at, confirmed_at: xc.confirmed_at,
+        thin_tape: xc.thin_tape, pct_since_reclaim: pctSince,
         news_title: xc.news_title, news_url: xc.news_url,
         news_published_at: xc.news_published_at, catalyst: xc.catalyst,
       });
@@ -2457,7 +2489,11 @@ class PollerService {
       const cap = CROSS_DISPLAY_CAP[tf];
       const inTf = emaCrossList.filter((x) => x.tf === tf);
       const confirmed = inTf.filter((x) => x.status === 'confirmed').sort(byRecency);
-      const observing = inTf.filter((x) => x.status !== 'confirmed').sort(byRecency);
+      // In-flight rows: 'building' ones (price holding above the reclaim)
+      // take the reserved slots ahead of the dead majority when the lane is
+      // over its cap — they are the ones worth a look.
+      const observing = inTf.filter((x) => x.status !== 'confirmed').sort((a, b) =>
+        (a.status === 'building' ? 0 : 1) - (b.status === 'building' ? 0 : 1) || byRecency(a, b));
       // Reserve for whichever side is short; the other takes the remainder,
       // so a quiet tf still fills its cap from a single status.
       const obsFloor = Math.min(observing.length, CROSS_MIN_OBSERVING[tf]);
@@ -2978,6 +3014,22 @@ class PollerService {
   // payload build — a Finviz screen picking the name up). Both tiers push to
   // Telegram + dashboard, deduped once per ticker per ET day PER TIER, so a
   // real runner gives exactly two pings: early flag, then confirmation.
+  // The tick feed registers its reclaim-progress lookup here at startup
+  // (2026-07-29). tickfeed already imports poller, so poller cannot import
+  // it back — same inversion the tick events use. Null until the feed
+  // starts, or whenever TICKFEED_ENABLED is off: rows then simply stay at
+  // their nomination values, as before.
+  private reclaimProgressFn:
+    | ((ticker: string, tf: string) => {
+        cross_price: number; cur_price: number; pct_since: number;
+        ratio: number; notional: number; price_gate_met: boolean;
+      } | null)
+    | null = null;
+
+  setReclaimProgressSource(fn: PollerService['reclaimProgressFn']): void {
+    this.reclaimProgressFn = fn;
+  }
+
   onTickEvent(e: TickEvent): void {
     const nowMs = Date.now();
     const existing = this.tickCatches.get(e.ticker);

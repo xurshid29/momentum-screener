@@ -544,6 +544,38 @@ export class EmaCrossTracker {
     }
   }
 
+  // Live progress of an in-flight RECLAIM observation — how far the symbol
+  // has come toward the three confirm gates (2026-07-29). The dashboard's
+  // observing list is long and undifferentiated: a row is set at nomination
+  // and never updated, so a name that reclaimed and went nowhere looks
+  // identical to one pushing higher, and the operator had to open each one.
+  //
+  // Measured on 30h of expires (the reason this is priced, not volumed):
+  // 88% of DEAD observations still hit the 3x volume ratio at some point, so
+  // volume separates nothing — but their median peak price was just +0.42%
+  // above the reclaim, and only 46% ever cleared the +0.5% price gate. Price
+  // holding above the reclaim is the discriminator.
+  reclaimProgress(ticker: string): {
+    cross_price: number; cur_price: number; pct_since: number;
+    ratio: number; notional: number; price_gate_met: boolean;
+  } | null {
+    const st = this.state.get(ticker);
+    if (!st || !st.watchR) return null;
+    const cur = st.bucketClose;
+    const crossPrice = st.watchR.crossPrice;
+    if (!(cur > 0) || !(crossPrice > 0)) return null;
+    const sib = st.watchR.sibMedian;
+    return {
+      cross_price: crossPrice,
+      cur_price: cur,
+      pct_since: (cur / crossPrice - 1) * 100,
+      ratio: sib > 0 ? +(st.bucketVol / sib).toFixed(1) : 0,
+      notional: Math.round(cur * st.bucketVol),
+      // The same gate processClosedBar/intrabarCheck apply for a confirm.
+      price_gate_met: cur >= crossPrice * (1 + this.cfg.confirm_price_ext),
+    };
+  }
+
   // Read-only debug view of a symbol's live EMA state — powers the
   // /ema-debug endpoint so the operator can compare our EMAs against the
   // same symbol's TV chart whenever a detection looks off (the WOK class).

@@ -497,6 +497,10 @@ class TickFeedService {
     }
     if (this.running) return;
     this.running = true;
+    // Let the poller refresh in-flight observation rows from tracker state
+    // (live price / % since the reclaim / the 'building' promotion). Passed
+    // as a callback because tickfeed imports poller, not the reverse.
+    poller.setReclaimProgressSource((ticker, tf) => this.reclaimProgress(ticker, tf));
     console.log('[tickfeed] starting');
     // Seed the EMA-cross tracker from persisted bars BEFORE the sidecar
     // starts streaming, so live ticks can't interleave with the replay.
@@ -551,6 +555,15 @@ class TickFeedService {
     for (const l of this.htfLayers) {
       await this.seedTrackerFromTable(l.table, l.retentionDays * 86_400_000, l.tracker, l.cfg.tf);
     }
+  }
+
+  // Live progress of an in-flight reclaim observation on one timeframe —
+  // lets the poller refresh observing rows each cycle instead of leaving
+  // them frozen at their nomination (see EmaCrossTracker.reclaimProgress).
+  reclaimProgress(ticker: string, tf: string): ReturnType<EmaCrossTracker['reclaimProgress']> {
+    if (tf === '5m') return this.emaCross.reclaimProgress(ticker);
+    const layer = this.htfLayers.find((l) => l.cfg.tf === tf);
+    return layer ? layer.tracker.reclaimProgress(ticker) : null;
   }
 
   // Live EMA state per timeframe for one symbol — the /ema-debug endpoint's

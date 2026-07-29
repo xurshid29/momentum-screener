@@ -348,10 +348,14 @@ export interface EmaCrossItem {
   // Nomination channel: the EMA10×EMA65 crossover, or the price-reclaims-
   // both-EMAs channel (↗, parallel A/B trial since 2026-07-24).
   signal: 'cross' | 'reclaim';
-  status: 'observing' | 'confirmed';
+  // 'building' = observing AND price is holding above the reclaim (cleared
+  // the confirm's price gate); waiting only on volume dollars.
+  status: 'observing' | 'building' | 'confirmed';
   price: number;
   cross_price: number;
   vol_ratio: number;
+  // Live % move since the reclaim bar while observing (null once confirmed).
+  pct_since_reclaim?: number | null;
   cross_at: string;
   confirmed_at: string | null;
   // Our feed sees a sliver of this name's tape (sibling-median notional at

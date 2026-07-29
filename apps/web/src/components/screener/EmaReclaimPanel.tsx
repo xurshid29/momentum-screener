@@ -33,6 +33,12 @@ export function EmaCrossRow({ item, selected, onSelect, onOpenCatalyst }: {
   onOpenCatalyst: () => void;
 }) {
   const confirmed = item.status === 'confirmed';
+  // 'building' — still observing, but price has cleared the confirm's price
+  // gate, so it is holding above the reclaim and waiting only on volume
+  // dollars. The triage tier: dead observations overwhelmingly never get
+  // here (only 46% of them ever cleared this gate), so an amber row is worth
+  // a look and a dim one usually is not.
+  const building = item.status === 'building';
   const isHtf = item.tf !== '5m';
   // Freshly confirmed — pulse the row so the payoff event catches the eye.
   // Window scales with the timeframe (a 4h confirm stays "new" longer than
@@ -65,9 +71,9 @@ export function EmaCrossRow({ item, selected, onSelect, onOpenCatalyst }: {
       style={{
         display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
         padding: '4px 8px', borderBottom: '1px solid #162b1a', cursor: 'pointer',
-        borderLeft: `3px solid ${confirmed ? '#52c41a' : '#3f6600'}`,
+        borderLeft: `3px solid ${confirmed ? '#52c41a' : building ? '#d48806' : '#3f6600'}`,
         background: selected ? '#1c3a22' : undefined,
-        opacity: confirmed ? 1 : 0.75,
+        opacity: confirmed || building ? 1 : 0.7,
       }}
     >
       <span style={{ minWidth: 0 }}>
@@ -78,7 +84,7 @@ export function EmaCrossRow({ item, selected, onSelect, onOpenCatalyst }: {
           ticker={item.ticker}
           onSelect={onSelect}
           stopPropagation
-          style={{ color: confirmed ? '#95de64' : '#8c9b8c', fontWeight: 600, fontSize: 13 }}
+          style={{ color: confirmed ? '#95de64' : building ? '#ffc53d' : '#8c9b8c', fontWeight: 600, fontSize: 13 }}
         />
         {(item.catalyst || item.news_title) && (
           <span style={{ marginLeft: 4, display: 'inline-flex', verticalAlign: 'middle' }}>
@@ -97,10 +103,24 @@ export function EmaCrossRow({ item, selected, onSelect, onOpenCatalyst }: {
             <span style={{ marginLeft: 4, fontSize: 10, color: '#69c0ff', fontWeight: 600, cursor: 'help' }}>↗</span>
           </Tooltip>
         )}
-        <span style={{ marginLeft: 6, fontSize: 10, color: freshConfirm ? '#95de64' : '#8c8c8c', fontWeight: freshConfirm ? 600 : undefined }}>
-          {confirmed ? `✅ ${Math.round(item.vol_ratio)}× vol` : isHtf ? (item.signal === 'reclaim' ? 'reclaim' : 'cross') : '… observing'} · {item.signal === 'reclaim' ? 'reclaim ' : isHtf ? '' : 'cross '}{ago} ago
+        <span style={{ marginLeft: 6, fontSize: 10, color: freshConfirm ? '#95de64' : building ? '#ffc53d' : '#8c8c8c', fontWeight: freshConfirm || building ? 600 : undefined }}>
+          {confirmed
+            ? `✅ ${Math.round(item.vol_ratio)}× vol`
+            : building
+              ? `◆ holding · ${Math.round(item.vol_ratio)}×`
+              : isHtf ? (item.signal === 'reclaim' ? 'reclaim' : 'cross') : '… observing'} · {item.signal === 'reclaim' ? 'reclaim ' : isHtf ? '' : 'cross '}{ago} ago
           {showConfirmAgo && ` · confirmed ${fmtAgo(confirmAgoMs!)} ago`}
         </span>
+        {!confirmed && item.pct_since_reclaim != null && (
+          <Tooltip title="Price move since the reclaim bar. Dead observations sit near 0% — the median expired one only ever reached +0.4%.">
+            <span style={{
+              marginLeft: 5, fontSize: 10, cursor: 'help',
+              color: item.pct_since_reclaim >= 0.5 ? '#ffc53d' : item.pct_since_reclaim < 0 ? '#a8564f' : '#6b756b',
+            }}>
+              {item.pct_since_reclaim >= 0 ? '+' : ''}{item.pct_since_reclaim.toFixed(1)}%
+            </span>
+          </Tooltip>
+        )}
         {item.thin_tape && (
           <Tooltip title="Thin tape on our feed — our EMAs may diverge from TV's here; verify the reclaim on the chart">
             <span style={{ marginLeft: 4, fontSize: 10, cursor: 'help' }}>⚠️</span>
@@ -134,6 +154,7 @@ export function EmaReclaimPanel({ crosses, onOpenCatalyst }: {
         {TF_LANES.map((tf) => {
           const items = visible.filter((x) => x.tf === tf);
           const confirmed = items.filter((x) => x.status === 'confirmed').length;
+          const building = items.filter((x) => x.status === 'building').length;
           return (
             <div
               key={tf}
@@ -149,9 +170,11 @@ export function EmaReclaimPanel({ crosses, onOpenCatalyst }: {
                 }}
               >
                 <Text style={{ color: '#95de64', fontSize: 11, fontWeight: 600 }}>📈 {TF_LABEL[tf]}</Text>
-                <Tooltip title={`${confirmed} volume-confirmed · ${items.length - confirmed} still observing`}>
+                <Tooltip title={`${confirmed} volume-confirmed · ${building} holding above the reclaim · ${items.length - confirmed - building} reclaimed but flat`}>
                   <Text type="secondary" style={{ fontSize: 10, cursor: 'help' }}>
-                    {confirmed}/{items.length}
+                    <span style={{ color: '#95de64' }}>{confirmed}</span>
+                    {building > 0 && <span style={{ color: '#ffc53d' }}> ◆{building}</span>}
+                    <span> /{items.length}</span>
                   </Text>
                 </Tooltip>
               </div>
