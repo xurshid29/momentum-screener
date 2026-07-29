@@ -1,4 +1,4 @@
-import { Typography, Tooltip, Empty } from 'antd';
+import { Typography, Tooltip } from 'antd';
 import type { CatalystInfo, EmaCrossItem } from '../../api/types';
 import { useSelection } from '../../context/SelectionContext';
 import { useHiddenTickers } from '../../hooks/useHiddenTickers';
@@ -122,63 +122,75 @@ export function EmaReclaimPanel({ crosses, onOpenCatalyst }: {
   const { hidden } = useHiddenTickers();
   const visible = crosses.filter((x) => !hidden.has(x.ticker));
 
-  if (visible.length === 0) {
-    return (
-      <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <Empty
-          image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description={<Text type="secondary">No reclaims yet — the layer arms on a close at/below both EMAs</Text>}
-        />
-      </div>
-    );
-  }
-
+  // The lanes always render, even with nothing in them (2026-07-29). An
+  // all-empty panel is NORMAL and frequent — the map is cleared at the
+  // midnight-ET roll and 5m rows age out in 30-45 min, so every overnight
+  // and quiet stretch is empty. Collapsing the whole tab to one centered
+  // message threw away the structure and read like something was broken;
+  // the standing five-lane skeleton says "armed and watching, nothing yet".
   return (
-    <div style={{ height: '100%', display: 'flex', gap: 1, overflow: 'hidden', background: '#237804' }}>
-      {TF_LANES.map((tf) => {
-        const items = visible.filter((x) => x.tf === tf);
-        const confirmed = items.filter((x) => x.status === 'confirmed').length;
-        return (
-          <div
-            key={tf}
-            style={{
-              flex: '1 1 0', minWidth: 0, display: 'flex', flexDirection: 'column',
-              background: '#0f1a12', overflow: 'hidden',
-            }}
-          >
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div style={{ flex: '1 1 auto', display: 'flex', gap: 1, overflow: 'hidden', background: '#237804', minHeight: 0 }}>
+        {TF_LANES.map((tf) => {
+          const items = visible.filter((x) => x.tf === tf);
+          const confirmed = items.filter((x) => x.status === 'confirmed').length;
+          return (
             <div
+              key={tf}
               style={{
-                padding: '3px 8px', background: '#12240f', borderBottom: '1px solid #237804',
-                display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flex: '0 0 auto',
+                flex: '1 1 0', minWidth: 0, display: 'flex', flexDirection: 'column',
+                background: '#0f1a12', overflow: 'hidden',
               }}
             >
-              <Text style={{ color: '#95de64', fontSize: 11, fontWeight: 600 }}>📈 {TF_LABEL[tf]}</Text>
-              <Tooltip title={`${confirmed} volume-confirmed · ${items.length - confirmed} still observing`}>
-                <Text type="secondary" style={{ fontSize: 10, cursor: 'help' }}>
-                  {confirmed}/{items.length}
-                </Text>
-              </Tooltip>
+              <div
+                style={{
+                  padding: '3px 8px', background: '#12240f', borderBottom: '1px solid #237804',
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flex: '0 0 auto',
+                }}
+              >
+                <Text style={{ color: '#95de64', fontSize: 11, fontWeight: 600 }}>📈 {TF_LABEL[tf]}</Text>
+                <Tooltip title={`${confirmed} volume-confirmed · ${items.length - confirmed} still observing`}>
+                  <Text type="secondary" style={{ fontSize: 10, cursor: 'help' }}>
+                    {confirmed}/{items.length}
+                  </Text>
+                </Tooltip>
+              </div>
+              <div style={{ flex: '1 1 auto', overflow: 'auto' }}>
+                {items.length === 0 ? (
+                  <div style={{ padding: '14px 8px', textAlign: 'center' }}>
+                    <Text type="secondary" style={{ fontSize: 10, color: '#3f4a40' }}>
+                      no reclaims
+                    </Text>
+                  </div>
+                ) : (
+                  items.map((x) => (
+                    <EmaCrossRow
+                      key={`${x.tf}|${x.signal}|${x.ticker}`}
+                      item={x}
+                      selected={x.ticker === selected}
+                      onSelect={setSelected}
+                      onOpenCatalyst={() => onOpenCatalyst(x.ticker, x.catalyst ?? null)}
+                    />
+                  ))
+                )}
+              </div>
             </div>
-            <div style={{ flex: '1 1 auto', overflow: 'auto' }}>
-              {items.length === 0 ? (
-                <div style={{ padding: '8px', textAlign: 'center' }}>
-                  <Text type="secondary" style={{ fontSize: 10 }}>—</Text>
-                </div>
-              ) : (
-                items.map((x) => (
-                  <EmaCrossRow
-                    key={`${x.tf}|${x.signal}|${x.ticker}`}
-                    item={x}
-                    selected={x.ticker === selected}
-                    onSelect={setSelected}
-                    onOpenCatalyst={() => onOpenCatalyst(x.ticker, x.catalyst ?? null)}
-                  />
-                ))
-              )}
-            </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
+      {visible.length === 0 && (
+        <div
+          style={{
+            flex: '0 0 auto', padding: '5px 10px', background: '#0f1a12',
+            borderTop: '1px solid #237804', textAlign: 'center',
+          }}
+        >
+          <Text type="secondary" style={{ fontSize: 11 }}>
+            Armed — waiting for a bar to close at/below both EMAs, then clear them on volume.
+            Rows clear at the midnight-ET roll, so overnight and quiet sessions read empty.
+          </Text>
+        </div>
+      )}
     </div>
   );
 }
