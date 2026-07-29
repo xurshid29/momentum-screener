@@ -327,14 +327,18 @@ export interface EmaCrossItem {
   // price-reclaims-both-EMAs channel (2026-07-24, parallel A/B trial —
   // same volume-confirm rules, separate funnel, graded via meta.signal).
   signal: 'cross' | 'reclaim';
-  // 'building' (2026-07-29) is an in-flight observation whose PRICE has
-  // cleared the confirm gate (≥ reclaim × 1.005) — it is holding above the
-  // reclaim and waiting only on volume dollars. Measured on 30h of expires:
-  // 88% of dead observations still hit the 3× volume ratio, so volume
-  // separates nothing, but their median peak was +0.42% above the reclaim
-  // and only 46% ever cleared the price gate. Price is the discriminator,
-  // so this tier splits the long observing list roughly in half.
-  status: 'observing' | 'building' | 'confirmed';
+  // 'moving' (2026-07-29) = an in-flight reclaim that is ACTUALLY MOVING
+  // right now — live price ≥ CROSS_MOVING_PCT above the reclaim.
+  //
+  // ⚠️ Deliberately NOT a prediction of the confirm. Measured over 40h on
+  // 5m: confirmed observations moved a median +0.65% vs +0.44% for expired
+  // ones (65% vs 47% clearing 0.5%) — a 1.4× lift that does not survive a
+  // higher bar, volume ratio is circular (a confirm requires it), and the
+  // confirm hazard is FLAT in age (~2% per bucket, 89.5% never confirm).
+  // Nothing in-flight forecasts the burst, which is the layer's founding
+  // result restated. So this tier answers "is this one going anywhere yet?",
+  // which is what the operator scans for — not "will this confirm".
+  status: 'observing' | 'moving' | 'confirmed';
   price: number;
   cross_price: number;
   vol_ratio: number;      // latest bar volume / sibling median
@@ -382,6 +386,12 @@ const CROSS_DISPLAY_CAP: Record<EmaCrossTf, number> = { '5m': 40, '15m': 30, '1h
 // block in the payload build). Unused reservations fall through to the other
 // status, so a quiet tf still fills its cap.
 const CROSS_MIN_OBSERVING: Record<EmaCrossTf, number> = { '5m': 15, '15m': 12, '1h': 12, '4h': 10, '1d': 8 };
+// % above the reclaim price at which an in-flight row is marked 'moving'.
+// 3% (not the confirm rule's 0.5%) because the point is rarity: at 0.5% the
+// tier lit 32 of 40 rows on the 5m lane — 80% amber is no triage at all.
+// Measured on 40h of 5m observations, ~11-17% of rows ever reach +3%, so a
+// 40-row lane surfaces ~4-6. Raise it to see fewer.
+const CROSS_MOVING_PCT = 3;
 
 function emaCrossTfOf(v: unknown): EmaCrossTf {
   return v === '1d' ? '1d' : v === '4h' ? '4h' : v === '1h' ? '1h' : v === '15m' ? '15m' : '5m';
@@ -2455,7 +2465,7 @@ class PollerService {
           price = p.cur_price;
           pctSince = +p.pct_since.toFixed(2);
           if (p.ratio > 0) ratio = p.ratio;
-          if (p.price_gate_met) status = 'building';
+          if (pctSince >= CROSS_MOVING_PCT) status = 'moving';
         }
       }
       emaCrossList.push({
@@ -2489,11 +2499,10 @@ class PollerService {
       const cap = CROSS_DISPLAY_CAP[tf];
       const inTf = emaCrossList.filter((x) => x.tf === tf);
       const confirmed = inTf.filter((x) => x.status === 'confirmed').sort(byRecency);
-      // In-flight rows: 'building' ones (price holding above the reclaim)
-      // take the reserved slots ahead of the dead majority when the lane is
-      // over its cap — they are the ones worth a look.
+      // In-flight rows: the ones actually moving take the reserved slots
+      // ahead of the flat majority when the lane is over its cap.
       const observing = inTf.filter((x) => x.status !== 'confirmed').sort((a, b) =>
-        (a.status === 'building' ? 0 : 1) - (b.status === 'building' ? 0 : 1) || byRecency(a, b));
+        (a.status === 'moving' ? 0 : 1) - (b.status === 'moving' ? 0 : 1) || byRecency(a, b));
       // Reserve for whichever side is short; the other takes the remainder,
       // so a quiet tf still fills its cap from a single status.
       const obsFloor = Math.min(observing.length, CROSS_MIN_OBSERVING[tf]);
