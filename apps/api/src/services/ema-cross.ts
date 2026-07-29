@@ -555,13 +555,30 @@ export class EmaCrossTracker {
   // volume separates nothing — but their median peak price was just +0.42%
   // above the reclaim, and only 46% ever cleared the +0.5% price gate. Price
   // holding above the reclaim is the discriminator.
-  reclaimProgress(ticker: string): {
+  // `fallbackCrossPrice` covers rows the tracker no longer has an observation
+  // for — chiefly HTF rows reseeded from tier_events after a deploy, whose
+  // tracker-side observation died with the old process but whose display row
+  // survives its window (up to 24h on 1d). Without it those rows could never
+  // show a live move or reach 'building', which is exactly when the operator
+  // is looking. Volume evidence is genuinely unknown there, so it reports 0.
+  reclaimProgress(ticker: string, fallbackCrossPrice?: number): {
     cross_price: number; cur_price: number; pct_since: number;
     ratio: number; notional: number; price_gate_met: boolean;
   } | null {
     const st = this.state.get(ticker);
-    if (!st || !st.watchR) return null;
+    if (!st) return null;
     const cur = st.bucketClose;
+    if (!st.watchR) {
+      if (!(cur > 0) || !(fallbackCrossPrice && fallbackCrossPrice > 0)) return null;
+      return {
+        cross_price: fallbackCrossPrice,
+        cur_price: cur,
+        pct_since: (cur / fallbackCrossPrice - 1) * 100,
+        ratio: 0,
+        notional: 0,
+        price_gate_met: cur >= fallbackCrossPrice * (1 + this.cfg.confirm_price_ext),
+      };
+    }
     const crossPrice = st.watchR.crossPrice;
     if (!(cur > 0) || !(crossPrice > 0)) return null;
     const sib = st.watchR.sibMedian;

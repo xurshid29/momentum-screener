@@ -2450,7 +2450,7 @@ class PollerService {
       let ratio = xc.vol_ratio;
       let pctSince: number | null = null;
       if (status !== 'confirmed') {
-        const p = this.reclaimProgressFn?.(xc.ticker, xc.tf) ?? null;
+        const p = this.reclaimProgressFn?.(xc.ticker, xc.tf, xc.cross_price) ?? null;
         if (p) {
           price = p.cur_price;
           pctSince = +p.pct_since.toFixed(2);
@@ -3020,7 +3020,7 @@ class PollerService {
   // starts, or whenever TICKFEED_ENABLED is off: rows then simply stay at
   // their nomination values, as before.
   private reclaimProgressFn:
-    | ((ticker: string, tf: string) => {
+    | ((ticker: string, tf: string, fallbackCrossPrice?: number) => {
         cross_price: number; cur_price: number; pct_since: number;
         ratio: number; notional: number; price_gate_met: boolean;
       } | null)
