@@ -120,6 +120,24 @@ export interface EmaCrossConfig {
   // and the volume-confirm funnel is unchanged, so nomination widens while
   // the alert surface stays gated. 0 = the old same-bar semantics.
   staged_arm_bars: number;
+  // Exceptional-expansion escape from the flat dollar floor (2026-07-29, the
+  // GSUN case). `confirm_min_notional` is price-blind: GSUN's reclaim bar ran
+  // 55.5× its normal volume — the strongest evidence this layer can see — but
+  // at $0.19/share that is only $1,909, so it could not confirm and never
+  // alerted, while the name ran to $0.29. A sub-$1 stock essentially cannot
+  // clear a flat $10k on a 5m bar however violent the burst.
+  //
+  // Measured before choosing the numbers (5m, 48h): confirms sit at p10
+  // $10,313 / median $14,461, so the floor is the binding gate, while the
+  // median NOMINATION bar is $1,161 — the floor is doing real work. Simply
+  // lowering it to $2,500 would admit 299 more events per 48h (~150/day)
+  // against ~86/day of confirms today: it would triple the rate and destroy
+  // the signal. Gating on an extraordinary ratio instead is bounded — ≥20×
+  // adds ~13/day, ≥30× ~7/day, ≥50× ~4/day. 30× is the shipped setting: it
+  // cannot be dead-tape drift, and GSUN clears it comfortably.
+  // 0 disables the exception entirely.
+  exceptional_vol_x: number;
+  exceptional_min_notional: number;
   // The EMA10×EMA65 crossover channel's kill switch (2026-07-26, operator's
   // call): the price-reclaim channel replaced it as the sole nomination
   // signal after three days of watching both live — crosses fired later and
@@ -155,6 +173,8 @@ export const EMA_CROSS: EmaCrossConfig = {
   // ⚠️ Feed-visible (EQUS.MINI) dollars, first guess — recalibrate from the
   // notional now recorded in tier_events meta.
   confirm_min_notional: 10_000,
+  exceptional_vol_x: 30,        // …unless the burst is this extreme (the GSUN escape)
+  exceptional_min_notional: 1_500,
   nominate_min_notional: 500,
   junk_outlier_pct: 0.05,
   stale_gap_bars: 3,
@@ -194,6 +214,8 @@ export const EMA_CROSS_15M: EmaCrossConfig = {
   confirm_price_ext: 0.005,
   instant_vol_x: 5,
   confirm_min_notional: 10_000,
+  exceptional_vol_x: 30,        // …unless the burst is this extreme (the GSUN escape)
+  exceptional_min_notional: 1_500,
   nominate_min_notional: 500,
   junk_outlier_pct: 0.05,
   stale_gap_bars: 3,
@@ -222,6 +244,8 @@ export const EMA_CROSS_1H: EmaCrossConfig = {
   confirm_price_ext: 0.005,
   instant_vol_x: 5,
   confirm_min_notional: 10_000,
+  exceptional_vol_x: 30,        // …unless the burst is this extreme (the GSUN escape)
+  exceptional_min_notional: 1_500,
   nominate_min_notional: 500,
   junk_outlier_pct: 0.05,
   stale_gap_bars: 3,
@@ -252,6 +276,8 @@ export const EMA_CROSS_4H: EmaCrossConfig = {
   confirm_price_ext: 0.005,
   instant_vol_x: 5,
   confirm_min_notional: 10_000,
+  exceptional_vol_x: 30,        // …unless the burst is this extreme (the GSUN escape)
+  exceptional_min_notional: 1_500,
   nominate_min_notional: 500,
   junk_outlier_pct: 0.05,
   stale_gap_bars: 3,
@@ -285,6 +311,8 @@ export const EMA_CROSS_1D: EmaCrossConfig = {
   confirm_price_ext: 0.005,
   instant_vol_x: 5,
   confirm_min_notional: 10_000,
+  exceptional_vol_x: 30,        // …unless the burst is this extreme (the GSUN escape)
+  exceptional_min_notional: 1_500,
   nominate_min_notional: 500,
   junk_outlier_pct: 0.05,
   stale_gap_bars: 3,
@@ -542,6 +570,27 @@ export class EmaCrossTracker {
       st.pending = { crossTs: flippedAt, crossPrice: P };
       console.log(`[ema-cross] cross during quiet gap — pending at carry $${P} ${ticker} (${this.cfg.tf})`);
     }
+  }
+
+  // Does this bar carry enough DOLLARS to confirm? Normally the flat floor;
+  // otherwise the exceptional-expansion escape (see exceptional_vol_x — the
+  // GSUN case, where 55× on a $0.19 stock was only $1.9k). Grading segments
+  // the two populations on meta.notional: an exception confirm is by
+  // definition below confirm_min_notional.
+  private confirmDollarsOk(ratio: number, notional: number, sibMedian: number): boolean {
+    if (notional >= this.cfg.confirm_min_notional) return true;
+    // The baseline guard is load-bearing, and the verify suite is what found
+    // it: a ratio is only "extraordinary" if measured against a real window.
+    // On a dust baseline it is meaningless — S26/S29's 10-share sibling
+    // median makes any live bar 300×, so a ratio-only escape would confirm
+    // exactly the dead-tape trickles the operator deliberately chose to leave
+    // as nominate-only (the PBM decision). Requiring 2× the dead-tape floor
+    // keeps those out while admitting GSUN, whose 180-share median is thin
+    // but genuine.
+    return this.cfg.exceptional_vol_x > 0
+      && sibMedian >= this.cfg.sibling_min_sh * 2
+      && ratio >= this.cfg.exceptional_vol_x
+      && notional >= this.cfg.exceptional_min_notional;
   }
 
   // Live progress of an in-flight RECLAIM observation — how far the symbol
@@ -810,7 +859,7 @@ export class EmaCrossTracker {
       const priceOk = isCrossBar
         ? c >= w.crossPrice
         : c >= w.crossPrice * (1 + this.cfg.confirm_price_ext);
-      if (volOk && priceOk && c * st.bucketVol >= this.cfg.confirm_min_notional) {
+      if (volOk && priceOk && this.confirmDollarsOk(ratio, c * st.bucketVol, w.sibMedian)) {
         st.confirmedTodayR = true;
         st.watchR = null;
         this.queued.push({
@@ -838,7 +887,7 @@ export class EmaCrossTracker {
       const ratio = sibMedian > 0 ? st.bucketVol / sibMedian : 0;
       const barsSince = Math.max(1, Math.round((tsSec - p.crossTs) / this.cfg.interval_sec));
       console.log(`[ema-cross] pending reclaim converted after ${Math.round((tsSec - p.crossTs) / 60)}m ${ticker} (${this.cfg.tf}, intrabar)`);
-      if (ratio >= this.cfg.instant_vol_x && c >= p.crossPrice && notional >= this.cfg.confirm_min_notional) {
+      if (ratio >= this.cfg.instant_vol_x && c >= p.crossPrice && this.confirmDollarsOk(ratio, notional, sibMedian)) {
         st.confirmedTodayR = true;
         this.queued.push({
           type: 'confirm', ticker, signal: 'reclaim', tf: this.cfg.tf, ts_sec: tsSec, price: c,
@@ -888,7 +937,7 @@ export class EmaCrossTracker {
       return;
     }
     const ratio = st.bucketVol / sibMedian;
-    if (ratio >= this.cfg.instant_vol_x && c * st.bucketVol >= this.cfg.confirm_min_notional) {
+    if (ratio >= this.cfg.instant_vol_x && this.confirmDollarsOk(ratio, c * st.bucketVol, sibMedian)) {
       st.confirmedTodayR = true;
       this.queued.push({
         type: 'confirm', ticker, signal: 'reclaim', tf: this.cfg.tf, ts_sec: tsSec, price: c,
@@ -935,7 +984,7 @@ export class EmaCrossTracker {
       const priceOk = isCrossBar
         ? c >= w.crossPrice
         : c >= w.crossPrice * (1 + this.cfg.confirm_price_ext);
-      if (volOk && priceOk && c * st.bucketVol >= this.cfg.confirm_min_notional) {
+      if (volOk && priceOk && this.confirmDollarsOk(ratio, c * st.bucketVol, w.sibMedian)) {
         st.confirmedToday = true;
         st.watch = null;
         return {
@@ -968,7 +1017,7 @@ export class EmaCrossTracker {
       const ratio = sibMedian > 0 ? st.bucketVol / sibMedian : 0;
       const barsSince = Math.max(1, Math.round((tsSec - p.crossTs) / this.cfg.interval_sec));
       console.log(`[ema-cross] pending cross converted after ${Math.round((tsSec - p.crossTs) / 60)}m ${ticker} (${this.cfg.tf}, intrabar)`);
-      if (ratio >= this.cfg.instant_vol_x && c >= p.crossPrice && notional >= this.cfg.confirm_min_notional) {
+      if (ratio >= this.cfg.instant_vol_x && c >= p.crossPrice && this.confirmDollarsOk(ratio, notional, sibMedian)) {
         st.confirmedToday = true;
         return {
           type: 'confirm', ticker, tf: this.cfg.tf, ts_sec: tsSec, price: c,
@@ -1021,7 +1070,7 @@ export class EmaCrossTracker {
       return null;
     }
     const ratio = st.bucketVol / sibMedian;
-    if (ratio >= this.cfg.instant_vol_x && c * st.bucketVol >= this.cfg.confirm_min_notional) {
+    if (ratio >= this.cfg.instant_vol_x && this.confirmDollarsOk(ratio, c * st.bucketVol, sibMedian)) {
       st.confirmedToday = true;
       return {
         type: 'confirm', ticker, tf: this.cfg.tf, ts_sec: tsSec, price: c,
@@ -1102,7 +1151,7 @@ export class EmaCrossTracker {
       if (
         ratio >= this.cfg.instant_vol_x &&
         c >= w.crossPrice &&
-        c * v >= this.cfg.confirm_min_notional
+        this.confirmDollarsOk(ratio, c * v, sibMedian)
       ) {
         st.confirmedToday = true;
         out = {
@@ -1121,7 +1170,7 @@ export class EmaCrossTracker {
       if (
         ratio >= this.cfg.confirm_vol_x &&
         c >= w.crossPrice * (1 + this.cfg.confirm_price_ext) &&
-        c * v >= this.cfg.confirm_min_notional
+        this.confirmDollarsOk(ratio, c * v, sibMedian)
       ) {
         st.confirmedToday = true;
         out = {
@@ -1157,7 +1206,7 @@ export class EmaCrossTracker {
       if (
         ratio >= this.cfg.instant_vol_x &&
         c >= w.crossPrice &&
-        c * v >= this.cfg.confirm_min_notional
+        this.confirmDollarsOk(ratio, c * v, sibMedian)
       ) {
         st.confirmedTodayR = true;
         this.queued.push({
@@ -1176,7 +1225,7 @@ export class EmaCrossTracker {
       if (
         ratio >= this.cfg.confirm_vol_x &&
         c >= w.crossPrice * (1 + this.cfg.confirm_price_ext) &&
-        c * v >= this.cfg.confirm_min_notional
+        this.confirmDollarsOk(ratio, c * v, sibMedian)
       ) {
         st.confirmedTodayR = true;
         this.queued.push({
@@ -1215,7 +1264,7 @@ export class EmaCrossTracker {
         if (
           ratio >= this.cfg.instant_vol_x &&
           c >= p.crossPrice &&
-          c * v >= this.cfg.confirm_min_notional
+          this.confirmDollarsOk(ratio, c * v, sibMedian)
         ) {
           st.confirmedTodayR = true;
           this.queued.push({
@@ -1260,7 +1309,7 @@ export class EmaCrossTracker {
         if (
           ratio >= this.cfg.instant_vol_x &&
           c >= p.crossPrice &&
-          c * v >= this.cfg.confirm_min_notional
+          this.confirmDollarsOk(ratio, c * v, sibMedian)
         ) {
           // Dollars arrived violently — confirm outright (ZBAO's 20:25 class).
           st.confirmedToday = true;
@@ -1327,7 +1376,7 @@ export class EmaCrossTracker {
         && c * v >= this.cfg.nominate_min_notional
       ) {
         const ratio = v / sibMedian;
-        if (ratio >= this.cfg.instant_vol_x && c * v >= this.cfg.confirm_min_notional) {
+        if (ratio >= this.cfg.instant_vol_x && this.confirmDollarsOk(ratio, c * v, sibMedian)) {
           // The cross bar itself arrived on expanded volume — the operator's
           // "sometimes the current volume is much higher than siblings" case.
           st.confirmedToday = true;
@@ -1393,7 +1442,7 @@ export class EmaCrossTracker {
         console.log(`[ema-cross] reclaim pending — thin sibling window (${sibMedian} sh) ${ticker} (${this.cfg.tf})`);
       } else {
         const ratio = v / sibMedian;
-        if (ratio >= this.cfg.instant_vol_x && c * v >= this.cfg.confirm_min_notional) {
+        if (ratio >= this.cfg.instant_vol_x && this.confirmDollarsOk(ratio, c * v, sibMedian)) {
           st.confirmedTodayR = true;
           this.queued.push({
             type: 'confirm', ticker, signal: 'reclaim', tf: this.cfg.tf, ts_sec: closeTs, price: c,

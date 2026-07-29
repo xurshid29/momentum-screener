@@ -790,5 +790,40 @@ console.log('S38 — consolidated replay is gap-decay-free: bars are bars (the F
     `slow ${gappedFeed.s.toFixed(6)} vs ${gapped.s.toFixed(6)}`);
 }
 
+console.log('S39 — exceptional-expansion escape from the dollar floor (the GSUN case)');
+{
+  // GSUN: a 55x reclaim bar worth only $1,909 because the stock is $0.19 —
+  // the strongest volume evidence the layer can see, rejected by a flat $10k.
+  // Baseline 200 shares (>= 2x the dead-tape floor) so the ratio is honest.
+  const s = new Sim('TEST', EMA_CROSS);
+  s.bars(55, 0.20, 200);
+  s.bars(25, 0.18, 200);            // dip below both EMAs — armed, sib median 200
+  s.bar(0.191, 60_000);             // 300x expansion, $11.5k... use a smaller burst below
+  const ev = s.events.find((e) => e.signal === 'reclaim');
+  check('a huge-ratio low-dollar bar can now confirm', ev?.type === 'confirm',
+    `got ${ev?.type ?? 'nothing'}`);
+
+  // …but the same shape on a DUST baseline must not: there the ratio is
+  // meaningless (the PBM decision — dead tape nominates, never confirms).
+  const d = new Sim('TEST', EMA_CROSS);
+  d.bars(55, 0.20, 10);
+  d.bars(25, 0.18, 10);             // sib median 10 shares = dust
+  d.bar(0.191, 9_000);              // 900x, ~$1.7k
+  d.bar(0.192, 9_000);
+  const de = d.events.find((e) => e.signal === 'reclaim');
+  check('dust baseline still cannot confirm on ratio alone',
+    de == null || de.type === 'nominate', `got ${de?.type ?? 'nothing'}`);
+
+  // And a modest ratio below the escape stays nominate-only.
+  const m = new Sim('TEST', EMA_CROSS);
+  m.bars(55, 0.20, 200);
+  m.bars(25, 0.18, 200);
+  m.bar(0.191, 1_600);              // 8x, ~$300 — under both routes
+  m.bar(0.192, 1_600);
+  const me = m.events.find((e) => e.signal === 'reclaim');
+  check('ordinary ratio + low dollars stays a nomination',
+    me == null || me.type === 'nominate', `got ${me?.type ?? 'nothing'}`);
+}
+
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

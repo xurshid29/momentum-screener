@@ -21,6 +21,7 @@ import { fetchHalts, type TradeHalt } from './halts.js';
 import { broadcast } from './sse.js';
 import { sendTelegram, telegramEnabled, escapeHtml, alertDisabled } from './telegram.js';
 import { scoreRunner, type RunnerScoreBreakdown } from './runner-score.js';
+import { EMA_CROSS } from './ema-cross.js';
 import type { TickEvent } from './tick-detect.js';
 import {
   scoreSwing,
@@ -865,6 +866,14 @@ class PollerService {
     // it) — measured baseline says full-tf reclaim Telegram would add
     // ~50-85 pushes/day. The 5m reclaim A/B keeps its pushes.
     if (reclaim && tf !== '5m') return;
+    // Exceptional-expansion confirms (2026-07-29, the GSUN escape) are
+    // DASHBOARD + GRADING ONLY for now — same X4H precedent as the HTF
+    // reclaims: a new confirm route gets no phone until tier_events shows
+    // the ~7/day it adds are worth it. Identified by the bar being under the
+    // normal dollar floor, which is exactly what the escape relaxes; the
+    // notional already rides in meta, so grading segments on the same test.
+    // Promote by deleting these two lines once the data supports it.
+    if (e.price * e.volume < EMA_CROSS.confirm_min_notional) return;
     if (!telegramEnabled() || this.alertsMuted || alertDisabled(reclaim ? 'ema_reclaim' : 'ema_cross')) return;
     const key = reclaim ? `${tf}|R|${e.ticker}` : `${tf}|${e.ticker}`;
     if (this.alertedCross.has(key)) return;
