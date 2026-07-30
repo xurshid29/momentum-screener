@@ -357,6 +357,8 @@ export interface EmaCrossItem {
   vol_ratio: number;
   // Live % move since the reclaim bar while observing (null once confirmed).
   pct_since_reclaim?: number | null;
+  // Live day change vs the prior close (null when the prior close is unknown).
+  change_pct?: number | null;
   cross_at: string;
   confirmed_at: string | null;
   // Our feed sees a sliver of this name's tape (sibling-median notional at

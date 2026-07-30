@@ -127,7 +127,24 @@ export function EmaCrossRow({ item, selected, onSelect, onOpenCatalyst }: {
           </Tooltip>
         )}
       </span>
-      <span style={{ flex: '0 0 auto' }}>
+      <span style={{ flex: '0 0 auto', textAlign: 'right', whiteSpace: 'nowrap' }}>
+        {/* Day change alongside the live price (2026-07-31): a reclaim on a
+            name already +150% is a different trade from one on a name flat
+            for the day, and the row could not distinguish them. */}
+        {item.change_pct != null && (
+          <Tooltip title="Change vs the prior close — the day move this reclaim sits inside">
+            <Text
+              style={{
+                fontSize: 11, marginRight: 6, cursor: 'help', fontWeight: 600,
+                color: item.change_pct >= 20 ? '#ff7a45'
+                  : item.change_pct > 0 ? '#52c41a'
+                  : item.change_pct < 0 ? '#ff4d4f' : '#8c8c8c',
+              }}
+            >
+              {item.change_pct >= 0 ? '+' : ''}{item.change_pct.toFixed(1)}%
+            </Text>
+          </Tooltip>
+        )}
         <Text type="secondary" style={{ fontSize: 11 }}>{fmtPrice(item.price)}</Text>
       </span>
     </div>

@@ -578,10 +578,24 @@ class TickFeedService {
   // Live progress of an in-flight reclaim observation on one timeframe —
   // lets the poller refresh observing rows each cycle instead of leaving
   // them frozen at their nomination (see EmaCrossTracker.reclaimProgress).
-  reclaimProgress(ticker: string, tf: string, fallbackCrossPrice?: number): ReturnType<EmaCrossTracker['reclaimProgress']> {
-    if (tf === '5m') return this.emaCross.reclaimProgress(ticker, fallbackCrossPrice);
-    const layer = this.htfLayers.find((l) => l.cfg.tf === tf);
-    return layer ? layer.tracker.reclaimProgress(ticker, fallbackCrossPrice) : null;
+  reclaimProgress(ticker: string, tf: string, fallbackCrossPrice?: number):
+    (NonNullable<ReturnType<EmaCrossTracker['reclaimProgress']>> & { chg_pct: number | null }) | null {
+    const p = tf === '5m'
+      ? this.emaCross.reclaimProgress(ticker, fallbackCrossPrice)
+      : (this.htfLayers.find((l) => l.cfg.tf === tf)?.tracker.reclaimProgress(ticker, fallbackCrossPrice) ?? null);
+    if (!p) return null;
+    // Day change% (2026-07-31, operator's ask): a reclaim on a name already
+    // +150% is a different proposition from one on a name flat for the day,
+    // and the row could not tell them apart. Cross tickers are mostly
+    // off-screen so the screener rows never carry them — but the tick feed
+    // already holds a prior close for every subscribed symbol (it derives the
+    // detector's baselines from the same map), so this is a lookup, not a
+    // fetch. Null when the prior close is unknown.
+    const prior = universe.getPriorCloses().get(ticker);
+    return {
+      ...p,
+      chg_pct: prior && prior > 0 ? +(((p.cur_price / prior) - 1) * 100).toFixed(2) : null,
+    };
   }
 
   // Live EMA state per timeframe for one symbol — the /ema-debug endpoint's

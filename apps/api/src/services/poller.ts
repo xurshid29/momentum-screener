@@ -347,6 +347,10 @@ export interface EmaCrossItem {
   // the tracker has no live bucket): price move since the reclaim bar, so a
   // row says whether the name is going anywhere without opening a chart.
   pct_since_reclaim?: number | null;
+  // Day change vs the prior close, live (2026-07-31). Cross tickers are
+  // mostly off-screen so no screener row carries this; the tick feed's
+  // prior-close map supplies it. Null when that close is unknown.
+  change_pct?: number | null;
   cross_at: string;
   confirmed_at: string | null;
   // Thin-tape honesty marker (2026-07-22, the SKYQ divergence): true when
@@ -2506,19 +2510,23 @@ class PollerService {
       let price = xc.price;
       let ratio = xc.vol_ratio;
       let pctSince: number | null = null;
-      if (status !== 'confirmed') {
-        const p = this.reclaimProgressFn?.(xc.ticker, xc.tf, xc.cross_price) ?? null;
-        if (p) {
-          price = p.cur_price;
-          pctSince = +p.pct_since.toFixed(2);
-          if (p.ratio > 0) ratio = p.ratio;
-          if (pctSince >= CROSS_MOVING_PCT) status = 'moving';
-        }
+      // Live lookup runs for CONFIRMED rows too (2026-07-31): showing a
+      // frozen confirm price beside a live day-change% would be incoherent,
+      // and "where is it now" is what the panel is scanned for — the confirm
+      // price is still on the row as the reclaim anchor. `pct_since` and the
+      // 'moving' promotion stay in-flight-only concepts.
+      const p = this.reclaimProgressFn?.(xc.ticker, xc.tf, xc.cross_price) ?? null;
+      const chgPct = p?.chg_pct ?? null;
+      if (p) price = p.cur_price;
+      if (p && status !== 'confirmed') {
+        pctSince = +p.pct_since.toFixed(2);
+        if (p.ratio > 0) ratio = p.ratio;
+        if (pctSince >= CROSS_MOVING_PCT) status = 'moving';
       }
       emaCrossList.push({
         ticker: xc.ticker, tf: xc.tf, signal: xc.signal, status, price, cross_price: xc.cross_price,
         vol_ratio: ratio, cross_at: xc.cross_at, confirmed_at: xc.confirmed_at,
-        thin_tape: xc.thin_tape, pct_since_reclaim: pctSince,
+        thin_tape: xc.thin_tape, pct_since_reclaim: pctSince, change_pct: chgPct,
         news_title: xc.news_title, news_url: xc.news_url,
         news_published_at: xc.news_published_at, catalyst: xc.catalyst,
       });
@@ -3079,6 +3087,7 @@ class PollerService {
     | ((ticker: string, tf: string, fallbackCrossPrice?: number) => {
         cross_price: number; cur_price: number; pct_since: number;
         ratio: number; notional: number; price_gate_met: boolean;
+        chg_pct: number | null;
       } | null)
     | null = null;
 
