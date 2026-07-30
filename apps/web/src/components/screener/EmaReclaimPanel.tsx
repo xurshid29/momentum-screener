@@ -1,5 +1,5 @@
 import { Typography, Tooltip } from 'antd';
-import type { CatalystInfo, EmaCrossItem } from '../../api/types';
+import type { CatalystInfo, EmaCrossItem, TradingSession } from '../../api/types';
 import { useSelection } from '../../context/SelectionContext';
 import { useHiddenTickers } from '../../hooks/useHiddenTickers';
 import { CatalystBadge } from '../common/CatalystBadge';
@@ -26,11 +26,12 @@ const TF_LABEL: Record<Tf, string> = {
 
 // A single reclaim row — dim while under volume observation, bright green
 // once volume-confirmed (with the expansion multiple). Click charts it.
-export function EmaCrossRow({ item, selected, onSelect, onOpenCatalyst }: {
+export function EmaCrossRow({ item, selected, onSelect, onOpenCatalyst, session }: {
   item: EmaCrossItem;
   selected: boolean;
   onSelect: (t: string) => void;
   onOpenCatalyst: () => void;
+  session?: TradingSession;
 }) {
   const confirmed = item.status === 'confirmed';
   // 'moving' — in-flight and already up ≥3% from its reclaim. Descriptive,
@@ -40,6 +41,10 @@ export function EmaCrossRow({ item, selected, onSelect, onOpenCatalyst }: {
   // the operator scans a handful of movers instead of forty flat rows.
   const moving = item.status === 'moving';
   const isHtf = item.tf !== '5m';
+  // Only after-hours diverges: the screener's v=152 overlay replaces change%
+  // with the after-hours move in that session alone (premarket, regular and
+  // closed all read vs the prior close on both panels).
+  const afterHours = session === 'afterhours';
   // Freshly confirmed — pulse the row so the payoff event catches the eye.
   // Window scales with the timeframe (a 4h confirm stays "new" longer than
   // a 5m one); same isFreshArrival convention as ignition rows.
@@ -132,7 +137,20 @@ export function EmaCrossRow({ item, selected, onSelect, onOpenCatalyst }: {
             name already +150% is a different trade from one on a name flat
             for the day, and the row could not distinguish them. */}
         {item.change_pct != null && (
-          <Tooltip title="Change vs the prior close — the day move this reclaim sits inside">
+          // Deliberately the FULL-DAY move (vs the prior close), in every
+          // session — extension is what this panel is judging, and a name
+          // already far up is late whatever it did since 4pm. ⚠️ That makes
+          // it differ from Momentum/Ignition AFTER HOURS, where the screener
+          // overlays Finviz's after-hours change (since the 4pm close): CYCU
+          // read +888% here against +63% there on 2026-07-30. The superscript
+          // marks the divergent session so the anchor is never guessed.
+          <Tooltip
+            title={
+              afterHours
+                ? 'FULL-DAY change vs the prior close. ⚠️ The Momentum / Ignition tabs show AFTER-HOURS change (since the 4pm close) in this session — same-looking column, different anchor.'
+                : 'Day change vs the prior close — the move this reclaim sits inside. A name already far up is a late reclaim.'
+            }
+          >
             <Text
               style={{
                 fontSize: 11, marginRight: 6, cursor: 'help', fontWeight: 600,
@@ -142,6 +160,9 @@ export function EmaCrossRow({ item, selected, onSelect, onOpenCatalyst }: {
               }}
             >
               {item.change_pct >= 0 ? '+' : ''}{item.change_pct.toFixed(1)}%
+              {afterHours && (
+                <span style={{ fontSize: 8, opacity: 0.7, marginLeft: 1, verticalAlign: 'super' }}>d</span>
+              )}
             </Text>
           </Tooltip>
         )}
@@ -151,9 +172,10 @@ export function EmaCrossRow({ item, selected, onSelect, onOpenCatalyst }: {
   );
 }
 
-export function EmaReclaimPanel({ crosses, onOpenCatalyst }: {
+export function EmaReclaimPanel({ crosses, onOpenCatalyst, session }: {
   crosses: EmaCrossItem[];
   onOpenCatalyst: (ticker: string, catalyst: CatalystInfo | null) => void;
+  session?: TradingSession;
 }) {
   const { selected, setSelected } = useSelection();
   const { hidden } = useHiddenTickers();
@@ -210,6 +232,7 @@ export function EmaReclaimPanel({ crosses, onOpenCatalyst }: {
                       selected={x.ticker === selected}
                       onSelect={setSelected}
                       onOpenCatalyst={() => onOpenCatalyst(x.ticker, x.catalyst ?? null)}
+                      session={session}
                     />
                   ))
                 )}

@@ -418,6 +418,7 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
             children: (
               <EmaReclaimPanel
                 crosses={payload?.ema_crosses ?? []}
+                session={payload?.session}
                 onOpenCatalyst={(ticker, catalyst) => setCatalystModal({ ticker, catalyst })}
               />
             ),
