@@ -419,7 +419,18 @@ class TickFeedService {
   // (bars_5m) so the warmup survives deploys; boot replays the last 5 days
   // (48h originally — too short for ultra-thin tapes, the LICN case).
   private emaCross = new EmaCrossTracker(EMA_CROSS, (ticker, closeTs, close, volume) => {
-    this.barBuffer.push({ ticker, bar_ts: new Date(closeTs * 1000), close, volume });
+    // Attach the closing bucket's OPEN/HIGH/LOW (2026-07-30). Ordering is the
+    // whole trick: onBar feeds addBar FIRST and only then folds the tick into
+    // `bucketOhl`, so while this callback runs the accumulator still holds the
+    // bucket being closed — no previous-bucket bookkeeping, and ema-cross.ts
+    // is untouched (threading h/l through addBar would change the signature
+    // every seed path and the entire verify suite depends on).
+    const acc = this.bucketOhl.get(ticker);
+    const ohl = acc && acc.bucket === closeTs - EMA_CROSS.interval_sec ? acc : null;
+    this.barBuffer.push({
+      ticker, bar_ts: new Date(closeTs * 1000), close, volume,
+      open: ohl?.o ?? null, high: ohl?.h ?? null, low: ohl?.l ?? null,
+    });
   });
   // 📈 higher-timeframe layers (1h 2026-07-21, 4h 2026-07-17): the
   // operator's swing-timing tools. Dashboard-only; nomination is the
@@ -434,7 +445,14 @@ class TickFeedService {
     // realistic convergence skip; Yahoo daily as fallback.
     makeHtfLayer(EMA_CROSS_1D, 'bars_1d', { spanDays: 240, retentionDays: 260, deepDays: 160, offset: etDailyOffsetSec, schema: 'ohlcv-1h', yahooInterval: '1d', yahooRange: '1y' }),
   ];
-  private barBuffer: { ticker: string; bar_ts: Date; close: number; volume: number }[] = [];
+  private barBuffer: {
+    ticker: string; bar_ts: Date; close: number; volume: number;
+    open: number | null; high: number | null; low: number | null;
+  }[] = [];
+  // Per-symbol 5m bucket extremes, folded from the per-second feed (which
+  // already carries o/h/l/c/v — they were being discarded one line after
+  // parsing). Live bars only; historical backfills leave these null.
+  private bucketOhl = new Map<string, { bucket: number; o: number; h: number; l: number }>();
   private barFlushTimer: NodeJS.Timeout | null = null;
   private barsPersisted = 0;
   private lastBarDbErrorMs = 0;
@@ -1037,7 +1055,16 @@ class TickFeedService {
       // Prune persisted bars beyond their seed windows (fire-and-forget).
       void getDb()
         .deleteFrom('bars_5m')
-        .where('bar_ts', '<', new Date(Date.now() - 6 * 86_400_000))
+        // 45 days, raised from 6 (2026-07-30). The reclaim review needs ~10
+        // sessions of post-confirm bars and 6-day retention pruned the early
+        // ones before they could be graded — the evidence was expiring faster
+        // than it accumulated. Measured cost: bars_5m is 50 MB per 6 days
+        // (~8 MB/day, ~12 with OHLC), so 45 days is well under a gigabyte
+        // against 95 GB free. Keeping RAW bars rather than pre-computing an
+        // outcome table deliberately: it lets later questions be asked with
+        // metrics nobody has thought of yet. Boot replay is a SEPARATE 5-day
+        // window, so this does not slow startup.
+        .where('bar_ts', '<', new Date(Date.now() - 45 * 86_400_000))
         .execute()
         .catch(() => { /* retried next midnight */ });
       for (const l of this.htfLayers) {
@@ -1192,6 +1219,18 @@ class TickFeedService {
         const hev = l.tracker.addBar(m.s, m.t, m.c, m.v);
         if (hev) poller.onEmaCrossEvent(hev);
         for (const q of l.tracker.drainEvents()) poller.onEmaCrossEvent(q);
+      }
+    }
+    // Fold this tick into its 5m bucket extremes — AFTER the trackers, so a
+    // bar-close callback above still sees the bucket it is closing.
+    if (poller.isKnownRunner(m.s)) {
+      const bucket = Math.floor(m.t / EMA_CROSS.interval_sec) * EMA_CROSS.interval_sec;
+      const acc = this.bucketOhl.get(m.s);
+      if (!acc || acc.bucket !== bucket) {
+        this.bucketOhl.set(m.s, { bucket, o: m.o, h: m.h, l: m.l });
+      } else {
+        if (m.h > acc.h) acc.h = m.h;
+        if (m.l < acc.l) acc.l = m.l;
       }
     }
     // Surface near-miss reasons (gapped vs which gate) so the rollout is

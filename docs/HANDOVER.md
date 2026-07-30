@@ -1,4 +1,4 @@
-# Session Handover — updated 2026-07-29
+# Session Handover — updated 2026-07-30
 
 A running handover so a fresh session can continue without re-deriving context.
 **Read `docs/web-dashboard.md` first** (the canonical status doc); this file is
@@ -136,6 +136,53 @@ Journal; **attribution join still the open payoff**) · 06-17 tick feed go-live.
 ---
 
 ## What shipped this session (newest first, all on prod unless noted)
+
+XGRADE. **First production review of the reclaim layer — and the evidence
+plumbing it exposed (2026-07-30, codex investigation + review).** Full doc:
+`docs/reclaim-strategy-investigation-2026-07-30.md`; reproducible cuts:
+`apps/api/scripts/research/reclaim-grading.sql`.
+**The headline result, after correcting the method twice.** The doc first
+reported post-confirm follow-through in ABSOLUTE terms (median 30m MFE
++0.38%), which reads as failure; a null baseline was missing. Adding a
+random-bar control put the tail lift at 2.9× — but that control spanned
+04:00-19:00 ET, comparing regular-hours confirms against quiet premarket/AH
+bars. **Session-matched and bootstrapped (4 draws, stable ±0.1pp), regular
+hours only, 60m:** confirms n=80 vs control n≈1,900 — median MFE +0.62% vs
++0.63% (**no median edge**), mean +1.45% vs +1.17% (1.2×, not 2.9×), reached
++5% 8.8% vs 4.3% (**~2.0×**), fell <=-3% **35.0% vs 15%** (**~2.3× worse**).
+So the 5m confirm is a **volatility selector whose raw skew on closes runs
+slightly AGAINST you**, not the favourable asymmetry an unmatched control
+suggested. ⚠️ Evidence quality is lopsided: the downside amplification is
+solid (28 of 80 vs ~12 expected, z~5) while the upside rests on 7 events
+(z~2, one session) — **the adverse selection is established; the tail benefit
+that would justify it is not.** Whether the layer is tradeable now hinges
+entirely on ORDER OF ARRIVAL (can a tight stop execute before the favourable
+excursion?), which close-only bars cannot answer.
+**Also measured:** extension already paid between reclaim and confirm —
+median +0.74%, p90 +5.41%, i.e. the confirmation wait consumes roughly half
+the median move. And higher absolute notional did NOT rank follow-through, so
+the $10k floor is not a quality filter (which weakens the case against the
+escape rather than for raising the floor).
+**Shipped (instrumentation only — semantics FROZEN):** (1) `bars_5m` gains
+nullable **open/high/low** (migration `20260730100000`) — the sidecar already
+emitted o/h/l/c/v and onBar already parsed them; they were dropped one line
+later. Accumulated in tickfeed and attached in the bar-close callback, so
+`ema-cross.ts` is untouched (threading h/l through addBar would change a
+signature the whole verify suite depends on); EMA math still reads
+close/volume only. (2) **Retention 6d -> 45d** — at 50 MB per 6 days the old
+window pruned the early sessions of a ten-session review before they could be
+graded; raw bars kept deliberately instead of a pre-computed outcome table so
+later questions can use metrics nobody has thought of yet.
+**NOT changed, deliberately:** EMA 10/65, staged arming, observation windows,
+the $10k floor, `exceptional_vol_x`, volume ratios, Telegram eligibility.
+**Next checkpoint:** ~3 sessions for a direction check, ~10 for thresholds.
+Owed: stable `observation_id` in meta (removes fuzzy temporal joins — deferred
+to its own change rather than stacked on this one), and the target-before-stop
+grid (query 6 in the grading script, live from 07-30 bars onward).
+⚠️ **Deploy discipline:** no routine API deploys 09:30-16:00 ET — a restart
+drops in-flight 5m observations (one of mine killed GSUN's 5.7 min into its
+window). This change went out 06:35 ET premarket at a measured cost of 7
+in-flight 5m rows (~0.7 expected confirms) to buy a full session of OHLC.
 
 XFLOOR. **The GSUN escape + the 'no in-flight predictor' result
 (2026-07-29).** Two findings from the operator working the new EMA tab live.

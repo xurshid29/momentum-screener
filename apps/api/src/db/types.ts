@@ -343,6 +343,14 @@ export interface Bars5mTable {
   bar_ts: ColumnType<Date, Date | string, Date | string>;
   close: number;
   volume: number;
+  // Bucket extremes, LIVE bars only (2026-07-30 — migration
+  // 20260730100000). Grading evidence for target-before-stop ordering, which
+  // close-only bars cannot answer. Null on every historical backfill path
+  // (Databento/Yahoo fetches carry close+volume only) and on all rows written
+  // before the migration. ⚠️ EMA math must keep reading close/volume only.
+  open: number | null;
+  high: number | null;
+  low: number | null;
 }
 
 // Closed 4h bars (ET-session-aligned) — the 4h EMA-cross layer's warmup
