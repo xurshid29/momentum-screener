@@ -393,6 +393,14 @@ const CROSS_MIN_OBSERVING: Record<EmaCrossTf, number> = { '5m': 15, '15m': 12, '
 // Measured on 40h of 5m observations, ~11-17% of rows ever reach +3%, so a
 // 40-row lane surfaces ~4-6. Raise it to see fewer.
 const CROSS_MOVING_PCT = 3;
+// Cross-row news enrichment retries: a reclaim usually PRECEDES its headline
+// by minutes, so one lookup at nomination time is not enough (the CYCU case —
+// news 3 min late, row newsless all day). Bounded so newsless names cost at
+// most a few Finviz/Yahoo top-ups: 3 tries, 10 min apart, and only while the
+// row is young enough for a catalyst to still be the cause of the move.
+const CROSS_NEWS_RETRY_MS = 10 * 60 * 1000;
+const CROSS_NEWS_MAX_TRIES = 3;
+const CROSS_NEWS_RETRY_WINDOW_MS = 45 * 60 * 1000;
 
 function emaCrossTfOf(v: unknown): EmaCrossTf {
   return v === '1d' ? '1d' : v === '4h' ? '4h' : v === '1h' ? '1h' : v === '15m' ? '15m' : '5m';
@@ -640,6 +648,10 @@ class PollerService {
   // 📈 cross-row news enrichment cache — per ticker, per news day. A `null`
   // value means "looked, nothing today" (prevents re-fetching on every cross
   // event for the same name). Cleared at the 04:00 ET news-day roll.
+  // Retry bookkeeping for the above — see enrichCrossNews. Cleared with the
+  // cache at the news-day roll.
+  private crossNewsRetryAt = new Map<string, number>();
+  private crossNewsTries = new Map<string, number>();
   private crossNewsCache = new Map<string, {
     title: string; url: string; source: NewsSource;
     published_at: string | null; catalyst: CatalystInfo | null;
@@ -793,11 +805,26 @@ class PollerService {
   // ticker (a name can hold 5m + 1h + 4h rows at once).
   private async enrichCrossNews(ticker: string): Promise<void> {
     try {
-      if (this.crossNewsCache.has(ticker)) {
+      // A RESOLVED entry (news found) is final — apply and stop.
+      if (this.crossNewsCache.get(ticker)) {
         this.applyCrossNews(ticker);
         return;
       }
-      this.crossNewsCache.set(ticker, null); // claim — concurrent crosses don't stampede
+      // Unresolved: retry on a cooldown instead of caching the miss forever
+      // (2026-07-30, the CYCU case). The old code set the cache to null as a
+      // stampede claim and never invalidated it, so a "no news yet" answer
+      // became permanent for the ET day: CYCU's cross fired 08:20:14 while
+      // Finviz did not carry its $54.6M contract PR until 08:23, and the row
+      // stayed newsless through a +274% day. News routinely lands in the
+      // minutes AFTER the reclaim — that is the whole premise of the layer —
+      // so the lookup has to be allowed to catch up. The retry map doubles as
+      // the stampede claim: concurrent crosses inside the window skip.
+      const nowMs = Date.now();
+      if (nowMs < (this.crossNewsRetryAt.get(ticker) ?? 0)) return;
+      const tries = this.crossNewsTries.get(ticker) ?? 0;
+      if (tries >= CROSS_NEWS_MAX_TRIES) return;
+      this.crossNewsTries.set(ticker, tries + 1);
+      this.crossNewsRetryAt.set(ticker, nowMs + CROSS_NEWS_RETRY_MS);
       const newsDay = this.lastNewsDayEt;
       const latestToday = async () => {
         const rows = await getDb()
@@ -1525,6 +1552,8 @@ class PollerService {
       this.bzHeadlineCache.clear();
       this.classificationCache.clear();
       this.crossNewsCache.clear();
+      this.crossNewsRetryAt.clear();
+      this.crossNewsTries.clear();
       this.lastNewsDayEt = newsDayEt;
     }
     if (todayEt !== this.lastEtDate) {
@@ -2455,6 +2484,15 @@ class PollerService {
       if (nowMsTick - xc.last_event_ms > ttl) {
         this.emaCrosses.delete(t);
         continue;
+      }
+      // Drive the news retry for rows that are still newsless and young
+      // enough that a catalyst could still explain the move (2026-07-30, the
+      // CYCU case). Without this, a ticker whose only cross fired before its
+      // headline landed would never re-attempt — nothing else calls the
+      // enrichment again. enrichCrossNews self-limits to 3 tries 10 min
+      // apart, so this costs at most a handful of top-ups per hour.
+      if (!xc.news_title && nowMsTick - xc.last_event_ms < CROSS_NEWS_RETRY_WINDOW_MS) {
+        void this.enrichCrossNews(xc.ticker);
       }
       // Refresh in-flight observations from the tracker (2026-07-29). A row
       // used to be frozen at its nomination, so a name that reclaimed and
