@@ -137,6 +137,49 @@ Journal; **attribution join still the open payoff**) · 06-17 tick feed go-live.
 
 ## What shipped this session (newest first, all on prod unless noted)
 
+XDASH2. **Four operator-reported dashboard fixes (2026-07-30 evening).**
+All display/enrichment only — detection, confirm rules and alert eligibility
+untouched, so the grading freeze and clean segment hold.
+1. **The Alerts ON/OFF button never muted anything.** `AlertsToggle` wrote
+   `localStorage['alerts.armed']` plus its own component state and NOTHING
+   read either; `useScreenerAlerts` ran unconditionally from DashboardPage.
+   Pressing OFF changed the label and colour while every confirmation kept
+   beeping — there was no mute to fail, it did not exist. New
+   `hooks/useAlertsArmed.ts` is the shared reference (custom event for
+   same-tab, `storage` event for other tabs; device-local because arming also
+   unlocks this browser's AudioContext). The mute is enforced INSIDE
+   `beep()`/`notify()`, not at the ~12 call sites, so a future alert type
+   cannot bypass it; the gate is mirrored during render because an effect
+   would leak one beep on the muting cycle. ⚠️ Behaviour change: sound is now
+   genuinely gated on armed, where before it played whether or not the user
+   had ever armed. **Operator to verify the mute in-browser (owed).**
+2. **Cross rows never showed news (the CYCU case).** `enrichCrossNews` set
+   the cache to null as a stampede claim and never invalidated it, so "no news
+   yet" became permanent for the ET day. CYCU's cross fired 08:20:14; Finviz
+   did not carry its $54.6M contract PR until 08:23 — the row stayed newsless
+   through a +274% day, three minutes short. That ordering is the layer's
+   PREMISE (reclaim precedes headline), so one lookup at nomination is
+   structurally too early. Now retries 3x/10min while the row is <45 min old,
+   driven from the payload build because a ticker whose only cross preceded
+   its headline has no later event to trigger one. Was 131 of 145 rows
+   newsless. **Real test is tomorrow's open.**
+3. **Day change% on every reclaim row.** The tick feed already holds a prior
+   close for every subscribed symbol, so this was a lookup, not a fetch.
+   Coverage went 16/126 → 109/109 after falling back to the tracker's
+   `lastClose` (bucketClose is 0 until a symbol ticks, and the boot seed
+   replays closed bars only, so after every deploy the panel went blank for
+   anything not currently trading). Confirmed rows now show a LIVE price too —
+   a frozen confirm price beside a live change% was incoherent.
+4. **⚠️ The EMA change% anchor differs from the screener's, deliberately.**
+   `fetchScreener`'s v=152 overlay replaces Momentum/Ignition `change_pct`
+   with Finviz's AFTER-HOURS change (since the 4pm close) in the afterhours
+   session ONLY. EMA rows stay FULL-DAY in every session — extension is what
+   the panel judges. Measured divergence 2026-07-30 AH: CYCU +888% vs +63%,
+   GCTK +240% vs +25%, MGRX -10% vs +67%, with prices agreeing (only the
+   anchor differs). Operator's call to label rather than converge: tooltip
+   states the anchor and warns in AH; a superscript "d" marks the divergent
+   session. Precedent: ScreenerPanel already retitles its own column "AH Chg %".
+
 XGRADE. **First production review of the reclaim layer — and the evidence
 plumbing it exposed (2026-07-30, codex investigation + review).** Full doc:
 `docs/reclaim-strategy-investigation-2026-07-30.md`; reproducible cuts:
