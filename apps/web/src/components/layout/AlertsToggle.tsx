@@ -1,23 +1,24 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { Button, Tooltip } from 'antd';
 import { BellOutlined, BellFilled } from '@ant-design/icons';
 import { requestNotificationPermission } from '../../hooks/useScreenerAlerts';
-
-const STORAGE_KEY = 'alerts.armed';
+import { useAlertsArmed, setAlertsArmed, isAlertsArmed } from '../../hooks/useAlertsArmed';
 
 // One-click affordance to (a) unlock the AudioContext (browsers require a user
 // gesture before audio.play()), and (b) request Notification permission.
 // State persists across reloads via localStorage so the user doesn't have to
 // re-arm every time the dashboard reopens.
 export function AlertsToggle() {
-  const [armed, setArmed] = useState<boolean>(false);
+  // Shared state — useScreenerAlerts reads the same source, so the button
+  // actually mutes the sound now (before, it only relabelled itself).
+  const armed = useAlertsArmed();
 
-  // On mount: armed only if we previously armed AND notification permission is
-  // still granted. (User may have revoked it in browser settings.)
+  // On mount, drop the armed flag if notification permission was revoked in
+  // browser settings since we last armed. Sound is gated on the same flag, so
+  // this keeps the button honest: what it says is what you get.
   useEffect(() => {
-    const persisted = localStorage.getItem(STORAGE_KEY) === '1';
     const granted = 'Notification' in window && Notification.permission === 'granted';
-    setArmed(persisted && granted);
+    if (isAlertsArmed() && !granted) setAlertsArmed(false);
   }, []);
 
   const arm = () => {
@@ -34,14 +35,10 @@ export function AlertsToggle() {
       // ignore
     }
     requestNotificationPermission();
-    localStorage.setItem(STORAGE_KEY, '1');
-    setArmed(true);
+    setAlertsArmed(true);
   };
 
-  const disarm = () => {
-    localStorage.removeItem(STORAGE_KEY);
-    setArmed(false);
-  };
+  const disarm = () => setAlertsArmed(false);
 
   const tooltip = armed
     ? 'Alerts ON — click to disable'

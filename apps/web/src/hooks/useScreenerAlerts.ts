@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useAlertsArmed } from './useAlertsArmed';
 import type { CyclePayload } from '../api/types';
 
 // Browser equivalent of the bash script's audio + voice alerts. Events:
@@ -29,6 +30,13 @@ const DASHBOARD_ALERTS: Record<
   fresh_news: false,
 };
 
+// Master gate for every sound + notification, mirrored from the Alerts
+// ON/OFF button (2026-07-31). Enforced inside beep()/notify() rather than at
+// the ~12 call sites: everything audible routes through those two, so a new
+// alert type can never accidentally bypass the mute. Starts false so a reload
+// before the hook syncs is silent rather than surprising.
+let armedGate = false;
+
 let audioCtx: AudioContext | null = null;
 function ctx(): AudioContext {
   if (!audioCtx) audioCtx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
@@ -39,6 +47,7 @@ function ctx(): AudioContext {
 // Layers a sine + a triangle one octave higher for more presence than a
 // pure sine — cuts through background noise without being harsh.
 function beep(frequency: number, durationMs: number, when = 0, peak = 0.55) {
+  if (!armedGate) return;
   const ac = ctx();
   const t0 = ac.currentTime + when;
   const dur = durationMs / 1000;
@@ -131,6 +140,7 @@ export function requestNotificationPermission() {
 }
 
 function notify(title: string, body: string) {
+  if (!armedGate) return;
   if ('Notification' in window && Notification.permission === 'granted') {
     try {
       new Notification(title, { body, icon: '/vite.svg', tag: title });
@@ -141,6 +151,16 @@ function notify(title: string, body: string) {
 }
 
 export function useScreenerAlerts(payload: CyclePayload | null) {
+  // The Alerts ON/OFF button is a real mute (2026-07-31). It used to be
+  // cosmetic: nothing read its state, so confirmations beeped with alerts
+  // "OFF". Bookkeeping below still runs while muted — the seen-sets keep
+  // marking events — so re-arming never back-blasts the day's backlog, the
+  // same principle as the server-side ALERTS_DISABLED.
+  const armed = useAlertsArmed();
+  // Mirror into the module gate during render so it is already correct when
+  // the payload effect below runs (effects fire after render, and a stale
+  // gate would leak exactly one beep on the cycle the user hits mute).
+  armedGate = armed;
   // Track cycle ids we've already handled so SSE replay (e.g. on reconnect) doesn't double-fire.
   const handled = useRef<Set<string>>(new Set());
   // Skip the very first payload (which is the cached snapshot the server pushes
