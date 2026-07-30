@@ -616,7 +616,13 @@ export class EmaCrossTracker {
   } | null {
     const st = this.state.get(ticker);
     if (!st) return null;
-    const cur = st.bucketClose;
+    // Fall back to the newest COMMITTED close when no live bucket is open
+    // (2026-07-31). bucketClose is 0 until a symbol ticks, and the boot seed
+    // only replays closed bars — so after every deploy the live price and day
+    // change% were blank for every symbol that had not traded since, which
+    // out of hours is nearly all of them (16 of 126 rows on the first check).
+    // lastClose is set by the seed replay, so this is populated immediately.
+    const cur = st.bucketClose > 0 ? st.bucketClose : st.lastClose;
     if (!st.watchR) {
       if (!(cur > 0) || !(fallbackCrossPrice && fallbackCrossPrice > 0)) return null;
       return {
