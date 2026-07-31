@@ -155,3 +155,40 @@ SELECT count(*) n,
                           AND (first_target IS NULL OR first_stop <= first_target)) stop_first,
        count(*) FILTER (WHERE first_target IS NULL AND first_stop IS NULL) neither
 FROM firsts;
+
+-- ── 7. A+/A/B attention tiers (2026-08-01 — the list optimization) ──────────
+-- Definitions MUST match the display exactly (poller.ts CROSS_CO_CONFIRM_MS,
+-- EmaReclaimPanel.isNotableB): A+ = an HTF reclaim confirm within ±2 min AND
+-- vol_ratio ≥20; A = co-confirm alone; B-notable = 5m-only but ratio ≥30 or
+-- price <$2 (the NCRA/WETO band, kept visible); B-rest = collapsed by default.
+-- 3-session baseline at ship time: A+ 32.3% reach +20% same-day, A 10.0%,
+-- B(all) 3.6% ≈ the random-bar null. Checkpoint question: does B-rest stay at
+-- the null while A+ holds, and how many winners land in the collapsed band?
+WITH c AS (
+  SELECT DISTINCT ON (ticker, (at AT TIME ZONE 'America/New_York')::date)
+         ticker, at, (meta->>'price')::numeric px, (meta->>'vol_ratio')::numeric ratio,
+         (at AT TIME ZONE 'America/New_York')::date d
+  FROM tier_events WHERE tier='cross' AND event='confirm' AND meta->>'signal'='reclaim'
+    AND meta->>'tf'='5m' AND at >= :'seg_start' AND at < now() - interval '4 hours'
+  ORDER BY ticker, (at AT TIME ZONE 'America/New_York')::date, at),
+co AS (
+  SELECT c.*, EXISTS (
+    SELECT 1 FROM tier_events h
+    WHERE h.ticker=c.ticker AND h.tier='cross' AND h.event='confirm'
+      AND h.meta->>'signal'='reclaim' AND h.meta->>'tf'<>'5m'
+      AND h.at BETWEEN c.at - interval '2 minutes' AND c.at + interval '2 minutes') htf
+  FROM c),
+o AS (
+  SELECT co.*, 100*(max(coalesce(f.high, f.close))/co.px - 1) mfe
+  FROM co JOIN bars_5m f ON f.ticker=co.ticker AND f.bar_ts > co.at
+      AND (f.bar_ts AT TIME ZONE 'America/New_York')::date = co.d
+  GROUP BY co.ticker,co.at,co.px,co.ratio,co.d,co.htf HAVING count(*) >= 4)
+SELECT CASE WHEN htf AND ratio >= 20 THEN 'A+'
+            WHEN htf THEN 'A'
+            WHEN ratio >= 30 OR px < 2 THEN 'B-notable (visible)'
+            ELSE 'B-rest (collapsed)' END tier,
+       count(*) n,
+       count(*) FILTER (WHERE mfe >= 20) ge20,
+       round(100.0*count(*) FILTER (WHERE mfe >= 20)/count(*),1) tail_pct,
+       round(percentile_cont(0.5) WITHIN GROUP (ORDER BY mfe)::numeric,1) med_mfe
+FROM o GROUP BY 1 ORDER BY 1;

@@ -351,6 +351,19 @@ export interface EmaCrossItem {
   // mostly off-screen so no screener row carries this; the tick feed's
   // prior-close map supplies it. Null when that close is unknown.
   change_pct?: number | null;
+  // ↗ 5m attention tier (2026-08-01 — docs/ema-list-optimization-2026-08-01.md
+  // + the 3-session cross-validation in its addendum). Only on CONFIRMED 5m
+  // reclaim rows. 'A+' = another timeframe's reclaim volume-confirmed within
+  // ±2 min AND vol_ratio ≥20×; 'A' = HTF co-confirm alone; 'B' = 5m-only.
+  // Measured (3 sessions, deduped, close-based): A+ 32.3% reach +20% same-day
+  // vs A 10.0% vs B 3.6% — but B still held 6 of the 18 big movers (NCRA
+  // +147% among them), which is why the UI collapses rather than drops it.
+  // Recomputed from confirmed_at timestamps every cycle, so an HTF confirm
+  // landing up to 2 min after the 5m one promotes the row on the next
+  // broadcast. Attention ranking, NOT trade expectancy — the A+ cohort still
+  // hit −5% before +20% in 11 of 24 cases.
+  priority?: 'A+' | 'A' | 'B';
+  co_tfs?: string[];
   cross_at: string;
   confirmed_at: string | null;
   // Thin-tape honesty marker (2026-07-22, the SKYQ divergence): true when
@@ -405,6 +418,11 @@ const CROSS_MOVING_PCT = 3;
 const CROSS_NEWS_RETRY_MS = 10 * 60 * 1000;
 const CROSS_NEWS_MAX_TRIES = 3;
 const CROSS_NEWS_RETRY_WINDOW_MS = 45 * 60 * 1000;
+// ±window for an HTF reclaim confirm to count as co-confirming a 5m one
+// (the A+/A tiers). Two minutes, from the codex study: wide enough for the
+// same burst to clear the coarser stacks (FCUV: 15m/1h landed 11s after the
+// 5m), narrow enough that it is the SAME impulse, not a later leg.
+const CROSS_CO_CONFIRM_MS = 2 * 60 * 1000;
 
 function emaCrossTfOf(v: unknown): EmaCrossTf {
   return v === '1d' ? '1d' : v === '4h' ? '4h' : v === '1h' ? '1h' : v === '15m' ? '15m' : '5m';
@@ -2531,6 +2549,22 @@ class PollerService {
         news_published_at: xc.news_published_at, catalyst: xc.catalyst,
       });
     }
+    // ↗ A+/A/B tiers for confirmed 5m reclaims (2026-08-01). Derived here,
+    // not stored: both sides' confirmed_at live in the display map (HTF rows
+    // persist 90min-24h, far beyond the ±2min window), so recomputing each
+    // cycle is free and gives late promotion without extra state.
+    for (const row of emaCrossList) {
+      if (row.tf !== '5m' || row.signal !== 'reclaim' || row.status !== 'confirmed' || !row.confirmed_at) continue;
+      const t5 = Date.parse(row.confirmed_at);
+      const co = emaCrossList
+        .filter((h) => h.ticker === row.ticker && h.tf !== '5m'
+          && h.signal === 'reclaim' && h.status === 'confirmed' && h.confirmed_at
+          && Math.abs(Date.parse(h.confirmed_at) - t5) <= CROSS_CO_CONFIRM_MS)
+        .map((h) => h.tf);
+      row.co_tfs = co;
+      row.priority = co.length > 0 ? (row.vol_ratio >= 20 ? 'A+' : 'A') : 'B';
+    }
+
     // Selection + ordering (rewritten 2026-07-28, the WLDS/LION report).
     //
     // The old rule sorted CONFIRMED rows ahead of observing ones

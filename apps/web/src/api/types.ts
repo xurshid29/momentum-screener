@@ -359,6 +359,12 @@ export interface EmaCrossItem {
   pct_since_reclaim?: number | null;
   // Live day change vs the prior close (null when the prior close is unknown).
   change_pct?: number | null;
+  // 5m attention tier (confirmed 5m reclaims only): 'A+' = an HTF reclaim
+  // co-confirmed within ±2 min AND ratio ≥20×; 'A' = co-confirm alone;
+  // 'B' = 5m-only. Attention ranking, not expectancy — see
+  // docs/ema-list-optimization-2026-08-01.md.
+  priority?: 'A+' | 'A' | 'B';
+  co_tfs?: string[];
   cross_at: string;
   confirmed_at: string | null;
   // Our feed sees a sliver of this name's tape (sibling-median notional at

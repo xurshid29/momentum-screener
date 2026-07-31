@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Typography, Tooltip } from 'antd';
 import type { CatalystInfo, EmaCrossItem, TradingSession } from '../../api/types';
 import { useSelection } from '../../context/SelectionContext';
@@ -108,6 +109,27 @@ export function EmaCrossRow({ item, selected, onSelect, onOpenCatalyst, session 
             <span style={{ marginLeft: 4, fontSize: 10, color: '#69c0ff', fontWeight: 600, cursor: 'help' }}>↗</span>
           </Tooltip>
         )}
+        {/* Attention tier (2026-08-01): A+ = another timeframe volume-confirmed
+            the same impulse within ±2 min AND ≥20× — measured 32% reach +20%
+            same-day vs 3.6% for 5m-only. Worded as alignment, never as a buy
+            signal (11 of 24 A+ hit −5% before +20%). */}
+        {(item.priority === 'A+' || item.priority === 'A') && (
+          <Tooltip
+            title={`${item.priority === 'A+' ? 'Aligned + ≥20× volume' : 'Aligned'}: ${(item.co_tfs ?? []).join(', ')} reclaim confirmed within ±2 min of this 5m confirm — attention ranking, not an entry signal`}
+          >
+            <span
+              style={{
+                marginLeft: 5, fontSize: 9, fontWeight: 700, cursor: 'help',
+                padding: '0 4px', borderRadius: 3,
+                background: item.priority === 'A+' ? '#613400' : '#1d3712',
+                color: item.priority === 'A+' ? '#ffd666' : '#95de64',
+                border: `1px solid ${item.priority === 'A+' ? '#ad6800' : '#3f6600'}`,
+              }}
+            >
+              {item.priority}{item.co_tfs && item.co_tfs.length > 0 ? ` ${item.co_tfs.join('·')}` : ''}
+            </span>
+          </Tooltip>
+        )}
         <span style={{ marginLeft: 6, fontSize: 10, color: freshConfirm ? '#95de64' : moving ? '#ffc53d' : '#8c8c8c', fontWeight: freshConfirm || moving ? 600 : undefined }}>
           {confirmed
             ? `✅ ${Math.round(item.vol_ratio)}× vol`
@@ -172,6 +194,14 @@ export function EmaCrossRow({ item, selected, onSelect, onOpenCatalyst, session 
   );
 }
 
+// A confirmed 5m-only (B) row worth keeping VISIBLE despite the collapse:
+// vol ratio ≥30× or price <$2. The escape hatch the codex tiering lacked —
+// on the 3-session window tier B still held 6 of the 18 big movers, and NCRA
+// (+147%, 133×, no HTF co-confirm at all) tops this exact band.
+function isNotableB(x: EmaCrossItem): boolean {
+  return x.vol_ratio >= 30 || x.price < 2;
+}
+
 export function EmaReclaimPanel({ crosses, onOpenCatalyst, session }: {
   crosses: EmaCrossItem[];
   onOpenCatalyst: (ticker: string, catalyst: CatalystInfo | null) => void;
@@ -179,6 +209,17 @@ export function EmaReclaimPanel({ crosses, onOpenCatalyst, session }: {
 }) {
   const { selected, setSelected } = useSelection();
   const { hidden } = useHiddenTickers();
+  // Collapsed-B toggle, device-local like the alerts armed flag. Default
+  // collapsed: the hidden band ran a 2-3% tail rate ≈ the random-bar null.
+  const [showAllB, setShowAllB] = useState<boolean>(() => {
+    try { return localStorage.getItem('ema5m.showAllB') === '1'; } catch { return false; }
+  });
+  const toggleShowAllB = () => {
+    setShowAllB((v) => {
+      try { v ? localStorage.removeItem('ema5m.showAllB') : localStorage.setItem('ema5m.showAllB', '1'); } catch { /* private mode */ }
+      return !v;
+    });
+  };
   const visible = crosses.filter((x) => !hidden.has(x.ticker));
 
   // The lanes always render, even with nothing in them (2026-07-29). An
@@ -191,9 +232,19 @@ export function EmaReclaimPanel({ crosses, onOpenCatalyst, session }: {
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <div style={{ flex: '1 1 auto', display: 'flex', gap: 1, overflow: 'hidden', background: '#237804', minHeight: 0 }}>
         {TF_LANES.map((tf) => {
-          const items = visible.filter((x) => x.tf === tf);
-          const confirmed = items.filter((x) => x.status === 'confirmed').length;
-          const movingCount = items.filter((x) => x.status === 'moving').length;
+          const all = visible.filter((x) => x.tf === tf);
+          // 5m lane only: confirmed B rows that are neither notable (≥30× or
+          // <$2) nor aligned collapse behind the toggle. In-flight rows never
+          // collapse (the WLDS lesson — the nomination is the early signal),
+          // and payload order (newest event first) is kept: the triage comes
+          // from hiding the dead band and the A+/A chips, not from re-sorting
+          // fresh reclaims below old confirms.
+          const collapsible = tf === '5m' && !showAllB
+            ? all.filter((x) => x.status === 'confirmed' && x.priority === 'B' && !isNotableB(x))
+            : [];
+          const items = collapsible.length > 0 ? all.filter((x) => !collapsible.includes(x)) : all;
+          const confirmed = all.filter((x) => x.status === 'confirmed').length;
+          const movingCount = all.filter((x) => x.status === 'moving').length;
           return (
             <div
               key={tf}
@@ -213,12 +264,12 @@ export function EmaReclaimPanel({ crosses, onOpenCatalyst, session }: {
                   <Text type="secondary" style={{ fontSize: 10, cursor: 'help' }}>
                     <span style={{ color: '#95de64' }}>{confirmed}</span>
                     {movingCount > 0 && <span style={{ color: '#ffc53d' }}> ◆{movingCount}</span>}
-                    <span> /{items.length}</span>
+                    <span> /{all.length}</span>
                   </Text>
                 </Tooltip>
               </div>
               <div style={{ flex: '1 1 auto', overflow: 'auto' }}>
-                {items.length === 0 ? (
+                {items.length === 0 && collapsible.length === 0 ? (
                   <div style={{ padding: '14px 8px', textAlign: 'center' }}>
                     <Text type="secondary" style={{ fontSize: 10, color: '#3f4a40' }}>
                       no reclaims
@@ -235,6 +286,18 @@ export function EmaReclaimPanel({ crosses, onOpenCatalyst, session }: {
                       session={session}
                     />
                   ))
+                )}
+                {tf === '5m' && (collapsible.length > 0 || showAllB) && (
+                  <div
+                    onClick={toggleShowAllB}
+                    style={{ padding: '5px 8px', textAlign: 'center', cursor: 'pointer', borderTop: '1px dashed #234d20' }}
+                  >
+                    <Text type="secondary" style={{ fontSize: 10 }}>
+                      {showAllB
+                        ? '▲ collapse 5m-only confirms'
+                        : `▼ ${collapsible.length} 5m-only confirm${collapsible.length === 1 ? '' : 's'} hidden (B tier · ~3% reach +20%) — show all`}
+                    </Text>
+                  </div>
                 )}
               </div>
             </div>

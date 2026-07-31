@@ -1,4 +1,4 @@
-# Session Handover — updated 2026-07-30
+# Session Handover — updated 2026-08-01
 
 A running handover so a fresh session can continue without re-deriving context.
 **Read `docs/web-dashboard.md` first** (the canonical status doc); this file is
@@ -136,6 +136,29 @@ Journal; **attribution join still the open payoff**) · 06-17 tick feed go-live.
 ---
 
 ## What shipped this session (newest first, all on prod unless noted)
+
+XTIER. **↗ 5m attention tiers A+/A/B — display-only (2026-08-01, codex
+study + Claude cross-validation).** Operator: "too many 5m confirms, most
+move <10-20%, a few (FCUV/DFNS/CYCU) are huge — can we optimize the list?"
+Two independent analyses converged: codex found **HTF co-confirmation within
+±2 min** is the primary axis (its no-HTF cell: 0.8% tail on 2 sessions);
+Claude's price×ratio cells + audit found ratio≥30/price<$2 as secondary axes
+and corrected codex's recall (10/11 was a 2-day artifact — the 07-29 session
+held 5 more winners, NONE with HTF co-confirms, incl. NCRA +147% @133×).
+3-session validation: **A+ (HTF+≥20×) 32.3% reach +20% same-day · A 10.0% ·
+B 3.6% ≈ the random-bar null (2.5%)**. Shipped: poller stamps
+`priority`/`co_tfs` on confirmed 5m reclaim rows (derived each cycle from
+confirmed_at in the display map — late HTF confirms promote automatically,
+no new state); UI shows A+/A chips with tf badges, collapses **B-rest**
+(not notable: ratio<30 AND ≥$2) behind a "show all" toggle. Visible set
+keeps 14/18 winners (78%) at ~60% list reduction. Ordering stays
+newest-first (the WLDS lesson — tier-first would re-bury fresh reclaims);
+DFNS on the record as never-capturable (confirm at +197% into its day;
+day-chg% is the guard). Grading: query 7 in reclaim-grading.sql cuts the
+exact tiers; checkpoint question = does B-rest hold at the null while A+
+holds its rate, and what lands in the collapsed band. Addendum with the
+recall correction appended to docs/ema-list-optimization-2026-08-01.md.
+NO detection/alert/semantics change — the freeze holds.
 
 XDASH2. **Four operator-reported dashboard fixes (2026-07-30 evening).**
 All display/enrichment only — detection, confirm rules and alert eligibility
