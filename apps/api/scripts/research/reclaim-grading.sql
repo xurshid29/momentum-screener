@@ -192,3 +192,61 @@ SELECT CASE WHEN htf AND ratio >= 20 THEN 'A+'
        round(100.0*count(*) FILTER (WHERE mfe >= 20)/count(*),1) tail_pct,
        round(percentile_cont(0.5) WITHIN GROUP (ORDER BY mfe)::numeric,1) med_mfe
 FROM o GROUP BY 1 ORDER BY 1;
+
+-- ── 8. Entry mechanics: confirm-print vs pullback-hold (2026-08-02) ─────────
+-- Requires OHLC (2026-07-30+). Pullback rule: first bar retracing to
+-- ≤confirm×0.995 while CLOSING ≥ the reclaim price; entry = stop-buy at that
+-- bar's high; setup dead on any close < reclaim before trigger; stop = the
+-- pullback bar's low; same-bar target+stop counts as stop (no tick order).
+-- 2-session baseline (A+/A, 48 graded): pullback available 81%, runaways
+-- only 2/48 (avg +21.6% missed) — never chase the print; win-rate at +20%
+-- 20.7% (pullback) vs 8.3% (confirm); BOTH ~breakeven as fixed-target
+-- systems — the edge stays in selection + the discretionary exit.
+WITH conf AS (
+  SELECT DISTINCT ON (t.ticker, (t.at AT TIME ZONE 'America/New_York')::date)
+    t.ticker, t.at,
+    (t.meta->>'price')::numeric px, (t.meta->>'cross_price')::numeric cx,
+    (t.at AT TIME ZONE 'America/New_York')::date d,
+    EXISTS (SELECT 1 FROM tier_events h WHERE h.ticker=t.ticker AND h.tier='cross'
+      AND h.event='confirm' AND h.meta->>'signal'='reclaim' AND h.meta->>'tf'<>'5m'
+      AND h.at BETWEEN t.at - interval '2 minutes' AND t.at + interval '2 minutes') htf
+  FROM tier_events t
+  WHERE t.tier='cross' AND t.event='confirm' AND t.meta->>'signal'='reclaim'
+    AND t.meta->>'tf'='5m' AND t.at >= timestamptz '2026-07-30 04:00:00-04'
+  ORDER BY t.ticker, (t.at AT TIME ZONE 'America/New_York')::date, t.at),
+bars AS (
+  SELECT c.ticker, c.at, coalesce(b.high,b.close) hi, coalesce(b.low,b.close) lo, b.close cl,
+         row_number() OVER (PARTITION BY c.ticker, c.at ORDER BY b.bar_ts) rn
+  FROM conf c JOIN bars_5m b ON b.ticker=c.ticker AND b.bar_ts > c.at
+    AND (b.bar_ts AT TIME ZONE 'America/New_York')::date = c.d),
+pc AS (
+  SELECT c.*,
+    (SELECT count(*) FROM bars b WHERE b.ticker=c.ticker AND b.at=c.at) nbars,
+    (SELECT max(b.hi) FROM bars b WHERE b.ticker=c.ticker AND b.at=c.at) day_hi,
+    (SELECT min(b.rn) FROM bars b WHERE b.ticker=c.ticker AND b.at=c.at AND b.hi >= c.px*1.20) tgt_c,
+    (SELECT min(b.rn) FROM bars b WHERE b.ticker=c.ticker AND b.at=c.at AND b.lo <= c.cx) stp_c,
+    (SELECT min(b.rn) FROM bars b WHERE b.ticker=c.ticker AND b.at=c.at AND b.lo <= c.px*0.995 AND b.cl >= c.cx) b1,
+    (SELECT min(b.rn) FROM bars b WHERE b.ticker=c.ticker AND b.at=c.at AND b.cl < c.cx) dead
+  FROM conf c),
+pb AS (
+  SELECT pc.*, b1r.hi b1hi, b1r.lo b1lo,
+    (SELECT min(b.rn) FROM bars b WHERE b.ticker=pc.ticker AND b.at=pc.at AND b.rn > pc.b1 AND b.hi > b1r.hi) e1
+  FROM pc LEFT JOIN bars b1r ON b1r.ticker=pc.ticker AND b1r.at=pc.at AND b1r.rn=pc.b1),
+res AS (
+  SELECT pb.*,
+    (pb.b1 IS NOT NULL AND (pb.dead IS NULL OR pb.b1 < pb.dead)) pb_avail,
+    (pb.e1 IS NOT NULL AND (pb.dead IS NULL OR pb.e1 <= pb.dead)) pb_in,
+    (SELECT min(b.rn) FROM bars b WHERE b.ticker=pb.ticker AND b.at=pb.at AND b.rn >= pb.e1 AND b.hi >= pb.b1hi*1.20) tgt_p,
+    (SELECT min(b.rn) FROM bars b WHERE b.ticker=pb.ticker AND b.at=pb.at AND b.rn >= pb.e1 AND b.lo <= pb.b1lo) stp_p
+  FROM pb)
+SELECT CASE WHEN htf THEN 'A+/A (selected)' ELSE 'B (rest)' END cohort,
+  count(*) FILTER (WHERE nbars>=4) graded,
+  count(*) FILTER (WHERE nbars>=4 AND tgt_c IS NOT NULL AND (stp_c IS NULL OR tgt_c < stp_c)) c_target_first,
+  count(*) FILTER (WHERE nbars>=4 AND stp_c IS NOT NULL AND (tgt_c IS NULL OR stp_c <= tgt_c)) c_stop_first,
+  count(*) FILTER (WHERE nbars>=4 AND pb_avail) pb_setup,
+  count(*) FILTER (WHERE nbars>=4 AND pb_in) pb_in,
+  count(*) FILTER (WHERE nbars>=4 AND pb_in AND tgt_p IS NOT NULL AND (stp_p IS NULL OR tgt_p < stp_p)) p_target_first,
+  count(*) FILTER (WHERE nbars>=4 AND pb_in AND stp_p IS NOT NULL AND (tgt_p IS NULL OR stp_p <= tgt_p)) p_stop_first,
+  count(*) FILTER (WHERE nbars>=4 AND NOT pb_avail AND dead IS NULL) never_pulled_back,
+  round(avg(100*(day_hi/px-1)) FILTER (WHERE nbars>=4 AND NOT pb_avail AND dead IS NULL)::numeric,1) missed_mfe_pct
+FROM res GROUP BY 1 ORDER BY 1;
