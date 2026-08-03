@@ -825,5 +825,41 @@ console.log('S39 — exceptional-expansion escape from the dollar floor (the GSU
     me == null || me.type === 'nominate', `got ${me?.type ?? 'nothing'}`);
 }
 
+console.log('S40 — a continuous walk to 5x+ is NOT a split; only first-tick-after-silence tests (HYFM)');
+{
+  // HYFM 2026-08-03: Friday close $0.55, Monday tape walked 0.75 -> 2.71 in
+  // continuous prints minutes apart; the old guard compared every tick vs the
+  // last COMMITTED close (Friday) and wiped all five layers mid-run at 4.92x
+  // — after the 1h had confirmed at $0.75 on a +650% day.
+  const s = new Sim('TEST', EMA_CROSS, T0_SESSION);
+  s.tracker.setSessionOpen(T0_SESSION);
+  warmDipped(s, 0.61, 10_000);     // warm, ends dipped ~0.55 — armed below the stack
+  s.skip(84);                      // overnight: ~7h of tick silence
+  s.bar(0.75, 20_000);             // first post-gap tick: 1.36x — guard tests, passes
+  s.bars(3, 1.60, 40_000);         // continuous walk, minutes apart...
+  s.bars(3, 2.71, 60_000);         // ...4.9x the base — the old guard wiped here
+  s.bars(3, 4.00, 80_000);         // 7x+ — far past the threshold
+  check('state SURVIVES a continuous 7x walk', (s.tracker.snapshot('TEST')?.bars ?? 0) > 80,
+    `bars ${s.tracker.snapshot('TEST')?.bars}`);
+  check('and the reclaim machinery stayed alive through it',
+    s.events.some((e) => e.signal === 'reclaim'), `${s.events.length} events`);
+
+  // The re-break loop: after a LEGIT reset (real split print), the backfill
+  // re-seeds — often still on the old basis — and the next tick arrives
+  // minutes later. Tick recency survives the reset, so it must NOT re-wipe.
+  const t = new Sim('TEST', EMA_CROSS, T0_SESSION);
+  t.tracker.setSessionOpen(T0_SESSION);
+  t.bars(70, 0.9, 10_000);         // warm; i ends at 70
+  t.skip(84);                      // 7h silence; i = 154
+  t.bar(85, 5_000);                // true basis jump on the first print -> reset; i = 155
+  check('real split still resets', (t.tracker.snapshot('TEST')?.bars ?? 0) === 0 || t.tracker.snapshot('TEST') == null);
+  // reseed on the OLD basis, history running right up to the present
+  for (let i = 85; i <= 154; i++) t.tracker.seedBar('TEST', T0_SESSION + i * 300, 0.9, 10_000);
+  t.tracker.addBar('TEST', T0_SESSION + 155 * 300 + 30, 86, 5_000); // next tick, 5 min after the reset tick
+  const snap = t.tracker.snapshot('TEST');
+  check('reseeded state is NOT re-wiped by the next tick (no re-break loop)',
+    snap != null && (snap.bars ?? 0) >= 70, `bars ${snap?.bars}`);
+}
+
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

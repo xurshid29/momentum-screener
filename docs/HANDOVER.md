@@ -1,4 +1,4 @@
-# Session Handover — updated 2026-08-01
+# Session Handover — updated 2026-08-03
 
 A running handover so a fresh session can continue without re-deriving context.
 **Read `docs/web-dashboard.md` first** (the canonical status doc); this file is
@@ -136,6 +136,35 @@ Journal; **attribution join still the open payoff**) · 06-17 tick feed go-live.
 ---
 
 ## What shipped this session (newest first, all on prod unless noted)
+
+XHYFM. **The basis-break guard wiped a +650% runner mid-run — guard now
+tick-silence-gated (2026-08-03).** HYFM: dead tape at $0.55 for weeks, Monday
+vertical to $4.08. The layer's best catch to date — 1h instant-confirm
+$0.7501 (36×) intrabar ON the ignition bar, 15m+4h 99s later, TV's own EMA
+pair at $0.678/0.684 — then at 07:34 the FFAI split guard read the CONTINUOUS
+walk $0.551→$2.71 (4.92×) as a reverse split and deleted ALL FIVE layers'
+state mid-run. Worse: the backfill re-seeded on the old basis and the next
+tick re-broke it ($0.551→$3.37) — a loop that kept the symbol blind all day.
+Third specimen (STKH 4.87× reset the 1d on 07-27's own ship day; PFSA/LGHL
+forced the same-day 4.85× recalibration). Root cause: the guard compared
+EVERY tick against the last COMMITTED close — which on Monday morning is
+FRIDAY's (the open bucket never commits until the next bucket's tick), so a
+runner walking up in prints minutes apart was tested against a 3-day-old
+basis until one print crossed 4.85×. A basis break physically manifests on
+the FIRST print after a gap; a continuous walk cannot be a split. Fix: the
+guard now evaluates ONLY on the first tick after ≥6h of TICK silence, with
+tick recency in a map OUTSIDE the resettable state (so a legit reset cannot
+re-break on the post-reseed tick). FFAI protection intact (S32); S40 pins
+the walk survival + no-re-break-loop. Suite → 40 scenarios.
+⚠️ Shipped DURING the freeze as a state-destruction bug fix (operator's
+call, AskUserQuestion 08-03): it prevents false wipes on the ≥4.85× runner
+class — additive-only, affected names identifiable via the basis-break log
+lines; grading can segment. Also on the record: HYFM produced ZERO phone
+alerts (Telegram is 5m-confirm-only; the 5m likely pended on a thin sibling
+and died in the wipe) — with FCUV that is two +650% names where HTF
+alignment was the signal; the strongest exhibit yet for the checkpoint's
+Telegram-promotion question. 5m never fired: not provable post-wipe (pends
+are not persisted).
 
 XTIER. **↗ 5m attention tiers A+/A/B — display-only (2026-08-01, codex
 study + Claude cross-validation).** Operator: "too many 5m confirms, most

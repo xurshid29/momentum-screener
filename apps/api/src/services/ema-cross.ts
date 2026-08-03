@@ -473,6 +473,14 @@ function median(xs: number[]): number {
 
 export class EmaCrossTracker {
   private state = new Map<string, SymState>();
+  // Newest LIVE tick per symbol, kept OUTSIDE SymState deliberately
+  // (2026-08-03, the HYFM wipe): the basis-break guard must know whether the
+  // tape has been flowing, and that knowledge has to survive the very reset
+  // the guard performs — inside SymState it died with the state, so the
+  // backfill re-seeded on the old basis and the next tick re-broke it, in a
+  // loop, blinding the symbol for the day. Seeds never touch this map (they
+  // are not ticks). Size is bounded by the subscribed universe.
+  private lastTickSec = new Map<string, number>();
   private bucketOff: number;
 
   // Secondary-event queue: the price-reclaim channel emits here so addBar's
@@ -796,7 +804,19 @@ export class EmaCrossTracker {
     // the symbol — warmup then blocks all events until the backfill reseeds
     // it on the new basis (the split-adjuster handles the seam read-side).
     // Better an hour blind than a phantom nomination.
-    if (st.lastCloseTs > 0 && st.lastClose > 0 && tsSec - st.lastCloseTs >= 6 * 3600) {
+    // Guard eligibility is TICK silence, not committed-bar age (2026-08-03,
+    // the HYFM wipe — third specimen after STKH and PFSA/LGHL). A basis break
+    // physically manifests on the FIRST print after a gap: FFAI's split gapped
+    // 90× overnight with nothing in between. Comparing every tick against the
+    // last COMMITTED close instead meant a Monday runner walking $0.55 → $2.71
+    // in continuous 3-minutes-apart prints was still being tested against
+    // FRIDAY (the open bucket never commits until the next bucket's tick), and
+    // at 4.92× the guard nuked all five layers mid-run — after the 1h had
+    // already confirmed at $0.7501 on what became a +650% day. A continuous
+    // walk can never be a split; only the first print after real silence can.
+    const prevTickSec = this.lastTickSec.get(ticker) ?? 0;
+    this.lastTickSec.set(ticker, tsSec);
+    if (st.lastCloseTs > 0 && st.lastClose > 0 && tsSec - prevTickSec >= 6 * 3600) {
       // ≥4.85× ONLY (2026-07-27, same-day lesson): the first cut also reset
       // on 1.94–4.85× near-whole ratios, and all four of day-one's resets
       // were FALSE positives on genuine doublers — PFSA $1.65→$3.22 (1.952×,
