@@ -1,4 +1,4 @@
-# Session Handover — updated 2026-08-03
+# Session Handover — updated 2026-08-04
 
 A running handover so a fresh session can continue without re-deriving context.
 **Read `docs/web-dashboard.md` first** (the canonical status doc); this file is
@@ -7,9 +7,12 @@ the "where we are right now + what's open" layer on top of it.
 detection chain** (📰/🤫/📈/👀/🛰️ — how each layer works, knobs, grading SQL).
 Memory files under `…/memory/` also carry the durable facts.
 
-**CURRENT FOCUS (2026-07-27): the ↗ price-reclaim layer — reclaim-ONLY on
-FIVE timeframes — is the operator's PRIMARY instrument and the only
-Telegram-alerting component.** The 10/65 crossover channel is RETIRED
+**CURRENT FOCUS (refreshed 2026-08-04): the ↗ price-reclaim layer —
+reclaim-ONLY on FIVE timeframes — is the operator's PRIMARY instrument and
+the only Telegram-alerting component; the operator works the ↗ EMA tab
+(default view) with A+/A/B attention tiers and trades the measured playbook
+(select on chips → wait for the pullback → enter its break → structural
+stop → exit into strength).** The 10/65 crossover channel is RETIRED
 (2026-07-26, `cross_detect: false` everywhere; machinery kept + tested for a
 data revisit). The chain otherwise runs in full (🤫 accum → ↗ reclaim →
 👀 watch → 🛰️ confirm → screens; 📰 radar is DARK while Benzinga is parked;
@@ -23,11 +26,18 @@ every transition in `tier_events`; sidebar reseeds on boot).
   widens until the bar count clears warmup,
   pend-through-insufficient-evidence in all three shapes (thin sibling
   window / junk-dollar arming bar / decay-flip), basis-break guard ≥4.85×
-  (splits reset state, real doublers don't), weekend test prints dropped
+  evaluated ONLY on the first tick after ≥6h of tick silence (XHYFM — a
+  continuous walk to 5× is a runner, not a split; real splits still reset),
+  weekend test prints dropped
   live + in backfills, corrupt-source guard (flip-flop + amplitude) → Yahoo
-  fallback, split-adjusted seeds bounded to 1–3 day seams. Volume confirm
-  unchanged: sibling ≥3×/5× + $10k notional, $500 junk floor. Full spec:
-  `docs/detection-layers.md`.
+  fallback, split-adjusted seeds bounded to 1–3 day seams. Volume confirm:
+  sibling ≥3×/5× + $10k notional ($500 junk floor), OR the
+  exceptional-expansion escape (≥30× + ≥$1.5k + sib ≥2× dead-tape floor —
+  the GSUN/CYCU/FCUV class; dashboard+grading only, no phone). Confirmed 5m
+  rows carry **A+/A/B attention tiers** (A+ = HTF reclaim co-confirm ±2min
+  + ≥20× → 32.3% reach +20% same-day; B ≈ the random-bar null → B-rest
+  collapses in the UI, B-notable ≥30×/<$2 stays visible). Full spec:
+  `docs/detection-layers.md` + `docs/ema-list-optimization-2026-08-01.md`.
 - **Alert posture (operator's call):** Telegram = ↗✅ 5m reclaim confirms
   ONLY (`ema_reclaim` slug; HTF reclaims are dashboard+grading — promote by
   deleting one guard line in `pushCrossAlert` when graded). Everything else
@@ -44,29 +54,39 @@ every transition in `tier_events`; sidebar reseeds on boot).
   VTAK/EDBL premarket) is invisible until real lots print on MINI —
   SIP/PLUS (~$825/mo, via support) is the only true fix.
 
-**THE PENDING TASK — the grading pass.** The cross-vs-reclaim A/B is MOOT
-(crossover retired by operator instinct 07-26). Grade the ↗ reclaim funnel
-per timeframe once it has a few clean sessions: **the clean segment starts
-2026-07-29** (semantics churned daily 07-22→07-28; boundary log: 07-22
-10/65 params · 07-23 gap-decay+pends · 07-24 reclaim channel added · 07-25
-weekend gate · 07-26 reclaim-only + 15m/1d · 07-27 split/basis guards, no
-stale wait, junk-disarm pend · 07-28 staged arming + the three FIEE warmup
-holes). Cuts in tier_events meta: `tf`, `intrabar`,
-`sib_median`/`notional` (thin-tape band; ⚠️ pend-conversions carry inflated
-ratios — segment on sib_median), `pending_min`, `in_ladder`, **`staged_bars`
-(0 = old semantics would have caught it too; >0 = staircase-only — the
-keep/kill cut for the 07-28 widening)**, catalyst-vs-not
-via join to `news_articles`. Decide per tf: keep/kill, Telegram promotion
-(15m/1h/4h/1d currently dashboard-only), and whether the dead-tape band
-(sib_median×price < ~$2k) earns its conditional floor. **Watch the 5m
-nomination rate first** — 07-28 both widened arming AND warmed a class of
-thin names that never nominated before; if it floods, the dials are
-`staged_arm_bars` and `nominate_min_notional`, in that order. Also still owed:
-(b) 👀 evidence-gate cost audit (`watch_suppressed low_evidence` that later
-confirmed); (c) accum v2 precision re-check. (Radar grading is moot while
-Benzinga is parked.)
+**THE PENDING TASK — the ~2026-08-12 checkpoint (ten clean sessions from
+07-29).** Semantics are FROZEN since 08-01 (the 08-03 guard fix is a
+state-destruction bug fix, additive-only, log-identifiable). The checkpoint
+runs `apps/api/scripts/research/reclaim-grading.sql` — the cuts are all
+committed, definitions frozen in code, baselines recorded in the headers:
+q4 session-matched control (standard confirms measured at NO median edge on
+2 sessions — does that null hold?), q5+q6 the exceptional-escape cohort
+(does its 2.5×-up/1.75×-down asymmetry survive n≈50 + target-before-stop?),
+q7 the A+/A/B tiers (does A+ hold ~32% reach-+20 and B-rest stay at the
+null? what lands in the collapsed band — UPC-class AH winners?), q8 entry
+mechanics (does the 81%-pullback / 2× win-rate result hold?). Decisions
+queued for it: **Telegram promotion for HTF-aligned confirms (A+)** — FCUV
+and HYFM (+650% each, phone silent) are the exhibits; escape → phone or
+kill; the dead-tape conditional floor; per-tf keep/kill. Boundary log for
+segmentation: 07-22 10/65 · 07-23 gap-decay+pends · 07-24 reclaim channel ·
+07-25 weekend gate · 07-26 reclaim-only+15m/1d · 07-27 guards/no-stale-wait
+· 07-28 staged arming + FIEE warmup holes · **07-29 11:16 ET escape
+(additive)** · 07-30 OHLC persistence · 08-03 guard tick-silence fix
+(additive). Also still owed: (b) 👀 evidence-gate cost audit; (c) accum v2
+precision re-check; radar grading moot while Benzinga is parked.
 
-**Recent focus trail** (each has a dated entry below): 07-28 XFIEE (the
+**Recent focus trail** (each has a dated entry below): 08-03 XHYFM (the
+basis-break guard wiped a +650% runner mid-run → guard now first-tick-after-
+silence only; suite 40 scenarios) · 08-01/02 XTIER (A+/A/B attention tiers,
+display-only, from the codex study + 3-session cross-validation) + the
+entry-mechanics study (pullback comes 81%, runaways 2/48 — the playbook) ·
+07-30 XGRADE (first production review: no median edge for standard confirms
+vs session-matched control; OHLC persistence + 45d retention shipped;
+semantics FROZEN) + XDASH2 (alerts-mute was never wired; CYCU news-retry;
+day change% on rows) · 07-29 XFLOOR (the GSUN escape + 'no in-flight
+predictor exists' — do not build about-to-confirm tiers) + the ◆ moving
+retier + WLDS display starvation fix + /latest DB fallback + the 4GB
+resize after the 1d-refetch swap storm · 07-28 XFIEE (the
 trickle-tape day: a +156% run the 5m layer could not see — below-warmup
 reseed hole, calendar-vs-bar-count fetch window, gap-decay on consolidated
 replay) + XSTAGE (staged arming) · 07-27 the shakedown
@@ -946,7 +966,7 @@ history (temp tables `ir_entry` / `scored`, joined `ignition_results` →
 
 ---
 
-## Other deferred / known (refreshed 2026-07-27)
+## Other deferred / known (refreshed 2026-08-04)
 
 - **The grading pass** — the single next task; see THE PENDING TASK above
   (reclaim precision per tf, clean segment from 2026-07-28). Watch reclaim
@@ -959,8 +979,9 @@ history (temp tables `ir_entry` / `scored`, joined `ignition_results` →
   scales ~25× apart for months (premarket/AH vs regular buckets); (c)
   single wildly off-scale poison prints (EDBL). All contained by our
   guards + Yahoo fallbacks, but the vendor should know.
-- **⚠️ The droplet is memory-tight — 2 GB total, and the API is the whole
-  budget (2026-07-28).** Symptom that led here: "dashboard stays empty for a
+- **⚠️ Droplet RESIZED 2 GB → 4 GB (2026-07-28, operator's call) after the
+  swap-thrashing incident below; ~2 GB headroom at current load, sweep peaks
+  ~1.3 GB RSS. The incident record (measured on the 2 GB box):** Symptom that led here: "dashboard stays empty for a
   while after reload". Measured mid-incident: Node **RSS 877 MB + 1.53 GB
   SWAPPED**, host 102 MB free, **80–90% iowait** during background sweeps —
   the request path itself was fine between bursts (p50 0.36s), so this
@@ -1056,13 +1077,16 @@ history (temp tables `ir_entry` / `scored`, joined `ignition_results` →
   warm across all subsequent deploys. **Grading note: treat 07-15 as a blind
   day; the 📈 trial effectively restarts 07-16.**
 - **DB growth** — 4.9 GB total, ~20 GB/yr run-rate (per-cycle tables dominate);
-  49 GB free → years of headroom. Plan when disk crosses ~60%: archive+prune
+  95 GB free after the resize (disk grew 67→116 GB) → years of headroom.
+  Plan when disk crosses ~60%: archive+prune
   per-cycle rows >120–180d (or month-partitioning). Deliberately deferred.
 - **Databento capacity** — flat $199/mo live (EQUS.MINI, ~3.4k symbols);
   historical is metered but tiny (daily ohlcv backfills bill cents; the
   hourly HTF scans are batched 100 syms/request). Real limit = ONE live
   connection (deploy-overlap incident class, fixed 06-22). Bar stores:
-  bars_5m (6d retention / 5d seed), bars_1h (35d), bars_4h (130d).
+  bars_5m (**45d retention** since 07-30 — grading evidence, with OHLC;
+  5d boot-seed window unchanged), bars_15m (12d), bars_1h (35d), bars_4h
+  (130d), bars_1d (260d).
 - **Known-runner set eviction** — `radarHistory` re-seeds per boot (rolling
   30d); a process running many weeks without deploys wouldn't evict. Moot at
   current deploy cadence; one-line daily reseed if that changes.
