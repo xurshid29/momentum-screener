@@ -41,7 +41,6 @@ export function EmaCrossRow({ item, selected, onSelect, onOpenCatalyst, session 
   // both age and price). This just answers "is it going anywhere yet", so
   // the operator scans a handful of movers instead of forty flat rows.
   const moving = item.status === 'moving';
-  const isHtf = item.tf !== '5m';
   // Only after-hours diverges: the screener's v=152 overlay replaces change%
   // with the after-hours move in that session alone (premarket, regular and
   // closed all read vs the prior close on both panels).
@@ -75,14 +74,18 @@ export function EmaCrossRow({ item, selected, onSelect, onOpenCatalyst, session 
       onClick={() => onSelect(item.ticker)}
       className={freshConfirm ? 'ema-confirm-fresh' : undefined}
       style={{
-        display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
-        padding: '4px 8px', borderBottom: '1px solid #162b1a', cursor: 'pointer',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '3px 6px', borderBottom: '1px solid #162b1a', cursor: 'pointer',
         borderLeft: `3px solid ${confirmed ? '#52c41a' : moving ? '#d48806' : '#3f6600'}`,
         background: selected ? '#1c3a22' : undefined,
         opacity: confirmed || moving ? 1 : 0.7,
       }}
     >
-      <span style={{ minWidth: 0 }}>
+      {/* One line, always (2026-08-05, the laptop report): at ~300px lanes the
+          old free-wrapping text broke every row into 2-3 ragged lines. The
+          left side now truncates with an ellipsis; chg% + price stay pinned
+          right; the status tooltip carries the full wording. */}
+      <span style={{ flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
         <span style={{ marginRight: 6, display: 'inline-flex', verticalAlign: 'middle' }}>
           <TickerLinks ticker={item.ticker} />
         </span>
@@ -130,14 +133,21 @@ export function EmaCrossRow({ item, selected, onSelect, onOpenCatalyst, session 
             </span>
           </Tooltip>
         )}
-        <span style={{ marginLeft: 6, fontSize: 10, color: freshConfirm ? '#95de64' : moving ? '#ffc53d' : '#8c8c8c', fontWeight: freshConfirm || moving ? 600 : undefined }}>
-          {confirmed
-            ? `✅ ${Math.round(item.vol_ratio)}× vol`
+        <Tooltip
+          title={confirmed
+            ? `Volume-confirmed ${Math.round(item.vol_ratio)}× · reclaim ${ago} ago${showConfirmAgo ? ` · confirmed ${fmtAgo(confirmAgoMs!)} ago` : ''}`
             : moving
-              ? `◆ moving · ${Math.round(item.vol_ratio)}×`
-              : isHtf ? (item.signal === 'reclaim' ? 'reclaim' : 'cross') : '… observing'} · {item.signal === 'reclaim' ? 'reclaim ' : isHtf ? '' : 'cross '}{ago} ago
-          {showConfirmAgo && ` · confirmed ${fmtAgo(confirmAgoMs!)} ago`}
-        </span>
+              ? `Moving: +${item.pct_since_reclaim?.toFixed(1) ?? '?'}% off the reclaim (${ago} ago), ${Math.round(item.vol_ratio)}× last bar — descriptive, not a confirm forecast`
+              : `Observing — reclaim ${ago} ago, waiting on volume evidence`}
+        >
+          <span style={{ marginLeft: 6, fontSize: 10, cursor: 'help', color: freshConfirm ? '#95de64' : moving ? '#ffc53d' : '#8c8c8c', fontWeight: freshConfirm || moving ? 600 : undefined }}>
+            {confirmed
+              ? `✅ ${Math.round(item.vol_ratio)}× · ${ago}${showConfirmAgo ? ` · conf ${fmtAgo(confirmAgoMs!)}` : ''}`
+              : moving
+                ? `◆ ${Math.round(item.vol_ratio)}× · ${ago}`
+                : `… ${ago}`}
+          </span>
+        </Tooltip>
         {!confirmed && item.pct_since_reclaim != null && (
           <Tooltip title="Live price move since the reclaim. Note this does NOT predict a confirm — measured, nothing in-flight does (89.5% of nominations never confirm, and the hazard is flat in age and price).">
             <span style={{
