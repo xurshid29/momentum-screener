@@ -181,7 +181,7 @@ export function MacdMomoPanel({ items, onOpenCatalyst, session }: {
           display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flex: '0 0 auto',
         }}
       >
-        <Tooltip title="The session's top gainers (top-10 by day change ∪ anything ≥30%, sticky for the ET day) with their live MACD 3/10/8 state. Act on ⤴ CURLING. Sort: ⤴ curling → ✚ crossed → turning → cooling; within a state, <0 (below-zero reset) first, then by day change.">
+        <Tooltip title="The session's top gainers (top-10 by day change ∪ anything ≥30%, sticky for the ET day) with their live MACD 3/10/8 state. Act on ⤴ CURLING. Sort: ⤴ curling → ✚ crossed → turning → cooling; within a state, <0 (below-zero reset) first, then newest ⤴/✚ event first.">
           <Text style={{ color: '#ffc53d', fontSize: 11, fontWeight: 600, cursor: 'help' }}>
             ⤴ TOP GAINERS · MACD 3/10/8
           </Text>

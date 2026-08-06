@@ -384,7 +384,9 @@ staleness chip, news badge, full-day chg%. Display state renders the
 FORMING bar from the live screen price, synthesizing every missed
 in-session bucket (capped at one ring refresh; closed sessions synthesize
 nothing; 'turning' never claimed across a synthesized hole). **Sort:**
-state ladder → <0 first within the state → day-chg desc. NO sounds, NO
+state ladder → <0 first within the state → newest ⤴/✚ event first (no
+event → qualification time; chg-ordering floated stale round-trippers
+over live movers — the WLDS lesson). NO sounds, NO
 Telegram (operator's call pre-replay — promote only a gated subset after
 grading, e.g. first-setup-of-day or <0-only).
 

@@ -237,11 +237,17 @@ the flag is stamped at the cross EVENT (origin) — the live line rises
 through zero as the leg runs, which would strip the badge exactly when the
 thesis works; other states read the live line. The <0 marker became a
 bordered badge on every state (was tiny text, hidden on cooling).
-Display-only; meta.below_zero already carries the grading cut. **Day-1
-tally (first full session):** 24 setups / 53 crosses across ~20 qualified
-leaders — 21/24 setups below-zero (the announce-worthy curl IS mostly the
-deep-reset class, consistent with the operator's read). WYHG closed the
-loop: setup→cross staircase fired live at +106%, ran to +565% same day.
+Display-only; meta.below_zero already carries the grading cut. **Round 4
+(operator's call, same evening): the third sort key is TIME, not
+magnitude** — newest ⤴/✚ event first (no event → qualification time).
+Chg-desc floated a stale −39% round-tripper (XCH, <0-origin) over the
++562% live mover; magnitude has its own column, and the row whose event
+just fired is the acting one (the WLDS lesson, re-learned on this tab).
+**Day-1 tally (first full session):** 24 setups / 53 crosses across ~20
+qualified leaders — 21/24 setups below-zero (the announce-worthy curl IS
+mostly the deep-reset class, consistent with the operator's read). WYHG
+closed the loop: setup→cross staircase fired live at +106%, ran to +565%
+same day.
 
 XHYFM. **The basis-break guard wiped a +650% runner mid-run — guard now
 tick-silence-gated (2026-08-03).** HYFM: dead tape at $0.55 for weeks, Monday

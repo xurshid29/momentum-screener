@@ -2801,14 +2801,23 @@ class PollerService {
     // Curling first (the entry moment), then crossed, then the rest. Within
     // a state, below-zero resets rank first (operator's read 2026-08-06:
     // curls out of a deep reset work better — the grading checkpoint tests
-    // it via meta.below_zero), then leaders by day change.
+    // it via meta.below_zero), then NEWEST ⤴/✚ event first (operator's
+    // call, same evening — replaced day-chg desc: the row whose curl or
+    // cross just fired is the one to act on, magnitude already has its own
+    // column, and chg-ordering floated stale round-trippers over live
+    // movers — the WLDS lesson again). No event yet → qualification time.
     const MOMO_STATE_ORDER: Record<MacdMomoItem['state'], number> = {
       curling: 0, crossed: 1, turning: 2, cooling: 3, warming: 4,
     };
+    const momoTs = (x: MacdMomoItem) => Math.max(
+      x.setup_at ? Date.parse(x.setup_at) : 0,
+      x.cross_at ? Date.parse(x.cross_at) : 0,
+      Date.parse(x.qualified_at) || 0,
+    );
     macdMomoList.sort((a, b) =>
       MOMO_STATE_ORDER[a.state] - MOMO_STATE_ORDER[b.state]
       || Number(b.below_zero === true) - Number(a.below_zero === true)
-      || (b.chg_pct ?? 0) - (a.chg_pct ?? 0));
+      || momoTs(b) - momoTs(a));
     const macdMomoDisplay = macdMomoList.slice(0, MACD_MOMO.max_display);
 
     // After-hours: re-impose a volume gate on the momentum list. Finviz drops
