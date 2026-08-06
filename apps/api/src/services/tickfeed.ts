@@ -620,10 +620,18 @@ class TickFeedService {
   // bar provisionally — see MacdCurlTracker.snapshot.
   macdSnapshot(ticker: string, livePrice?: number):
     (NonNullable<ReturnType<MacdCurlTracker['snapshot']>> & { chg_pct: number | null }) | null {
-    const s = this.macdCurl.snapshot(ticker, livePrice);
+    // Off-screen sticky names have no screen-row price; the 5m EMA tracker's
+    // OPEN bucket still carries the newest MINI print, which beats freezing
+    // on the last closed bar.
+    let px = livePrice;
+    if (!(px != null && px > 0)) {
+      const e5 = this.emaCross.snapshot(ticker);
+      if (e5?.open_bucket_close != null && e5.open_bucket_close > 0) px = e5.open_bucket_close;
+    }
+    const s = this.macdCurl.snapshot(ticker, px);
     if (!s) return null;
     const prior = universe.getPriorCloses().get(ticker);
-    const cur = livePrice != null && livePrice > 0 ? livePrice : s.last_close;
+    const cur = px != null && px > 0 ? px : s.last_close;
     return {
       ...s,
       chg_pct: prior && prior > 0 && cur > 0
@@ -1140,6 +1148,7 @@ class TickFeedService {
     const etOff = etUtcOffsetHours();
     this.emaCross.setSessionOpen(sessionOpen);
     this.emaCross.setEtOffset(etOff);
+    this.macdCurl.setEtOffset(etOff);
     for (const l of this.htfLayers) {
       l.tracker.setSessionOpen(sessionOpen);
       l.tracker.setEtOffset(etOff);

@@ -143,6 +143,44 @@ console.log('S7 silent seed builds state without events, live continues seamless
     `types: ${evs.map((e) => e.type).join(',')}`);
 }
 
+console.log('S8 provisional multi-bucket fold — stale holes converge, closed sessions do not wash');
+{
+  // 2025-07-30 (a Wednesday) 14:00 ET — every bar lands inside the ETH
+  // session on the tracker's default EDT clock.
+  const T8 = 1_753_898_400;
+  const mkTape = (n: number) => Array.from({ length: n }, (_, i) => (i < 20 ? 100 : 100 + (i - 19) * 0.75));
+
+  // (a) Intraday stale hole: tape ends 16:30 ET at ~107.5, then the feed goes
+  // silent for 30 min while the (consolidated) price collapses to 100. One
+  // folded bar keeps the stale-high ring in charge; the multi-bucket fold
+  // must converge below the signal (the LPSN/GVH shape).
+  const trA = new MacdCurlTracker();
+  mkTape(30).forEach((c, i) => trA.addClosedBar('TEST', T8 + (i + 1) * IV, c));
+  const lastA = T8 + 30 * IV;
+  const committed = trA.snapshot('TEST')!;
+  check('committed state above on the rising tape', committed.above);
+  const holeSnap = trA.snapshot('TEST', 100, lastA + 6 * IV + 30)!;
+  check('stale hole synthesizes the missed buckets', holeSnap.synth_buckets >= 2,
+    `synth=${holeSnap.synth_buckets}`);
+  check('multi-fold at a collapsed price reads below the signal', !holeSnap.above,
+    `line=${holeSnap.line.toFixed(3)} sig=${holeSnap.signal_val.toFixed(3)}`);
+  check('no turn claimed across a synthesized hole', holeSnap.rising_bars === 0);
+
+  // (b) Overnight: tape ends exactly at 20:00 ET; next morning 03:00 ET is
+  // all closed-session buckets away — nothing must synthesize, and the
+  // state must equal the immediate single-bar fold (TV holds its panel
+  // across the close).
+  const trB = new MacdCurlTracker();
+  mkTape(72).forEach((c, i) => trB.addClosedBar('TEST', T8 + (i + 1) * IV, c));
+  const lastB = T8 + 72 * IV; // 20:00 ET
+  const immediate = trB.snapshot('TEST', 130, lastB + 30)!;
+  const overnight = trB.snapshot('TEST', 130, lastB + 7 * 3600)!; // 03:00 ET next day
+  check('closed session synthesizes nothing', overnight.synth_buckets === 0,
+    `synth=${overnight.synth_buckets}`);
+  check('overnight state equals the immediate fold',
+    Math.abs(overnight.line - immediate.line) < 1e-9 && Math.abs(overnight.signal_val - immediate.signal_val) < 1e-9);
+}
+
 if (failures > 0) {
   console.error(`\n${failures} check(s) FAILED`);
   process.exit(1);

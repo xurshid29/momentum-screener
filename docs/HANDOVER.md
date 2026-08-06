@@ -211,6 +211,25 @@ provisional line/signal exactly as TV draws its panel. DISPLAY ONLY: events
 and committed state stay closed-bar, grading unaffected. Off-screen sticky
 names (no live price) fall back to closed-bar state with an honest ⏱Xm
 staleness chip at ≥10 min.
+**Round 2 (same evening, LPSN/GVH again — the MULTI-BAR hole):** one folded
+bar can't represent a multi-bar fade the MINI feed never banked. Verified
+on prod: LPSN's last banked 5m bar was TWO HOURS old (a 1-share $2.40
+print) through its whole consolidated dust-print fade to $2.27; GVH had the
+spike bars but none of the 3-bar dump to $0.88 — so the ring stayed full of
+stale spike closes and both read green "crossed" against a TV panel well
+below the signal. The fold now synthesizes EVERY missed in-session bucket
+between the last real bar and now (flat carries at the live price, capped
+at one full ring refresh — the gap-decay idea applied to SMA rings), which
+converges the line to where a tape sitting at the live price puts it;
+nights/weekends synthesize nothing (TV holds its panel across the close);
+`rising`/'turning' can no longer be claimed across a synthesized hole
+(fixes MGRX/AZI showing "turning" while TV's line fell). Off-screen names
+fall back to the 5m EMA tracker's OPEN-bucket price before going
+closed-bar; the ⏱Xm chip now keys on minutes-since-last-REAL-print
+regardless of the fold. Verify suite → S8 (stale-hole convergence +
+closed-session no-wash). WYHG meanwhile produced the first fully-live
+staircase on the tab: ⤴ setup 6m → ✚ cross 55s at +106%, and CLRO's ✚30m
+stamp sat at the base of its $7→$12 leg (+197%).
 
 XHYFM. **The basis-break guard wiped a +650% runner mid-run — guard now
 tick-silence-gated (2026-08-03).** HYFM: dead tape at $0.55 for weeks, Monday

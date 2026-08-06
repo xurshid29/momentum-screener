@@ -459,9 +459,9 @@ export interface MacdMomoItem {
   gap_pct: number | null;        // (signal − line) / price × 100; ≤0 once above
   below_zero: boolean | null;    // line still under zero — the classic reset
   rising_bars: number | null;    // consecutive rising line closes
-  // Minutes since the last CLOSED bar, present only when the state could not
-  // fold a live screen price in (off-screen sticky name) — i.e. the state is
-  // genuinely "as of Xm ago". Null when the forming bar is rendered live.
+  // Minutes since the last REAL bar on our feed. Small = the state rides
+  // real tape; large = the tape is thin here and the state is projected
+  // from the live price across the quiet stretch (UI chips it at ≥10).
   bar_age_min: number | null;
   setup_at: string | null;       // today's latest ⤴ setup (bar-close anchored)
   cross_at: string | null;       // today's latest ✚ cross-up
@@ -2764,9 +2764,11 @@ class PollerService {
         gap_pct: snap && price > 0 ? +((snap.gap / price) * 100).toFixed(2) : null,
         below_zero: snap?.below_zero ?? null,
         rising_bars: snap?.rising_bars ?? null,
-        // Closed-bar staleness, shown only when the state could NOT fold a
-        // live price in (no screen row) — the honest "as of Xm ago" marker.
-        bar_age_min: snap && !snap.provisional && snap.last_close_ts > 0
+        // Minutes since the last REAL bar on our feed — always reported (the
+        // UI chips it at ≥10). Even with the live-price fold, a big age means
+        // the state leans on synthesized flat carries, not tape (LPSN banked
+        // NOTHING for two hours of its consolidated dust-print fade).
+        bar_age_min: snap && snap.last_close_ts > 0
           ? Math.max(0, Math.round((nowMsTick / 1000 - snap.last_close_ts) / 60))
           : null,
         setup_at: ev?.setup_at ?? null,
@@ -3324,7 +3326,8 @@ class PollerService {
     | ((ticker: string, livePrice?: number) => {
         line: number; signal_val: number; gap: number; above: boolean;
         rising_bars: number; below_zero: boolean; setup_active: boolean;
-        provisional: boolean; last_close: number; last_close_ts: number;
+        provisional: boolean; synth_buckets: number;
+        last_close: number; last_close_ts: number;
         chg_pct: number | null;
       } | null)
     | null = null;

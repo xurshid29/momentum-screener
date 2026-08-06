@@ -109,6 +109,26 @@ export class MacdCurlTracker {
     return this.state.size;
   }
 
+  // ET-vs-UTC offset in hours (4 under EDT, 5 under EST) — the snapshot's
+  // session clock for counting missed buckets. Pushed by the tick feed on
+  // its sync cadence; the fixed default keeps tests deterministic.
+  private etOffsetHours = 4;
+  setEtOffset(hours: number): void {
+    this.etOffsetHours = hours;
+  }
+
+  // True when this bucket sits inside the ETH session (04:00–20:00 ET,
+  // Mon–Fri) — same rule as the EMA tracker's gap-decay clock. Only
+  // in-session holes count as "the market traded without us"; nights and
+  // weekends must not wash the state (TV holds its panel across the close).
+  private inSession(bucketStartSec: number): boolean {
+    const etSec = bucketStartSec - this.etOffsetHours * 3600;
+    const secOfDay = ((etSec % 86_400) + 86_400) % 86_400;
+    if (secOfDay < 4 * 3600 || secOfDay >= 20 * 3600) return false;
+    const day = (Math.floor(etSec / 86_400) + 4) % 7; // epoch day 0 = Thursday
+    return day !== 6 && day !== 0; // Sat / Sun
+  }
+
   // Read-only view for a live row: the current line/signal geometry, so the
   // tab can show "curling / crossed / cooling" between events. `setup_active`
   // = a setup announced this episode and the line still rides below the
@@ -120,14 +140,25 @@ export class MacdCurlTracker {
   // our MINI feed, so on a thin tape the tab lagged the chart by minutes
   // (LPSN read "crossed" through a visible roll-over; WYHG read "turning"
   // after TV's line had hooked above). Passing the live screen price
-  // (Finviz = consolidated tape, no MINI blindness) folds it in as the
-  // forming bar's close — provisional line/signal exactly as TV renders
-  // them. DISPLAY ONLY: events and the committed state stay closed-bar, so
-  // grading semantics are untouched.
-  snapshot(ticker: string, livePrice?: number): {
+  // (Finviz = consolidated tape, no MINI blindness) folds it into the rings
+  // provisionally. DISPLAY ONLY: events and the committed state stay
+  // closed-bar, so grading semantics are untouched.
+  //
+  // The fold covers EVERY missed in-session bucket, not just the forming
+  // bar (same evening, round 2 — LPSN/GVH again): our feed had banked
+  // NOTHING of LPSN's two-hour dust-print fade ($2.40 → $2.27) and missed
+  // GVH's three-bar dump, so folding ONE live bar against a ring still full
+  // of stale spike closes read "crossed" through both. Each missed
+  // in-session bucket now folds the live price as a flat carry (bounded at
+  // one full ring refresh), which converges the line to where a tape
+  // sitting at the live price actually puts it. When ≥2 buckets had to be
+  // synthesized, `rising` reports 0 — a "turn" cannot be claimed from bars
+  // the market printed but we never saw.
+  snapshot(ticker: string, livePrice?: number, nowSec = Math.floor(Date.now() / 1000)): {
     line: number; signal_val: number; gap: number; above: boolean;
     rising_bars: number; below_zero: boolean; setup_active: boolean;
-    provisional: boolean; last_close: number; last_close_ts: number;
+    provisional: boolean; synth_buckets: number;
+    last_close: number; last_close_ts: number;
   } | null {
     const st = this.state.get(ticker);
     if (!st || st.prevLine == null || st.prevSig == null) return null;
@@ -136,23 +167,42 @@ export class MacdCurlTracker {
     let rising = st.rising;
     let above = st.above;
     let provisional = false;
+    let synth = 0;
     if (
       livePrice != null && livePrice > 0 &&
       st.closes.length >= this.cfg.slow && st.lines.length >= this.cfg.signal
     ) {
-      const cs = st.closes;
-      let sF = livePrice, sS = livePrice;
-      for (let i = cs.length - (this.cfg.fast - 1); i < cs.length; i++) sF += cs[i];
-      for (let i = cs.length - (this.cfg.slow - 1); i < cs.length; i++) sS += cs[i];
-      const pLine = sF / this.cfg.fast - sS / this.cfg.slow;
-      let sSig = pLine;
-      for (let i = st.lines.length - (this.cfg.signal - 1); i < st.lines.length; i++) sSig += st.lines[i];
-      const pSig = sSig / this.cfg.signal;
-      rising = pLine > st.prevLine ? st.rising + 1 : 0;
+      const iv = this.cfg.interval_sec;
+      // Missed FULL in-session buckets between the last closed bar and the
+      // bucket containing `now`, plus the forming bucket itself. Capped at a
+      // full ring refresh (slow + signal) — beyond that every extra carry is
+      // a no-op on the result.
+      const curBucket = Math.floor(nowSec / iv) * iv;
+      const cap = this.cfg.slow + this.cfg.signal;
+      let k = 1;
+      for (let b = st.lastCloseTs; b + iv <= curBucket && k < cap; b += iv) {
+        if (this.inSession(b)) k++;
+      }
+      const closes = st.closes.slice();
+      const lines = st.lines.slice();
+      let pLine = st.prevLine;
+      for (let j = 0; j < k; j++) {
+        closes.push(livePrice);
+        if (closes.length > this.cfg.slow) closes.shift();
+        pLine = sma(closes, this.cfg.fast) - sma(closes, this.cfg.slow);
+        lines.push(pLine);
+        if (lines.length > this.cfg.signal) lines.shift();
+      }
+      const pSig = sma(lines, this.cfg.signal);
+      // A turn is only claimable off REAL tape: with a fresh ring (k=1) the
+      // usual live-vs-committed comparison holds; across a synthesized hole
+      // the step-to-step "rise" is a convergence artifact, not buying.
+      rising = k === 1 ? (pLine > st.prevLine ? st.rising + 1 : 0) : 0;
       above = pLine > pSig;
       line = pLine;
       sig = pSig;
       provisional = true;
+      synth = k - 1;
     }
     return {
       line,
@@ -163,6 +213,7 @@ export class MacdCurlTracker {
       below_zero: line < 0,
       setup_active: st.setupDone && !above,
       provisional,
+      synth_buckets: synth,
       last_close: st.closes.length > 0 ? st.closes[st.closes.length - 1] : 0,
       last_close_ts: st.lastCloseTs,
     };

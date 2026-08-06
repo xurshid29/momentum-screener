@@ -102,7 +102,7 @@ function MomoRow({ item, selected, onSelect, onOpenCatalyst, session }: {
           </Tooltip>
         )}
         {item.bar_age_min != null && item.bar_age_min >= 10 && (
-          <Tooltip title={`State is as of the last closed 5m bar, ${item.bar_age_min}m ago — this name has no live screen price right now, so the forming bar can't be rendered. Verify on the chart.`}>
+          <Tooltip title={`Thin tape on our feed: the last real print closed ${item.bar_age_min}m ago — the state is projected from the live price across the quiet stretch. Verify on the chart.`}>
             <span style={{ marginLeft: 5, fontSize: 9, color: '#595959', cursor: 'help' }}>⏱{item.bar_age_min}m</span>
           </Tooltip>
         )}
