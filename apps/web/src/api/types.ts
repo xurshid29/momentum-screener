@@ -378,6 +378,32 @@ export interface EmaCrossItem {
   catalyst: CatalystInfo | null;
 }
 
+// ⤴ MACD MOMO — one row per top gainer of the session with its live MACD
+// 3/10/8 (all-SMA, 5m) geometry. The second-leg tab: the operator misses a
+// leader's first move (day job) and enters when the line turns up toward
+// its signal after the pullback reset.
+export interface MacdMomoItem {
+  ticker: string;
+  // curling = SETUP live (line rising toward the signal, most of the gap
+  // closed — the entry moment) · crossed = line above the signal · turning =
+  // rising below, not announce-worthy yet · cooling = falling below ·
+  // warming = MACD not yet computable (<18 closed 5m bars).
+  state: 'curling' | 'crossed' | 'turning' | 'cooling' | 'warming';
+  // FULL-DAY change vs the prior close in every session (same anchor as the
+  // EMA tab — differs from Momentum/Ignition in after-hours).
+  chg_pct: number | null;
+  price: number;
+  gap_pct: number | null;       // (signal − line) / price × 100; ≤0 once above
+  below_zero: boolean | null;   // line still under zero — the classic reset
+  rising_bars: number | null;
+  setup_at: string | null;      // today's latest ⤴ setup (bar-close anchored)
+  cross_at: string | null;      // today's latest ✚ cross-up
+  qualified_at: string;
+  news_title: string | null;
+  news_url: string | null;
+  catalyst: CatalystInfo | null;
+}
+
 export interface CyclePayload {
   cycle_id: string;
   polled_at: string | null;
@@ -392,6 +418,7 @@ export interface CyclePayload {
   tick_catches: TickCatch[];
   news_radar: NewsRadarItem[];
   ema_crosses: EmaCrossItem[];
+  macd_momo: MacdMomoItem[];
 }
 
 export interface HistoryRow {

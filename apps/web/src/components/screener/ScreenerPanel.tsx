@@ -20,6 +20,7 @@ import { ContinuationTable } from './ContinuationTable';
 import { HistoryByDayPanel } from './HistoryByDayPanel';
 import { OutcomesPanel } from './OutcomesPanel';
 import { EmaReclaimPanel } from './EmaReclaimPanel';
+import { MacdMomoPanel } from './MacdMomoPanel';
 
 const { Text } = Typography;
 
@@ -49,7 +50,7 @@ const SESSION_COLOR: Record<TradingSession, string> = {
   closed: '#8c8c8c',
 };
 
-type ScreenerTab = 'ema' | 'momentum' | 'swing' | 'continuation' | 'history';
+type ScreenerTab = 'momo' | 'ema' | 'momentum' | 'swing' | 'continuation' | 'history';
 
 // First-appeared time in the operator's TZ (UTC+5), HH:MM, plus how long ago.
 // The "ago" is the staleness cue: a top-of-list +600% name first seen 9h ago is
@@ -97,7 +98,9 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
   const [catalystModal, setCatalystModal] = useState<{ ticker: string; catalyst: CatalystInfo | null } | null>(null);
   // The ↗ reclaim layer is the operator's primary instrument, so it opens
   // here (2026-07-28) — it used to be squeezed into the left sidebar.
-  const [activeTab, setActiveTab] = useState<ScreenerTab>('ema');
+  // ⤴ MOMO is the default view (2026-08-06, operator's call): it is their
+  // live trading strategy — second-leg entries on the session's top gainers.
+  const [activeTab, setActiveTab] = useState<ScreenerTab>('momo');
   const { hidden, hide, unhide } = useHiddenTickers();
   const { momentumNewsOnly, setMomentumNewsOnly } = useLayout();
   const isWarned = useIsWarned();
@@ -412,6 +415,17 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
         tabBarStyle={{ margin: 0, padding: '0 8px', borderBottom: '1px solid #303030' }}
         tabBarExtraContent={extraControls}
         items={[
+          {
+            key: 'momo',
+            label: `⤴ MOMO${payload?.macd_momo?.length ? ` · ${payload.macd_momo.length}` : ''}`,
+            children: (
+              <MacdMomoPanel
+                items={payload?.macd_momo ?? []}
+                session={payload?.session}
+                onOpenCatalyst={(ticker, catalyst) => setCatalystModal({ ticker, catalyst })}
+              />
+            ),
+          },
           {
             key: 'ema',
             label: `↗ EMA${payload?.ema_crosses?.length ? ` · ${payload.ema_crosses.length}` : ''}`,

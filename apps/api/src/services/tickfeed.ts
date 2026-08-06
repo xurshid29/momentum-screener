@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { TickDetector, type TickBar } from './tick-detect.js';
 import { EmaCrossTracker, EMA_CROSS, EMA_CROSS_15M, EMA_CROSS_1H, EMA_CROSS_4H, EMA_CROSS_1D, adjustSplitHistory, type SeedHistoryBar } from './ema-cross.js';
+import { MacdCurlTracker } from './macd-curl.js';
 import { universe } from './universe.js';
 import { poller } from './poller.js';
 import { getDb } from '../db/index.js';
@@ -431,7 +432,16 @@ class TickFeedService {
       ticker, bar_ts: new Date(closeTs * 1000), close, volume,
       open: ohl?.o ?? null, high: ohl?.h ?? null, low: ohl?.l ?? null,
     });
+    // ⤴ MACD momentum-curl layer (2026-08-06): rides the exact same closed
+    // 5m bars — the callback only fires for known runners, and the poller
+    // gates events to the day's top-gainer set. Closed-bar only by design
+    // (the operator's TV MACD has "Wait for timeframe closes" checked).
+    const mev = this.macdCurl.addClosedBar(ticker, closeTs, close);
+    if (mev) poller.onMacdCurlEvent(mev);
   });
+  // ⤴ MACD 3/10/8 (all-SMA) state per known runner — the second-leg
+  // detector behind the top-gainers MOMO tab. See services/macd-curl.ts.
+  private macdCurl = new MacdCurlTracker();
   // 📈 higher-timeframe layers (1h 2026-07-21, 4h 2026-07-17): the
   // operator's swing-timing tools. Dashboard-only; nomination is the
   // product. 1h buckets are hour-aligned everywhere (offset 0); 4h anchors
@@ -494,6 +504,7 @@ class TickFeedService {
       running: this.running,
       symbols_tracked: this.detector.symbolsTracked(),
       ema_cross_tracked: this.emaCross.symbolsTracked(),
+      macd_curl_tracked: this.macdCurl.symbolsTracked(),
       ...Object.fromEntries(this.htfLayers.map((l) => [`ema_cross_${l.cfg.tf}_tracked`, l.tracker.symbolsTracked()])),
       ema_bars_persisted: this.barsPersisted,
       ema_backfilled: this.backfilledOk,
@@ -519,6 +530,7 @@ class TickFeedService {
     // (live price / % since the reclaim / the 'building' promotion). Passed
     // as a callback because tickfeed imports poller, not the reverse.
     poller.setReclaimProgressSource((ticker, tf, xp) => this.reclaimProgress(ticker, tf, xp));
+    poller.setMacdSnapshotSource((ticker) => this.macdSnapshot(ticker));
     console.log('[tickfeed] starting');
     // Seed the EMA-cross tracker from persisted bars BEFORE the sidecar
     // starts streaming, so live ticks can't interleave with the replay.
@@ -569,7 +581,10 @@ class TickFeedService {
     const etOff = etUtcOffsetHours();
     this.emaCross.setEtOffset(etOff);
     for (const l of this.htfLayers) l.tracker.setEtOffset(etOff);
-    await this.seedTrackerFromTable('bars_5m', 5 * 86_400_000, this.emaCross, '5m');
+    // The MACD curl tracker warms from the same split-adjusted 5m replay
+    // (17-bar warmup — trivial next to the EMA65's).
+    await this.seedTrackerFromTable('bars_5m', 5 * 86_400_000, this.emaCross, '5m',
+      (ticker, closeTs, close) => this.macdCurl.addClosedBar(ticker, closeTs, close, true));
     for (const l of this.htfLayers) {
       await this.seedTrackerFromTable(l.table, l.retentionDays * 86_400_000, l.tracker, l.cfg.tf);
     }
@@ -598,6 +613,22 @@ class TickFeedService {
     };
   }
 
+  // ⤴ Live MACD 3/10/8 geometry for one symbol, plus the full-day change%
+  // from the same prior-close map the reclaim rows use. Null until the
+  // 17-bar warmup (fresh symbol on a fresh boot with no banked bars).
+  macdSnapshot(ticker: string):
+    (NonNullable<ReturnType<MacdCurlTracker['snapshot']>> & { chg_pct: number | null }) | null {
+    const s = this.macdCurl.snapshot(ticker);
+    if (!s) return null;
+    const prior = universe.getPriorCloses().get(ticker);
+    return {
+      ...s,
+      chg_pct: prior && prior > 0 && s.last_close > 0
+        ? +(((s.last_close / prior) - 1) * 100).toFixed(2)
+        : null,
+    };
+  }
+
   // Live EMA state per timeframe for one symbol — the /ema-debug endpoint's
   // backing data (compare against the TV chart when a detection looks off).
   emaSnapshot(ticker: string): Array<NonNullable<ReturnType<EmaCrossTracker['snapshot']>>> {
@@ -619,6 +650,7 @@ class TickFeedService {
     windowMs: number,
     tracker: EmaCrossTracker,
     label: string,
+    also?: (ticker: string, closeTs: number, close: number) => void,
   ): Promise<void> {
     try {
       const rows = await getDb()
@@ -633,7 +665,10 @@ class TickFeedService {
       let buf: SeedHistoryBar[] = [];
       const flush = () => {
         if (!curTk || buf.length === 0) return;
-        for (const b of adjustSplitHistory(buf)) tracker.seedBar(curTk, b.closeTs, b.close, b.volume);
+        for (const b of adjustSplitHistory(buf)) {
+          tracker.seedBar(curTk, b.closeTs, b.close, b.volume);
+          also?.(curTk, b.closeTs, b.close);
+        }
         syms++;
         buf = [];
       };
@@ -1063,6 +1098,7 @@ class TickFeedService {
       this.etDate = today;
       this.detector.reset();
       this.emaCross.resetDaily();
+      this.macdCurl.resetDaily();
       this.extraSubs.clear();
       this.backfillAttempted.clear();
       this.sparseAttempted.clear();

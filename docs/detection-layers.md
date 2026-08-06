@@ -1,4 +1,4 @@
-# The Early-Detection Layers — reference (current as of 2026-07-27)
+# The Early-Detection Layers — reference (current as of 2026-08-06)
 
 The dashboard detects runners through a chain of layers, ordered by how early
 they can speak. Each was measured before (or while) shipping, each is graded
@@ -332,6 +332,63 @@ anchored — the UPC display fix).
 **Grading.** `tier='tick'`: watch / watch_suppressed (reason
 low_evidence|stale_*) / confirm (via) / fade / watch_expired. Knobs:
 `TICK_DETECT`, `TICK_WATCH_EVIDENCE` (poller).
+
+---
+
+## ⤴ MACD momentum-curl / top-gainers MOMO (`macd-curl.ts` + poller `onMacdCurlEvent`; shipped 2026-08-06)
+
+**What/why.** The operator's LIVE trading strategy, automated (they have a
+day job): they miss a leader's first move, and enter the LATER legs — pick
+the session's top gainers, watch the Raschke-style **MACD 3/10/8 (all-SMA)
+on 5m closes**, enter when the line turns up toward its signal after the
+pullback reset ("close to the crossover", tight stop). Complements ↗: the
+reclaim layer hunts a name's FIRST ignition; this hunts re-ignitions on
+names that already proved themselves. Consistent with the entry-mechanics
+study (pullback comes 81%, pullback-hold entry ≈2× win rate). NOT the
+twice-killed standalone MACD signal — the universe conditioning (already a
+top gainer today) is the entire point.
+
+**Universe** (`MACD_MOMO`, poller): top-10 by day change (rank floor ≥10%)
+∪ anything ≥30%, over the momentum∪ignition union rows; **sticky per ET
+day** — once a leader, watched all session even after cooling off the
+screens. AH note: late qualifiers rank on the AH-anchored row change; row
+display change is FULL-DAY (tick-feed prior close), same anchor as the EMA
+tab.
+
+**Detector** (`MacdCurlTracker`): line = SMA3−SMA10 of closes, signal =
+SMA8(line), warmup 17 closed bars; CLOSED 5m bars only, deliberately — the
+operator's TV MACD has "Wait for timeframe closes" checked, so this is
+exact chart parity. Fed from the same known-runner bar stream the EMA layer
+banks (`onBarClosed`), boot-seeded from the same split-adjusted `bars_5m`
+replay. Episodes run cross-down → cross-up: **SETUP** (the entry moment)
+needs ≥2 consecutive rising line closes, the gap (signal−line) closed to
+≤65% of the episode's max, and a dead-chop floor (max gap ≥0.3% of price);
+a setup whose line later breaks below its announce level re-arms. **CROSS**
+= line closes above signal. A vertical V-recovery legitimately skips SETUP
+(no curl phase — straight to CROSS). Knobs: `MACD_CURL` (macd-curl.ts).
+
+**Validated before wiring** (replay of 08-05's five leaders,
+`scripts/research/macd-curl-replay.ts` + `scripts/verify-macd-curl.ts` S1–S7):
+SETUP fired at the operator's own marked entries — INLF 10:35 ET → +47%/60m,
+ZYBT 11:00 ET → +136%/30m, YXT 13:40 ET → +63%/60m, RITR 10:55 ET base of a
++29% run; BJDX's premarket gap-open leg was NOT catchable (the known gapper
+ceiling). Raw rate ~8 setups/name/session with real failures between
+(YXT 09:05 → −33%) — an attention surface, not an entry signal.
+
+**Surfacing.** ⤴ MOMO tab (DEFAULT view since 2026-08-06, operator's call):
+one row per qualified name with live state — **curling** (setup live — the
+acting window, pulses when fresh) / crossed / turning / cooling / warming —
+plus gap%, <0 badge (below-zero reset), setup/cross ago (bar-close
+anchored), news badge, full-day chg%. NO sounds, NO Telegram (operator's
+call pre-replay; the fire rate says raw pushes would spam — promote only a
+gated subset after grading, e.g. first-setup-of-day or <0-only).
+
+**Grading.** `tier='macd'`, events setup/cross (fades not recorded —
+episode ends are derivable from the next cross-down). Meta: price, line,
+signal, gap_pct, max_gap_pct, below_zero, rising, chg, via
+(top10|chg|reseed). The cut that decides alert promotion: forward move
+after SETUP by below_zero × day-change band × time-of-day, vs the same
+name's non-setup bars.
 
 ---
 

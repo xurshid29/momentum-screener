@@ -1,4 +1,4 @@
-# Session Handover — updated 2026-08-04
+# Session Handover — updated 2026-08-06
 
 A running handover so a fresh session can continue without re-deriving context.
 **Read `docs/web-dashboard.md` first** (the canonical status doc); this file is
@@ -7,12 +7,16 @@ the "where we are right now + what's open" layer on top of it.
 detection chain** (📰/🤫/📈/👀/🛰️ — how each layer works, knobs, grading SQL).
 Memory files under `…/memory/` also carry the durable facts.
 
-**CURRENT FOCUS (refreshed 2026-08-04): the ↗ price-reclaim layer —
-reclaim-ONLY on FIVE timeframes — is the operator's PRIMARY instrument and
-the only Telegram-alerting component; the operator works the ↗ EMA tab
-(default view) with A+/A/B attention tiers and trades the measured playbook
-(select on chips → wait for the pullback → enter its break → structural
-stop → exit into strength).** The 10/65 crossover channel is RETIRED
+**CURRENT FOCUS (refreshed 2026-08-06): TWO instruments now. (1) The ↗
+price-reclaim layer — reclaim-ONLY on FIVE timeframes — remains the only
+Telegram-alerting component, with A+/A/B attention tiers on the ↗ EMA tab.
+(2) NEW ⤴ MACD MOMO tab (the DEFAULT view since 08-06, operator's call) —
+the operator's actual live strategy automated: second-leg entries on the
+session's top gainers via the 3/10/8 all-SMA MACD curl on 5m (they have a
+day job, miss the first move, and trade the later legs; playbook = wait for
+the pullback reset, enter when the line curls up toward the signal, tight
+stop). Display+grading only (tier='macd'), no sounds/Telegram until graded
+— see XMOMO below + docs/detection-layers.md ⤴ section.** The 10/65 crossover channel is RETIRED
 (2026-07-26, `cross_detect: false` everywhere; machinery kept + tested for a
 data revisit). The chain otherwise runs in full (🤫 accum → ↗ reclaim →
 👀 watch → 🛰️ confirm → screens; 📰 radar is DARK while Benzinga is parked;
@@ -75,7 +79,9 @@ segmentation: 07-22 10/65 · 07-23 gap-decay+pends · 07-24 reclaim channel ·
 (additive). Also still owed: (b) 👀 evidence-gate cost audit; (c) accum v2
 precision re-check; radar grading moot while Benzinga is parked.
 
-**Recent focus trail** (each has a dated entry below): 08-03 XHYFM (the
+**Recent focus trail** (each has a dated entry below): 08-06 XMOMO (⤴ MACD
+3/10/8 curl detector + top-gainers MOMO tab, now the default view —
+replay-validated on the 08-05 leaders before wiring) · 08-03 XHYFM (the
 basis-break guard wiped a +650% runner mid-run → guard now first-tick-after-
 silence only; suite 40 scenarios) · 08-01/02 XTIER (A+/A/B attention tiers,
 display-only, from the codex study + 3-session cross-validation) + the
@@ -156,6 +162,44 @@ Journal; **attribution join still the open payoff**) · 06-17 tick feed go-live.
 ---
 
 ## What shipped this session (newest first, all on prod unless noted)
+
+XMOMO. **⤴ MACD momentum-curl layer + top-gainers MOMO tab — the operator's
+live strategy automated (2026-08-06).** The operator explained how they
+actually trade around their day job: pick the session's top gainers, watch
+the MACD 3/10/8 (all-SMA, histogram off) on 5m, enter when the line turns
+up toward its signal after a pullback reset — "close to the crossover",
+tight stop — because leaders make several big moves per session and they
+always miss the first. Showed five 08-05 leaders (ZYBT/YXT/INLF/RITR/BJDX)
+all carrying the same signature, with their INLF entry marked ~10:30 ET.
+**Measured before wiring** (the operating norm): pulled the five names'
+banked bars_5m from prod, built the pure detector, replayed — SETUP fired
+at their exact marks: INLF 10:35 ET → +47%/60m, ZYBT 11:00 ET → +136%/30m,
+YXT 13:40 ET → +63%/60m, RITR 10:55 ET at the base of a +29% run; BJDX's
+premarket gap-open leg not catchable (the known gapper ceiling). Raw rate
+~8 setups/name/session with real −10..−30% failures between → shipped as
+an attention surface, NOT an alert: no Telegram, no sounds (operator chose
+"tab only, decide after replay/grading"). NOT the twice-closed EMAMACD
+book: universe conditioning (already a top gainer) is the point, and it
+matches the entry-mechanics result (pullback 81%, pullback-hold 2× win
+rate). **Built:** `services/macd-curl.ts` (SETUP = ≥2 rising line closes +
+gap ≤65% of episode max + dead-chop floor 0.3% of price, re-arm on broken
+curls; CROSS; closed-bars-only = TV parity with the operator's
+"Wait for timeframe closes"); fed from the same known-runner 5m bar-close
+callback the EMA layer banks + boot-seeded from the same split-adjusted
+bars_5m replay; universe top-10 (≥10% floor) ∪ chg≥30, sticky per ET day,
+gated in the poller so tier_events grades exactly the displayed
+population; `tier='macd'` setup/cross events (fades display-only) with
+reseed-on-boot; ⤴ MOMO tab as the new DEFAULT view (operator's call) — one
+row per leader: curling (pulses fresh) / crossed / turning / cooling /
+warming, gap%, <0 reset badge, setup/cross ago, news badge, full-day chg%.
+Verify: `scripts/verify-macd-curl.ts` S1–S7 (incl. the honest edge: a
+vertical V-recovery has no curl phase and legitimately goes straight to
+CROSS); replay harness durable at `scripts/research/macd-curl-replay.ts`.
+**Freeze untouched:** reclaim semantics/alerts unchanged; this is a new
+parallel display layer. **Next:** grade setups after ~a week
+(below_zero × chg band × time-of-day vs same-name non-setup bars) → decide
+the gated Telegram subset (first-setup-of-day / <0-only are the candidate
+dials).
 
 XHYFM. **The basis-break guard wiped a +650% runner mid-run — guard now
 tick-silence-gated (2026-08-03).** HYFM: dead tape at $0.55 for weeks, Monday

@@ -428,6 +428,57 @@ function emaCrossTfOf(v: unknown): EmaCrossTf {
   return v === '1d' ? '1d' : v === '4h' ? '4h' : v === '1h' ? '1h' : v === '15m' ? '15m' : '5m';
 }
 
+// ⤴ MACD MOMO — the top-gainers second-leg tab (2026-08-06, operator's live
+// strategy automated). The operator has a day job: they miss a leader's
+// FIRST move, and trade the LATER legs — pick the session's top gainers,
+// watch the 3/10/8 all-SMA MACD on 5m, enter when the line turns up toward
+// its signal after the pullback reset ("close to the crossover", tight
+// stop). Validated on the 2026-08-05 leaders before wiring: the detector's
+// SETUP fired at the operator's own marked entries (INLF 10:35 ET → +47%
+// in 60m, ZYBT 11:00 ET → +136% in 30m, YXT 13:40 ET → +63%; the replay
+// harness is scripts/research/macd-curl-replay.ts). NOT the twice-killed
+// standalone MACD signal: the universe conditioning (already a top gainer
+// today) is the whole point, and this is an attention surface — no
+// Telegram, no sounds — graded via tier_events tier='macd' before any
+// alert promotion.
+export interface MacdMomoItem {
+  ticker: string;
+  // 'curling'  — a SETUP is live: line rising toward the signal from below,
+  //              most of the gap closed. The operator's entry moment.
+  // 'crossed'  — line above the signal (the crossover happened).
+  // 'turning'  — line rising below the signal but not yet announce-worthy.
+  // 'cooling'  — line falling below the signal (post-fade / mid-pullback).
+  // 'warming'  — MACD not yet computable (fresh symbol, <18 closed 5m bars).
+  state: 'curling' | 'crossed' | 'turning' | 'cooling' | 'warming';
+  // FULL-DAY change vs the prior close in every session (same anchor as the
+  // EMA tab, same AH divergence from Momentum/Ignition — extension is what
+  // this tab judges). Falls back to the screen row's change when the tick
+  // feed has no prior close.
+  chg_pct: number | null;
+  price: number;
+  gap_pct: number | null;        // (signal − line) / price × 100; ≤0 once above
+  below_zero: boolean | null;    // line still under zero — the classic reset
+  rising_bars: number | null;    // consecutive rising line closes
+  setup_at: string | null;       // today's latest ⤴ setup (bar-close anchored)
+  cross_at: string | null;       // today's latest ✚ cross-up
+  qualified_at: string;          // when the name entered the top-gainer set
+  news_title: string | null;
+  news_url: string | null;
+  catalyst: CatalystInfo | null;
+}
+
+const MACD_MOMO = {
+  // Universe: union of the day's top-N by change and anything ≥ min_chg —
+  // STICKY for the ET day (once a leader, watched all session; the operator
+  // returns to these names for later legs even after they cool off the
+  // screens). The rank path carries its own change floor so a dead tape's
+  // "top 10" (+3% leaders) doesn't qualify noise.
+  top_n: 10,
+  top_n_min_chg_pct: 10,
+  min_chg_pct: 30,
+  max_display: 30,
+} as const;
+
 export interface CyclePayload {
   cycle_id: string;
   polled_at: string;
@@ -445,6 +496,7 @@ export interface CyclePayload {
   tick_catches: TickCatch[];
   news_radar: NewsRadarItem[];
   ema_crosses: EmaCrossItem[];
+  macd_momo: MacdMomoItem[];
 }
 
 export interface EnrichedRow extends ScreenerRow {
@@ -678,6 +730,14 @@ class PollerService {
     title: string; url: string; source: NewsSource;
     published_at: string | null; catalyst: CatalystInfo | null;
   } | null>();
+  // ⤴ MACD MOMO state (see MACD_MOMO). Qualified = the day's top-gainer set,
+  // sticky per ET day; events = today's latest setup/cross per ticker for the
+  // tab rows (geometry itself comes live from the tracker snapshot each
+  // cycle). Both cleared at midnight; events reseed from tier_events on boot
+  // (a name reseeds as qualified iff it has an event — names that qualified
+  // without ever curling re-qualify from the live rows within a cycle).
+  private macdMomoQualified = new Map<string, { qualified_at: string; via: 'top10' | 'chg' | 'reseed' }>();
+  private macdMomoEvents = new Map<string, { setup_at: string | null; cross_at: string | null }>();
   // Tickers that have traded in an Ignition pre-market cycle today. Feeds the
   // runner-score's pre-market-exhaustion penalty (a name that already ran in PM
   // gives back into the close). ET-day concept — cleared at midnight.
@@ -1041,6 +1101,42 @@ class PollerService {
       `(peak ${e.peak_ratio ?? '?'}x vol)`,
     );
     if (existing && existing.status === 'observing') this.emaCrosses.delete(key);
+  }
+
+  // ⤴ MACD curl events from the tick feed's 5m bar stream. The tracker runs
+  // over every known runner (warm state is free when a name enters the set
+  // mid-session); THIS gate is what makes the layer "top gainers only" —
+  // events on unqualified names are dropped unrecorded, so tier_events
+  // grades exactly the population the tab shows. Fades update no row state
+  // here (the live snapshot carries the cooling geometry) and stay out of
+  // tier_events (episode ends are derivable from the next cross-down).
+  onMacdCurlEvent(e: import('./macd-curl.js').MacdCurlEvent): void {
+    const q = this.macdMomoQualified.get(e.ticker);
+    if (!q || e.type === 'fade') return;
+    const ev = this.macdMomoEvents.get(e.ticker) ?? { setup_at: null, cross_at: null };
+    // Bar-close anchored, like every EMA-row timestamp (the OPTX lesson) —
+    // the row's "ago" must match the operator's TV chart.
+    const barIso = new Date(e.ts_sec * 1000).toISOString();
+    if (e.type === 'setup') ev.setup_at = barIso;
+    else ev.cross_at = barIso;
+    this.macdMomoEvents.set(e.ticker, ev);
+    const snap = this.macdSnapshotFn?.(e.ticker) ?? null;
+    recordTierEvent('macd', e.type, e.ticker, {
+      price: e.price,
+      line: +e.line.toFixed(5),
+      signal: +e.signal_val.toFixed(5),
+      gap_pct: e.price > 0 ? +((e.gap / e.price) * 100).toFixed(2) : null,
+      max_gap_pct: e.price > 0 ? +((e.max_gap / e.price) * 100).toFixed(2) : null,
+      below_zero: e.below_zero,
+      rising: e.rising_bars,
+      chg: snap?.chg_pct ?? null,
+      via: q.via,
+    });
+    console.log(
+      `[macd-momo] ${e.type === 'setup' ? '⤴ setup' : '✚ cross'} ${e.ticker} ` +
+      `$${e.price.toFixed(2)} · line ${e.line.toFixed(4)} vs sig ${e.signal_val.toFixed(4)}` +
+      `${e.below_zero ? ' · <0' : ''}${snap?.chg_pct != null ? ` · day ${snap.chg_pct >= 0 ? '+' : ''}${snap.chg_pct.toFixed(1)}%` : ''}`,
+    );
   }
 
   // Is the ticker in the latest broadcast's Momentum or Ignition lists? Used
@@ -1484,6 +1580,18 @@ class PollerService {
           } else if (r.event === 'expire') {
             this.emaCrosses.delete(xkey);
           }
+        } else if (r.tier === 'macd') {
+          // ⤴ MOMO events reseed the per-ticker setup/cross timestamps and
+          // re-qualify the name (events only ever record while qualified).
+          // Names that qualified without an event re-qualify from the live
+          // rows within one cycle — the only reseed residual.
+          const mev = this.macdMomoEvents.get(t) ?? { setup_at: null, cross_at: null };
+          if (r.event === 'setup') mev.setup_at = iso(atMs);
+          else if (r.event === 'cross') mev.cross_at = iso(atMs);
+          this.macdMomoEvents.set(t, mev);
+          if (!this.macdMomoQualified.has(t)) {
+            this.macdMomoQualified.set(t, { qualified_at: iso(atMs), via: 'reseed' });
+          }
         }
       }
       // TTL sweep — entries past their display windows drop; dedup sets stay.
@@ -1593,6 +1701,8 @@ class PollerService {
       this.alertedAccum.clear();
       this.accumHotCycles.clear();
       this.emaCrosses.clear();
+      this.macdMomoQualified.clear();
+      this.macdMomoEvents.clear();
       this.newsRadar.clear();
       this.radarSeenUrls.clear();
       this.alertedNewsRadar.clear();
@@ -2601,6 +2711,67 @@ class PollerService {
     }
     emaCrossDisplay.sort(byRecency);
 
+    // ⤴ MACD MOMO — qualify today's top gainers (sticky), then build one row
+    // per qualified name from the live tracker snapshot. Ranking uses the
+    // union rows' change_pct: full-day in PM/regular; in AFTER-HOURS the
+    // screener overlay makes that the AH move, so late qualifiers enter on
+    // their AH change — acceptable (a +30% AH mover IS a session leader) and
+    // the sticky set carries the day's earlier leaders through regardless.
+    {
+      const ranked = [...screenRowByTicker.values()]
+        .filter((r) => (r.change_pct ?? 0) > 0)
+        .sort((a, b) => (b.change_pct ?? 0) - (a.change_pct ?? 0));
+      const nowIso = new Date(nowMsTick).toISOString();
+      ranked.forEach((r, i) => {
+        if (this.macdMomoQualified.has(r.ticker)) return;
+        const chg = r.change_pct ?? 0;
+        if (i < MACD_MOMO.top_n && chg >= MACD_MOMO.top_n_min_chg_pct) {
+          this.macdMomoQualified.set(r.ticker, { qualified_at: nowIso, via: 'top10' });
+        } else if (chg >= MACD_MOMO.min_chg_pct) {
+          this.macdMomoQualified.set(r.ticker, { qualified_at: nowIso, via: 'chg' });
+        }
+      });
+    }
+    const macdMomoList: MacdMomoItem[] = [];
+    for (const [tk, q] of this.macdMomoQualified) {
+      const snap = this.macdSnapshotFn?.(tk) ?? null;
+      const row = screenRowByTicker.get(tk);
+      const ev = this.macdMomoEvents.get(tk);
+      const price = (row?.price ?? 0) > 0 ? row!.price! : (snap?.last_close ?? 0);
+      const state: MacdMomoItem['state'] = !snap ? 'warming'
+        : snap.above ? 'crossed'
+        : snap.setup_active ? 'curling'
+        : snap.rising_bars > 0 ? 'turning'
+        : 'cooling';
+      macdMomoList.push({
+        ticker: tk,
+        state,
+        // Full-day anchor (tick-feed prior close) first — same basis as the
+        // EMA tab; screen change as the fallback for names the feed has no
+        // prior close for.
+        chg_pct: snap?.chg_pct ?? row?.change_pct ?? null,
+        price,
+        gap_pct: snap && price > 0 ? +((snap.gap / price) * 100).toFixed(2) : null,
+        below_zero: snap?.below_zero ?? null,
+        rising_bars: snap?.rising_bars ?? null,
+        setup_at: ev?.setup_at ?? null,
+        cross_at: ev?.cross_at ?? null,
+        qualified_at: q.qualified_at,
+        news_title: row?.news_title ?? null,
+        news_url: row?.news_url ?? null,
+        catalyst: row?.catalyst ?? null,
+      });
+    }
+    // Curling first (the entry moment), then crossed, then the rest —
+    // leaders by day change within each state.
+    const MOMO_STATE_ORDER: Record<MacdMomoItem['state'], number> = {
+      curling: 0, crossed: 1, turning: 2, cooling: 3, warming: 4,
+    };
+    macdMomoList.sort((a, b) =>
+      MOMO_STATE_ORDER[a.state] - MOMO_STATE_ORDER[b.state]
+      || (b.chg_pct ?? 0) - (a.chg_pct ?? 0));
+    const macdMomoDisplay = macdMomoList.slice(0, MACD_MOMO.max_display);
+
     // After-hours: re-impose a volume gate on the momentum list. Finviz drops
     // its relvol filter at the close, so names that ticked >5% on a few AH
     // shares (BLIV on 5, GRAN on 90) otherwise flood it. Keep a row only if it
@@ -2626,6 +2797,7 @@ class PollerService {
       tick_catches: tickCatchList,
       news_radar: radarDisplay,
       ema_crosses: emaCrossDisplay,
+      macd_momo: macdMomoDisplay,
       banners: { new_with_catalyst: newWithCatalyst, fresh_news: freshList },
       fresh_news: enriched
         .filter((r) => r.is_fresh_news && r.news_title)
@@ -3127,6 +3299,21 @@ class PollerService {
 
   setReclaimProgressSource(fn: PollerService['reclaimProgressFn']): void {
     this.reclaimProgressFn = fn;
+  }
+
+  // ⤴ Live MACD 3/10/8 geometry per ticker, injected by the tick feed (same
+  // callback pattern as the reclaim progress — tickfeed imports poller, not
+  // the reverse). Null until the symbol's 17-bar warmup.
+  private macdSnapshotFn:
+    | ((ticker: string) => {
+        line: number; signal_val: number; gap: number; above: boolean;
+        rising_bars: number; below_zero: boolean; setup_active: boolean;
+        last_close: number; last_close_ts: number; chg_pct: number | null;
+      } | null)
+    | null = null;
+
+  setMacdSnapshotSource(fn: PollerService['macdSnapshotFn']): void {
+    this.macdSnapshotFn = fn;
   }
 
   onTickEvent(e: TickEvent): void {
