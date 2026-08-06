@@ -9,6 +9,12 @@ import { fmtPrice, isFreshArrival } from '../../utils/format';
 
 const { Text } = Typography;
 
+// Tooltips open only on a DELIBERATE hover (2026-08-06, operator's ask):
+// the antd default (0.1s) popped explainers on every mouse pass across the
+// list, and near the top of the panel they flip BELOW the row and blanket
+// the rows being scanned. 0.7s keeps them one dwell away without ambushing.
+const TIP_DELAY = 0.7;
+
 // ⤴ MACD MOMO (2026-08-06) — the operator's live second-leg strategy as the
 // default tab. One row per top gainer of the session (top-10 ∪ ≥30%, sticky
 // for the ET day) with its live MACD 3/10/8 state on 5m closes. The row to
@@ -90,14 +96,14 @@ function MomoRow({ item, selected, onSelect, onOpenCatalyst, session }: {
             />
           </span>
         )}
-        <Tooltip title={STATE_TIP[item.state]}>
+        <Tooltip mouseEnterDelay={TIP_DELAY} title={STATE_TIP[item.state]}>
           <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 600, color: st.color, cursor: 'help' }}>
             {st.label}
             {item.state === 'curling' && item.gap_pct != null && ` · gap ${item.gap_pct.toFixed(2)}%`}
           </span>
         </Tooltip>
         {item.below_zero === true && (
-          <Tooltip title={item.state === 'crossed'
+          <Tooltip mouseEnterDelay={TIP_DELAY} title={item.state === 'crossed'
             ? 'Born below ZERO: this cross originated under the MACD zero line — the deep-reset class the operator rates highest. Ranked first within its state.'
             : 'MACD line below ZERO — the deep post-pullback reset the best second legs curl out of. Ranked first within its state.'}
           >
@@ -113,19 +119,19 @@ function MomoRow({ item, selected, onSelect, onOpenCatalyst, session }: {
           </Tooltip>
         )}
         {item.bar_age_min != null && item.bar_age_min >= 10 && (
-          <Tooltip title={`Thin tape on our feed: the last real print closed ${item.bar_age_min}m ago — the state is projected from the live price across the quiet stretch. Verify on the chart.`}>
+          <Tooltip mouseEnterDelay={TIP_DELAY} title={`Thin tape on our feed: the last real print closed ${item.bar_age_min}m ago — the state is projected from the live price across the quiet stretch. Verify on the chart.`}>
             <span style={{ marginLeft: 5, fontSize: 9, color: '#595959', cursor: 'help' }}>⏱{item.bar_age_min}m</span>
           </Tooltip>
         )}
         {item.setup_at && (
-          <Tooltip title="Latest ⤴ setup today (bar close time — matches the TV chart)">
+          <Tooltip mouseEnterDelay={TIP_DELAY} title="Latest ⤴ setup today (bar close time — matches the TV chart)">
             <span style={{ marginLeft: 6, fontSize: 10, color: '#8c8c8c', cursor: 'help' }}>
               ⤴ {fmtAgo(item.setup_at)}
             </span>
           </Tooltip>
         )}
         {item.cross_at && (
-          <Tooltip title="Latest ✚ crossover today (bar close time)">
+          <Tooltip mouseEnterDelay={TIP_DELAY} title="Latest ✚ crossover today (bar close time)">
             <span style={{ marginLeft: 5, fontSize: 10, color: '#8c8c8c', cursor: 'help' }}>
               ✚ {fmtAgo(item.cross_at)}
             </span>
@@ -135,6 +141,7 @@ function MomoRow({ item, selected, onSelect, onOpenCatalyst, session }: {
       <span style={{ flex: '0 0 auto', textAlign: 'right', whiteSpace: 'nowrap' }}>
         {item.chg_pct != null && (
           <Tooltip
+            mouseEnterDelay={TIP_DELAY}
             title={
               afterHours
                 ? 'FULL-DAY change vs the prior close. ⚠️ Momentum/Ignition show AFTER-HOURS change in this session — different anchor.'
@@ -181,7 +188,7 @@ export function MacdMomoPanel({ items, onOpenCatalyst, session }: {
           display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flex: '0 0 auto',
         }}
       >
-        <Tooltip title="The session's top gainers (top-10 by day change ∪ anything ≥30%, sticky for the ET day) with their live MACD 3/10/8 state. Act on ⤴ CURLING. Sort: ⤴ curling → ✚ crossed → turning → cooling; within a state, <0 (below-zero reset) first, then newest ⤴/✚ event first.">
+        <Tooltip mouseEnterDelay={TIP_DELAY} title="The session's top gainers (top-10 by day change ∪ anything ≥30%, sticky for the ET day) with their live MACD 3/10/8 state. Act on ⤴ CURLING. Sort: ⤴ curling → ✚ crossed → turning → cooling; within a state, <0 (below-zero reset) first, then newest ⤴/✚ event first.">
           <Text style={{ color: '#ffc53d', fontSize: 11, fontWeight: 600, cursor: 'help' }}>
             ⤴ TOP GAINERS · MACD 3/10/8
           </Text>
