@@ -394,7 +394,10 @@ export interface MacdMomoItem {
   chg_pct: number | null;
   price: number;
   gap_pct: number | null;       // (signal − line) / price × 100; ≤0 once above
-  below_zero: boolean | null;   // line still under zero — the classic reset
+  // Below-zero reset marker. For crossed rows: stamped at the cross EVENT
+  // (origin — the line rises through zero as the leg runs); other states
+  // read the live line. Sorted first within its state.
+  below_zero: boolean | null;
   rising_bars: number | null;
   // Minutes since the last REAL bar on our feed. Small = the state rides
   // real tape; large = thin tape here — the state is projected from the

@@ -457,7 +457,13 @@ export interface MacdMomoItem {
   chg_pct: number | null;
   price: number;
   gap_pct: number | null;        // (signal − line) / price × 100; ≤0 once above
-  below_zero: boolean | null;    // line still under zero — the classic reset
+  // The below-zero reset marker (operator's read: these work better — the
+  // deep pullback reset; graded via meta.below_zero at the checkpoint). For
+  // CROSSED rows this is stamped at the cross EVENT (the origin — the line
+  // rises through zero as the leg runs, so the live value would strip the
+  // badge exactly when the leg works); other states read the live line.
+  // Sorting ranks below-zero rows first within their state.
+  below_zero: boolean | null;
   rising_bars: number | null;    // consecutive rising line closes
   // Minutes since the last REAL bar on our feed. Small = the state rides
   // real tape; large = the tape is thin here and the state is projected
@@ -741,7 +747,11 @@ class PollerService {
   // (a name reseeds as qualified iff it has an event — names that qualified
   // without ever curling re-qualify from the live rows within a cycle).
   private macdMomoQualified = new Map<string, { qualified_at: string; via: 'top10' | 'chg' | 'reseed' }>();
-  private macdMomoEvents = new Map<string, { setup_at: string | null; cross_at: string | null }>();
+  private macdMomoEvents = new Map<string, {
+    setup_at: string | null; cross_at: string | null;
+    // below_zero at the event bar — the ORIGIN flag for crossed rows.
+    setup_bz: boolean | null; cross_bz: boolean | null;
+  }>();
   // Tickers that have traded in an Ignition pre-market cycle today. Feeds the
   // runner-score's pre-market-exhaustion penalty (a name that already ran in PM
   // gives back into the close). ET-day concept — cleared at midnight.
@@ -1117,12 +1127,13 @@ class PollerService {
   onMacdCurlEvent(e: import('./macd-curl.js').MacdCurlEvent): void {
     const q = this.macdMomoQualified.get(e.ticker);
     if (!q || e.type === 'fade') return;
-    const ev = this.macdMomoEvents.get(e.ticker) ?? { setup_at: null, cross_at: null };
+    const ev = this.macdMomoEvents.get(e.ticker)
+      ?? { setup_at: null, cross_at: null, setup_bz: null, cross_bz: null };
     // Bar-close anchored, like every EMA-row timestamp (the OPTX lesson) —
     // the row's "ago" must match the operator's TV chart.
     const barIso = new Date(e.ts_sec * 1000).toISOString();
-    if (e.type === 'setup') ev.setup_at = barIso;
-    else ev.cross_at = barIso;
+    if (e.type === 'setup') { ev.setup_at = barIso; ev.setup_bz = e.below_zero; }
+    else { ev.cross_at = barIso; ev.cross_bz = e.below_zero; }
     this.macdMomoEvents.set(e.ticker, ev);
     const snap = this.macdSnapshotFn?.(e.ticker) ?? null;
     recordTierEvent('macd', e.type, e.ticker, {
@@ -1589,9 +1600,10 @@ class PollerService {
           // re-qualify the name (events only ever record while qualified).
           // Names that qualified without an event re-qualify from the live
           // rows within one cycle — the only reseed residual.
-          const mev = this.macdMomoEvents.get(t) ?? { setup_at: null, cross_at: null };
-          if (r.event === 'setup') mev.setup_at = iso(atMs);
-          else if (r.event === 'cross') mev.cross_at = iso(atMs);
+          const mev = this.macdMomoEvents.get(t)
+            ?? { setup_at: null, cross_at: null, setup_bz: null, cross_bz: null };
+          if (r.event === 'setup') { mev.setup_at = iso(atMs); mev.setup_bz = m.below_zero === true; }
+          else if (r.event === 'cross') { mev.cross_at = iso(atMs); mev.cross_bz = m.below_zero === true; }
           this.macdMomoEvents.set(t, mev);
           if (!this.macdMomoQualified.has(t)) {
             this.macdMomoQualified.set(t, { qualified_at: iso(atMs), via: 'reseed' });
@@ -2753,6 +2765,13 @@ class PollerService {
         : snap.setup_active ? 'curling'
         : snap.rising_bars > 0 ? 'turning'
         : 'cooling';
+      // Crossed rows keep their ORIGIN flag (was the cross born below zero?)
+      // — the live line rises through zero as the leg runs, which would
+      // strip the badge exactly when the thesis is working. No recorded
+      // cross event (display-only provisional cross) falls back to live.
+      const belowZero = state === 'crossed'
+        ? (ev?.cross_bz ?? snap?.below_zero ?? null)
+        : snap?.below_zero ?? null;
       macdMomoList.push({
         ticker: tk,
         state,
@@ -2762,7 +2781,7 @@ class PollerService {
         chg_pct: snap?.chg_pct ?? row?.change_pct ?? null,
         price,
         gap_pct: snap && price > 0 ? +((snap.gap / price) * 100).toFixed(2) : null,
-        below_zero: snap?.below_zero ?? null,
+        below_zero: belowZero,
         rising_bars: snap?.rising_bars ?? null,
         // Minutes since the last REAL bar on our feed — always reported (the
         // UI chips it at ≥10). Even with the live-price fold, a big age means
@@ -2779,13 +2798,16 @@ class PollerService {
         catalyst: row?.catalyst ?? null,
       });
     }
-    // Curling first (the entry moment), then crossed, then the rest —
-    // leaders by day change within each state.
+    // Curling first (the entry moment), then crossed, then the rest. Within
+    // a state, below-zero resets rank first (operator's read 2026-08-06:
+    // curls out of a deep reset work better — the grading checkpoint tests
+    // it via meta.below_zero), then leaders by day change.
     const MOMO_STATE_ORDER: Record<MacdMomoItem['state'], number> = {
       curling: 0, crossed: 1, turning: 2, cooling: 3, warming: 4,
     };
     macdMomoList.sort((a, b) =>
       MOMO_STATE_ORDER[a.state] - MOMO_STATE_ORDER[b.state]
+      || Number(b.below_zero === true) - Number(a.below_zero === true)
       || (b.chg_pct ?? 0) - (a.chg_pct ?? 0));
     const macdMomoDisplay = macdMomoList.slice(0, MACD_MOMO.max_display);
 

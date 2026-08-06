@@ -96,9 +96,20 @@ function MomoRow({ item, selected, onSelect, onOpenCatalyst, session }: {
             {item.state === 'curling' && item.gap_pct != null && ` · gap ${item.gap_pct.toFixed(2)}%`}
           </span>
         </Tooltip>
-        {item.below_zero === true && item.state !== 'cooling' && (
-          <Tooltip title="MACD line still below ZERO — the deep post-pullback reset the best second legs curl out of">
-            <span style={{ marginLeft: 5, fontSize: 9, color: '#69c0ff', cursor: 'help', fontWeight: 700 }}>&lt;0</span>
+        {item.below_zero === true && (
+          <Tooltip title={item.state === 'crossed'
+            ? 'Born below ZERO: this cross originated under the MACD zero line — the deep-reset class the operator rates highest. Ranked first within its state.'
+            : 'MACD line below ZERO — the deep post-pullback reset the best second legs curl out of. Ranked first within its state.'}
+          >
+            <span
+              style={{
+                marginLeft: 5, fontSize: 9, fontWeight: 700, cursor: 'help',
+                padding: '0 4px', borderRadius: 3,
+                background: '#111d2c', color: '#69c0ff', border: '1px solid #2b4a6f',
+              }}
+            >
+              &lt;0
+            </span>
           </Tooltip>
         )}
         {item.bar_age_min != null && item.bar_age_min >= 10 && (
@@ -170,7 +181,7 @@ export function MacdMomoPanel({ items, onOpenCatalyst, session }: {
           display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flex: '0 0 auto',
         }}
       >
-        <Tooltip title="The session's top gainers (top-10 by day change ∪ anything ≥30%, sticky for the ET day) with their live MACD 3/10/8 state on 5m closes. Act on ⤴ CURLING — the line turning up toward its signal after the pullback reset.">
+        <Tooltip title="The session's top gainers (top-10 by day change ∪ anything ≥30%, sticky for the ET day) with their live MACD 3/10/8 state. Act on ⤴ CURLING. Sort: ⤴ curling → ✚ crossed → turning → cooling; within a state, <0 (below-zero reset) first, then by day change.">
           <Text style={{ color: '#ffc53d', fontSize: 11, fontWeight: 600, cursor: 'help' }}>
             ⤴ TOP GAINERS · MACD 3/10/8
           </Text>
