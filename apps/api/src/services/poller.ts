@@ -459,6 +459,10 @@ export interface MacdMomoItem {
   gap_pct: number | null;        // (signal − line) / price × 100; ≤0 once above
   below_zero: boolean | null;    // line still under zero — the classic reset
   rising_bars: number | null;    // consecutive rising line closes
+  // Minutes since the last CLOSED bar, present only when the state could not
+  // fold a live screen price in (off-screen sticky name) — i.e. the state is
+  // genuinely "as of Xm ago". Null when the forming bar is rendered live.
+  bar_age_min: number | null;
   setup_at: string | null;       // today's latest ⤴ setup (bar-close anchored)
   cross_at: string | null;       // today's latest ✚ cross-up
   qualified_at: string;          // when the name entered the top-gainer set
@@ -2734,10 +2738,16 @@ class PollerService {
     }
     const macdMomoList: MacdMomoItem[] = [];
     for (const [tk, q] of this.macdMomoQualified) {
-      const snap = this.macdSnapshotFn?.(tk) ?? null;
       const row = screenRowByTicker.get(tk);
+      // The live screen price renders the FORMING bar into the state
+      // (2026-08-06 evening, the LPSN/WYHG lag report) — without it, thin
+      // tapes showed "as of the last closed bar", minutes behind the
+      // operator's TV panel. Off-screen sticky rows have no live price and
+      // honestly fall back to closed-bar state (bar_age_min marks it).
+      const livePrice = (row?.price ?? 0) > 0 ? row!.price! : undefined;
+      const snap = this.macdSnapshotFn?.(tk, livePrice) ?? null;
       const ev = this.macdMomoEvents.get(tk);
-      const price = (row?.price ?? 0) > 0 ? row!.price! : (snap?.last_close ?? 0);
+      const price = livePrice ?? (snap?.last_close ?? 0);
       const state: MacdMomoItem['state'] = !snap ? 'warming'
         : snap.above ? 'crossed'
         : snap.setup_active ? 'curling'
@@ -2754,6 +2764,11 @@ class PollerService {
         gap_pct: snap && price > 0 ? +((snap.gap / price) * 100).toFixed(2) : null,
         below_zero: snap?.below_zero ?? null,
         rising_bars: snap?.rising_bars ?? null,
+        // Closed-bar staleness, shown only when the state could NOT fold a
+        // live price in (no screen row) — the honest "as of Xm ago" marker.
+        bar_age_min: snap && !snap.provisional && snap.last_close_ts > 0
+          ? Math.max(0, Math.round((nowMsTick / 1000 - snap.last_close_ts) / 60))
+          : null,
         setup_at: ev?.setup_at ?? null,
         cross_at: ev?.cross_at ?? null,
         qualified_at: q.qualified_at,
@@ -3303,12 +3318,14 @@ class PollerService {
 
   // ⤴ Live MACD 3/10/8 geometry per ticker, injected by the tick feed (same
   // callback pattern as the reclaim progress — tickfeed imports poller, not
-  // the reverse). Null until the symbol's 17-bar warmup.
+  // the reverse). Null until the symbol's 17-bar warmup. `livePrice` folds
+  // the forming bar in provisionally (display parity with TV's panel).
   private macdSnapshotFn:
-    | ((ticker: string) => {
+    | ((ticker: string, livePrice?: number) => {
         line: number; signal_val: number; gap: number; above: boolean;
         rising_bars: number; below_zero: boolean; setup_active: boolean;
-        last_close: number; last_close_ts: number; chg_pct: number | null;
+        provisional: boolean; last_close: number; last_close_ts: number;
+        chg_pct: number | null;
       } | null)
     | null = null;
 

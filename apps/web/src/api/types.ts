@@ -396,6 +396,10 @@ export interface MacdMomoItem {
   gap_pct: number | null;       // (signal − line) / price × 100; ≤0 once above
   below_zero: boolean | null;   // line still under zero — the classic reset
   rising_bars: number | null;
+  // Minutes since the last closed bar — present only when no live screen
+  // price could render the forming bar (off-screen sticky name), i.e. the
+  // state is genuinely stale. Null when the state is live like TV's panel.
+  bar_age_min: number | null;
   setup_at: string | null;      // today's latest ⤴ setup (bar-close anchored)
   cross_at: string | null;      // today's latest ✚ cross-up
   qualified_at: string;

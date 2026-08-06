@@ -530,7 +530,7 @@ class TickFeedService {
     // (live price / % since the reclaim / the 'building' promotion). Passed
     // as a callback because tickfeed imports poller, not the reverse.
     poller.setReclaimProgressSource((ticker, tf, xp) => this.reclaimProgress(ticker, tf, xp));
-    poller.setMacdSnapshotSource((ticker) => this.macdSnapshot(ticker));
+    poller.setMacdSnapshotSource((ticker, livePrice) => this.macdSnapshot(ticker, livePrice));
     console.log('[tickfeed] starting');
     // Seed the EMA-cross tracker from persisted bars BEFORE the sidecar
     // starts streaming, so live ticks can't interleave with the replay.
@@ -616,15 +616,18 @@ class TickFeedService {
   // ⤴ Live MACD 3/10/8 geometry for one symbol, plus the full-day change%
   // from the same prior-close map the reclaim rows use. Null until the
   // 17-bar warmup (fresh symbol on a fresh boot with no banked bars).
-  macdSnapshot(ticker: string):
+  // `livePrice` (screen-row price, consolidated tape) renders the forming
+  // bar provisionally — see MacdCurlTracker.snapshot.
+  macdSnapshot(ticker: string, livePrice?: number):
     (NonNullable<ReturnType<MacdCurlTracker['snapshot']>> & { chg_pct: number | null }) | null {
-    const s = this.macdCurl.snapshot(ticker);
+    const s = this.macdCurl.snapshot(ticker, livePrice);
     if (!s) return null;
     const prior = universe.getPriorCloses().get(ticker);
+    const cur = livePrice != null && livePrice > 0 ? livePrice : s.last_close;
     return {
       ...s,
-      chg_pct: prior && prior > 0 && s.last_close > 0
-        ? +(((s.last_close / prior) - 1) * 100).toFixed(2)
+      chg_pct: prior && prior > 0 && cur > 0
+        ? +(((cur / prior) - 1) * 100).toFixed(2)
         : null,
     };
   }

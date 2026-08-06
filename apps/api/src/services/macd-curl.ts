@@ -113,21 +113,56 @@ export class MacdCurlTracker {
   // tab can show "curling / crossed / cooling" between events. `setup_active`
   // = a setup announced this episode and the line still rides below the
   // signal — the row's "curling" state between the setup and its resolution.
-  snapshot(ticker: string): {
+  //
+  // `livePrice` (2026-08-06 evening, the LPSN/WYHG report): TV's MACD panel
+  // draws the FORMING bar, while our committed state moves only when a
+  // bucket closes — and a bucket only closes when the NEXT trade lands on
+  // our MINI feed, so on a thin tape the tab lagged the chart by minutes
+  // (LPSN read "crossed" through a visible roll-over; WYHG read "turning"
+  // after TV's line had hooked above). Passing the live screen price
+  // (Finviz = consolidated tape, no MINI blindness) folds it in as the
+  // forming bar's close — provisional line/signal exactly as TV renders
+  // them. DISPLAY ONLY: events and the committed state stay closed-bar, so
+  // grading semantics are untouched.
+  snapshot(ticker: string, livePrice?: number): {
     line: number; signal_val: number; gap: number; above: boolean;
     rising_bars: number; below_zero: boolean; setup_active: boolean;
-    last_close: number; last_close_ts: number;
+    provisional: boolean; last_close: number; last_close_ts: number;
   } | null {
     const st = this.state.get(ticker);
     if (!st || st.prevLine == null || st.prevSig == null) return null;
+    let line = st.prevLine;
+    let sig = st.prevSig;
+    let rising = st.rising;
+    let above = st.above;
+    let provisional = false;
+    if (
+      livePrice != null && livePrice > 0 &&
+      st.closes.length >= this.cfg.slow && st.lines.length >= this.cfg.signal
+    ) {
+      const cs = st.closes;
+      let sF = livePrice, sS = livePrice;
+      for (let i = cs.length - (this.cfg.fast - 1); i < cs.length; i++) sF += cs[i];
+      for (let i = cs.length - (this.cfg.slow - 1); i < cs.length; i++) sS += cs[i];
+      const pLine = sF / this.cfg.fast - sS / this.cfg.slow;
+      let sSig = pLine;
+      for (let i = st.lines.length - (this.cfg.signal - 1); i < st.lines.length; i++) sSig += st.lines[i];
+      const pSig = sSig / this.cfg.signal;
+      rising = pLine > st.prevLine ? st.rising + 1 : 0;
+      above = pLine > pSig;
+      line = pLine;
+      sig = pSig;
+      provisional = true;
+    }
     return {
-      line: st.prevLine,
-      signal_val: st.prevSig,
-      gap: st.prevSig - st.prevLine,
-      above: st.above,
-      rising_bars: st.rising,
-      below_zero: st.prevLine < 0,
-      setup_active: st.setupDone && !st.above,
+      line,
+      signal_val: sig,
+      gap: sig - line,
+      above,
+      rising_bars: rising,
+      below_zero: line < 0,
+      setup_active: st.setupDone && !above,
+      provisional,
       last_close: st.closes.length > 0 ? st.closes[st.closes.length - 1] : 0,
       last_close_ts: st.lastCloseTs,
     };

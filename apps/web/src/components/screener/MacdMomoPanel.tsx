@@ -29,9 +29,9 @@ const STATE_STYLE: Record<MacdMomoItem['state'], {
 };
 
 const STATE_TIP: Record<MacdMomoItem['state'], string> = {
-  curling: 'SETUP live: the MACD line (3/10/8 SMA, 5m closes) has turned up toward its signal with most of the pullback gap closed — the "close to the crossover" entry moment. Tight stop; the line can still fail back down.',
-  crossed: 'The MACD line closed above its signal — the crossover happened. Later than the curl entry.',
-  turning: 'Line rising below the signal but the curl is not announce-worthy yet (gap still wide or turn too young).',
+  curling: 'SETUP live: the MACD line (3/10/8 SMA, 5m) has turned up toward its signal with most of the pullback gap closed — the "close to the crossover" entry moment. Tight stop; the line can still fail back down.',
+  crossed: 'The MACD line is above its signal — the crossover happened. Later than the curl entry. State includes the live forming bar (matches the TV panel); ⤴/✚ event stamps stay closed-bar.',
+  turning: 'Line rising below the signal but the curl is not announce-worthy yet (gap still wide or turn too young). Rendered on the live forming bar, like TV.',
   cooling: 'Line falling below the signal — mid-pullback / post-fade. The reset that precedes the next curl.',
   warming: 'Not enough closed 5m bars yet to compute the MACD (needs ~18).',
 };
@@ -99,6 +99,11 @@ function MomoRow({ item, selected, onSelect, onOpenCatalyst, session }: {
         {item.below_zero === true && item.state !== 'cooling' && (
           <Tooltip title="MACD line still below ZERO — the deep post-pullback reset the best second legs curl out of">
             <span style={{ marginLeft: 5, fontSize: 9, color: '#69c0ff', cursor: 'help', fontWeight: 700 }}>&lt;0</span>
+          </Tooltip>
+        )}
+        {item.bar_age_min != null && item.bar_age_min >= 10 && (
+          <Tooltip title={`State is as of the last closed 5m bar, ${item.bar_age_min}m ago — this name has no live screen price right now, so the forming bar can't be rendered. Verify on the chart.`}>
+            <span style={{ marginLeft: 5, fontSize: 9, color: '#595959', cursor: 'help' }}>⏱{item.bar_age_min}m</span>
           </Tooltip>
         )}
         {item.setup_at && (

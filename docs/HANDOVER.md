@@ -200,6 +200,17 @@ parallel display layer. **Next:** grade setups after ~a week
 (below_zero × chg band × time-of-day vs same-name non-setup bars) → decide
 the gated Telegram subset (first-setup-of-day / <0-only are the candidate
 dials).
+**Same-day fix (the LPSN/WYHG lag, operator's first live check):** the tab
+rendered state as of the last CLOSED bar, and a bucket only closes when the
+NEXT trade lands on MINI — so thin premarket tapes lagged the operator's TV
+panel by minutes (LPSN read "crossed" through a visible roll-over, WYHG
+"turning" after TV's line had hooked above; XCH/MGRX/SURG matched, incl. a
+live ✚ stamp on XCH). Display state now folds the LIVE screen price
+(consolidated tape, no MINI blindness) into the rings as the forming bar —
+provisional line/signal exactly as TV draws its panel. DISPLAY ONLY: events
+and committed state stay closed-bar, grading unaffected. Off-screen sticky
+names (no live price) fall back to closed-bar state with an honest ⏱Xm
+staleness chip at ≥10 min.
 
 XHYFM. **The basis-break guard wiped a +650% runner mid-run — guard now
 tick-silence-gated (2026-08-03).** HYFM: dead tape at $0.55 for weeks, Monday
