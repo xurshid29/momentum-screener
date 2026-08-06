@@ -378,10 +378,15 @@ ceiling). Raw rate ~8 setups/name/session with real failures between
 **Surfacing.** ⤴ MOMO tab (DEFAULT view since 2026-08-06, operator's call):
 one row per qualified name with live state — **curling** (setup live — the
 acting window, pulses when fresh) / crossed / turning / cooling / warming —
-plus gap%, <0 badge (below-zero reset), setup/cross ago (bar-close
-anchored), news badge, full-day chg%. NO sounds, NO Telegram (operator's
-call pre-replay; the fire rate says raw pushes would spam — promote only a
-gated subset after grading, e.g. first-setup-of-day or <0-only).
+plus gap%, <0 badge (below-zero reset; on crossed rows stamped at the cross
+EVENT, the origin), setup/cross ago (bar-close anchored), ⏱ thin-tape
+staleness chip, news badge, full-day chg%. Display state renders the
+FORMING bar from the live screen price, synthesizing every missed
+in-session bucket (capped at one ring refresh; closed sessions synthesize
+nothing; 'turning' never claimed across a synthesized hole). **Sort:**
+state ladder → <0 first within the state → day-chg desc. NO sounds, NO
+Telegram (operator's call pre-replay — promote only a gated subset after
+grading, e.g. first-setup-of-day or <0-only).
 
 **Grading.** `tier='macd'`, events setup/cross (fades not recorded —
 episode ends are derivable from the next cross-down). Meta: price, line,

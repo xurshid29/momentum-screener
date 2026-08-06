@@ -230,6 +230,18 @@ regardless of the fold. Verify suite → S8 (stale-hole convergence +
 closed-session no-wash). WYHG meanwhile produced the first fully-live
 staircase on the tab: ⤴ setup 6m → ✚ cross 55s at +106%, and CLRO's ✚30m
 stamp sat at the base of its $7→$12 leg (+197%).
+**Round 3 (operator's ask): below-zero resets rank first + real <0 badge.**
+Sort is now state ladder (⤴ curling → ✚ crossed → turning → cooling →
+warming) → **<0 first within the state** → day-chg desc. For CROSSED rows
+the flag is stamped at the cross EVENT (origin) — the live line rises
+through zero as the leg runs, which would strip the badge exactly when the
+thesis works; other states read the live line. The <0 marker became a
+bordered badge on every state (was tiny text, hidden on cooling).
+Display-only; meta.below_zero already carries the grading cut. **Day-1
+tally (first full session):** 24 setups / 53 crosses across ~20 qualified
+leaders — 21/24 setups below-zero (the announce-worthy curl IS mostly the
+deep-reset class, consistent with the operator's read). WYHG closed the
+loop: setup→cross staircase fired live at +106%, ran to +565% same day.
 
 XHYFM. **The basis-break guard wiped a +650% runner mid-run — guard now
 tick-silence-gated (2026-08-03).** HYFM: dead tape at $0.55 for weeks, Monday
