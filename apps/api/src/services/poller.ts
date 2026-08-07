@@ -443,9 +443,11 @@ function emaCrossTfOf(v: unknown): EmaCrossTf {
 // alert promotion.
 export interface MacdMomoItem {
   ticker: string;
-  // Which MACD lane (2026-08-07): '5m' = 3/10/8 on 5m bars, '2m' = 3/15/8
-  // on 2m bars — the operator's two TV setups, shown as side-by-side lanes.
-  variant: '5m' | '2m';
+  // Which MACD lane: '5m' = 3/10/8 on 5m bars, '2m' = 3/15/8 on 2m bars
+  // (both 2026-08-07 — the operator's two TV setups), '15m' = 3/15/8 on 15m
+  // bars (2026-08-08, picked from an 8-config replay sweep). Side-by-side
+  // lanes, ascending.
+  variant: '5m' | '2m' | '15m';
   // 'curling'  — a SETUP is live: line rising toward the signal from below,
   //              most of the gap closed. The operator's entry moment.
   // 'crossed'  — line above the signal (the crossover happened).
@@ -1131,7 +1133,7 @@ class PollerService {
   onMacdCurlEvent(e: import('./macd-curl.js').MacdCurlEvent): void {
     const q = this.macdMomoQualified.get(e.ticker);
     if (!q || e.type === 'fade') return;
-    const variant: '5m' | '2m' = e.variant === '2m' ? '2m' : '5m';
+    const variant: '5m' | '2m' | '15m' = e.variant === '2m' ? '2m' : e.variant === '15m' ? '15m' : '5m';
     const key = `${variant}|${e.ticker}`;
     const ev = this.macdMomoEvents.get(key)
       ?? { setup_at: null, cross_at: null, setup_bz: null, cross_bz: null };
@@ -1607,7 +1609,7 @@ class PollerService {
           // re-qualify the name (events only ever record while qualified).
           // Names that qualified without an event re-qualify from the live
           // rows within one cycle — the only reseed residual.
-          const mkey = `${m.variant === '2m' ? '2m' : '5m'}|${t}`;
+          const mkey = `${m.variant === '2m' ? '2m' : m.variant === '15m' ? '15m' : '5m'}|${t}`;
           const mev = this.macdMomoEvents.get(mkey)
             ?? { setup_at: null, cross_at: null, setup_bz: null, cross_bz: null };
           if (r.event === 'setup') { mev.setup_at = iso(atMs); mev.setup_bz = m.below_zero === true; }
@@ -2765,7 +2767,7 @@ class PollerService {
       // operator's TV panel. Off-screen sticky rows have no live price and
       // honestly fall back to closed-bar state (bar_age_min marks it).
       const livePrice = (row?.price ?? 0) > 0 ? row!.price! : undefined;
-      for (const variant of ['5m', '2m'] as const) {
+      for (const variant of ['5m', '2m', '15m'] as const) {
         const snap = this.macdSnapshotFn?.(tk, livePrice, variant) ?? null;
         const ev = this.macdMomoEvents.get(`${variant}|${tk}`);
         const price = livePrice ?? (snap?.last_close ?? 0);
@@ -2833,10 +2835,8 @@ class PollerService {
     // Cap per lane — the panel splits by variant, so a global slice would
     // let one lane starve the other. Array.sort is stable, so per-variant
     // order survives the filter.
-    const macdMomoDisplay = [
-      ...macdMomoList.filter((x) => x.variant === '5m').slice(0, MACD_MOMO.max_display),
-      ...macdMomoList.filter((x) => x.variant === '2m').slice(0, MACD_MOMO.max_display),
-    ];
+    const macdMomoDisplay = (['5m', '2m', '15m'] as const).flatMap((v) =>
+      macdMomoList.filter((x) => x.variant === v).slice(0, MACD_MOMO.max_display));
 
     // After-hours: re-impose a volume gate on the momentum list. Finviz drops
     // its relvol filter at the close, so names that ticked >5% on a few AH
@@ -3372,7 +3372,7 @@ class PollerService {
   // the reverse). Null until the symbol's 17-bar warmup. `livePrice` folds
   // the forming bar in provisionally (display parity with TV's panel).
   private macdSnapshotFn:
-    | ((ticker: string, livePrice?: number, variant?: '5m' | '2m') => {
+    | ((ticker: string, livePrice?: number, variant?: '5m' | '2m' | '15m') => {
         line: number; signal_val: number; gap: number; above: boolean;
         rising_bars: number; below_zero: boolean; setup_active: boolean;
         provisional: boolean; synth_buckets: number;

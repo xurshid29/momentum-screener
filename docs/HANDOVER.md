@@ -266,6 +266,21 @@ each name warms ~46 min of active tape; full from the next session on.
 queued", force-cancel included). If it EVER materializes it would rebuild
 adaa4fa images as :latest and deploy = revert prod; the marker-grep deploy
 check catches it, any push re-fixes. Likely dropped internally.
+**Round 6 (2026-08-08, Saturday): the THIRD lane — 15m·3/15/8 — settings
+picked by MEASUREMENT.** Operator asked "what MACD settings for 15m?"; ran
+an 8-config sweep (3/10/8, 3/15/8, 3/20/8, 3/10/16, 5/13/8, 5/20/9,
+8/17/9, 12/26/9) over 18 recent leaders × 4 sessions of banked bars_15m
+(the replay harness gained --interval/--fast/--slow/--signal flags —
+durable). Result: **3/15/8 best short-horizon** (median +3.0%/1.5h, lowest
+drawdown tier, ~20% fewer whipsaw crosses than 3/10/8); 8/17/9 the
+fewer-but-bigger alternative (median +5.1%/3h, 23% reach +20%, later
+entries); **the textbook 12/26/9 graded WORST on these tapes** (operator's
+fast-MACD instinct confirmed). Operator picked 3/15/8 via AskUserQuestion
+(8/17/9 and 5/13/8 offered with numbers). Build: `MACD_CURL_15M`; the
+variant rides the 15m RECLAIM layer's bar stream (makeHtfLayer gained
+`alsoOnBar`) and the same split-adjusted bars_15m boot replay — no new
+table, no new aggregation, warm from boot. Lanes now ascending 2M·5M·15M.
+tier_events meta.variant='15m'.
 
 XHYFM. **The basis-break guard wiped a +650% runner mid-run — guard now
 tick-silence-gated (2026-08-03).** HYFM: dead tape at $0.55 for weeks, Monday

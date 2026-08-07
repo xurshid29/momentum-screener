@@ -5,21 +5,40 @@
 //   ssh root@<droplet> '... psql ... "COPY (SELECT ticker,
 //     extract(epoch from bar_ts)::bigint AS close_ts, close, volume
 //     FROM bars_5m WHERE ... ORDER BY ticker, bar_ts) TO STDOUT WITH CSV HEADER"' > bars.csv
-//   npx tsx scripts/research/macd-curl-replay.ts bars.csv [TICKER ...]
+//   npx tsx scripts/research/macd-curl-replay.ts bars.csv [TICKER ...] \
+//     [--interval 900] [--fast 3] [--slow 10] [--signal 8]
 //
+// Config flags override MACD_CURL (added 2026-08-08 for the 15m-lane
+// settings comparison) — pass the bar interval matching the CSV's grid.
 // Times print in ET (the app's anchor) and UTC+5 (the operator's wall
 // clock, matching their TV screenshots). Forward stats look ahead over the
-// banked bars: max close +30m/+60m and min close +30m after each event.
+// banked bars: max close +30m/+60m equivalents (6/12 bars) and min close
+// +6 bars after each event.
 
 import { readFileSync } from 'node:fs';
-import { MacdCurlTracker, MACD_CURL } from '../../src/services/macd-curl.js';
+import { MacdCurlTracker, MACD_CURL, type MacdCurlConfig } from '../../src/services/macd-curl.js';
 
-const csvPath = process.argv[2];
+const args = process.argv.slice(2);
+const flags = new Map<string, number>();
+const positional: string[] = [];
+for (let i = 0; i < args.length; i++) {
+  if (args[i].startsWith('--')) { flags.set(args[i].slice(2), Number(args[i + 1])); i++; }
+  else positional.push(args[i]);
+}
+const csvPath = positional[0];
 if (!csvPath) {
-  console.error('usage: npx tsx scripts/research/macd-curl-replay.ts bars.csv [TICKER ...]');
+  console.error('usage: npx tsx scripts/research/macd-curl-replay.ts bars.csv [TICKER ...] [--interval N --fast N --slow N --signal N]');
   process.exit(1);
 }
-const only = new Set(process.argv.slice(3).map((s) => s.toUpperCase()));
+const only = new Set(positional.slice(1).map((s) => s.toUpperCase()));
+const CFG: MacdCurlConfig = {
+  ...MACD_CURL,
+  interval_sec: flags.get('interval') ?? MACD_CURL.interval_sec,
+  fast: flags.get('fast') ?? MACD_CURL.fast,
+  slow: flags.get('slow') ?? MACD_CURL.slow,
+  signal: flags.get('signal') ?? MACD_CURL.signal,
+  variant: `${(flags.get('interval') ?? MACD_CURL.interval_sec) / 60}m`,
+};
 
 interface Bar { ts: number; close: number; volume: number }
 const bySym = new Map<string, Bar[]>();
@@ -53,11 +72,11 @@ function fwd(bars: Bar[], i: number, n: number): { max: number; min: number } {
   return { max: (max / base - 1) * 100, min: (min / base - 1) * 100 };
 }
 
-console.log(`config: ${JSON.stringify(MACD_CURL)}\n`);
+console.log(`config: ${JSON.stringify(CFG)}\n`);
 const counts = { setup: 0, cross: 0, fade: 0 };
 for (const [ticker, bars] of [...bySym.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
   bars.sort((a, b) => a.ts - b.ts);
-  const tracker = new MacdCurlTracker();
+  const tracker = new MacdCurlTracker(CFG);
   console.log(`── ${ticker} (${bars.length} bars, ${day(bars[0].ts, ET_OFF)} ${hhmm(bars[0].ts, ET_OFF)} → ${day(bars[bars.length - 1].ts, ET_OFF)} ${hhmm(bars[bars.length - 1].ts, ET_OFF)} ET)`);
   bars.forEach((b, i) => {
     const ev = tracker.addClosedBar(ticker, b.ts, b.close);

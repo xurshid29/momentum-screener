@@ -355,12 +355,17 @@ screens. AH note: late qualifiers rank on the AH-anchored row change; row
 display change is FULL-DAY (tick-feed prior close), same anchor as the EMA
 tab.
 
-**Two variants since 2026-08-07** — the operator's two TV setups as
-side-by-side lanes, same universe, independently sorted: **5m·3/10/8**
-(warmup 17 bars, bars_5m) and **2m·3/15/8** (warmup 23 bars ≈ 46 min,
-bars_2m — 3d retention, 2d boot replay; the 2m closes are bucketed in
-tickfeed from the per-second stream). Every event + tier_events meta
-carries `variant` — the head-to-head grading cut.
+**Three variants (lanes ascending 2M·5M·15M)** — same universe,
+independently sorted; every event + tier_events meta carries `variant`,
+the head-to-head grading cut: **2m·3/15/8** (2026-08-07; warmup 23 bars ≈
+46 min, bars_2m — 3d retention, 2d boot replay, closes bucketed in
+tickfeed from the per-second stream), **5m·3/10/8** (the original; warmup
+17 bars, bars_5m), **15m·3/15/8** (2026-08-08; settings picked from an
+8-config sweep over 18 leaders × 4 sessions — best short-horizon median,
+lowest drawdown, ~20% fewer whipsaws than 3/10/8, with the textbook
+12/26/9 grading worst; rides the 15m reclaim layer's bar stream via
+makeHtfLayer's alsoOnBar + the split-adjusted bars_15m replay — no table
+of its own).
 
 **Detector** (`MacdCurlTracker`): line = SMA3−SMA10 of closes, signal =
 SMA8(line), warmup 17 closed bars; CLOSED 5m bars only, deliberately — the

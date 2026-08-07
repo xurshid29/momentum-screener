@@ -83,6 +83,25 @@ export const MACD_CURL_2M: MacdCurlConfig = {
   rearm_on_fail: true,
 };
 
+// The 15m·3/15/8 variant (2026-08-08, operator's pick from an 8-config
+// sweep over 18 leaders × 4 sessions — scripts/research/macd-curl-replay.ts
+// with --interval/--fast/--slow/--signal): best short-horizon median
+// (+3.0%/1.5h), lowest drawdown tier, ~20% fewer whipsaw crosses than
+// 3/10/8; the textbook 12/26/9 graded worst on these tapes. Slow leg spans
+// ~3.75h. Rides the reclaim layer's bars_15m store (Databento/Yahoo
+// backfilled) — warm from boot, no new table.
+export const MACD_CURL_15M: MacdCurlConfig = {
+  variant: '15m',
+  fast: 3,
+  slow: 15,
+  signal: 8,
+  interval_sec: 900,
+  curl_rising_bars: 2,
+  curl_max_gap_frac: 0.65,
+  min_dip_frac: 0.003,
+  rearm_on_fail: true,
+};
+
 export interface MacdCurlEvent {
   // setup = the curl (the operator's entry moment): line rising toward the
   //         signal from below, most of the gap closed.

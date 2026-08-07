@@ -172,10 +172,12 @@ function MomoRow({ item, selected, onSelect, onOpenCatalyst, session }: {
 // The two lanes (2026-08-07, operator's ask + layout choice): both of their
 // TV setups side by side, same universe, independently sorted — like the
 // EMA tab's timeframe lanes.
-const MOMO_LANES = ['5m', '2m'] as const;
+// Ascending by interval, like the EMA tab's timeframe lanes.
+const MOMO_LANES = ['2m', '5m', '15m'] as const;
 const LANE_LABEL: Record<(typeof MOMO_LANES)[number], string> = {
-  '5m': '5M · 3/10/8',
   '2m': '2M · 3/15/8',
+  '5m': '5M · 3/10/8',
+  '15m': '15M · 3/15/8',
 };
 
 export function MacdMomoPanel({ items, onOpenCatalyst, session }: {
