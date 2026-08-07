@@ -385,6 +385,14 @@ export interface Bars1dTable {
   close: number;
   volume: number;
 }
+// Closed 2m bars — the ⤴ MOMO tab's 2m·3/15/8 MACD variant warmup store
+// (2026-08-07). Same shape as bars_15m; 3d retention in tickfeed.ts.
+export interface Bars2mTable {
+  ticker: string;
+  bar_ts: ColumnType<Date, Date | string, Date | string>;
+  close: number;
+  volume: number;
+}
 
 export interface Database {
   users: UsersTable;
@@ -407,6 +415,7 @@ export interface Database {
   broker_imports: BrokerImportsTable;
   trade_executions: TradeExecutionsTable;
   tier_events: TierEventsTable;
+  bars_2m: Bars2mTable;
   bars_5m: Bars5mTable;
   bars_1h: Bars1hTable;
   bars_4h: Bars4hTable;

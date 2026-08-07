@@ -169,6 +169,15 @@ function MomoRow({ item, selected, onSelect, onOpenCatalyst, session }: {
   );
 }
 
+// The two lanes (2026-08-07, operator's ask + layout choice): both of their
+// TV setups side by side, same universe, independently sorted — like the
+// EMA tab's timeframe lanes.
+const MOMO_LANES = ['5m', '2m'] as const;
+const LANE_LABEL: Record<(typeof MOMO_LANES)[number], string> = {
+  '5m': '5M · 3/10/8',
+  '2m': '2M · 3/15/8',
+};
+
 export function MacdMomoPanel({ items, onOpenCatalyst, session }: {
   items: MacdMomoItem[];
   onOpenCatalyst: (ticker: string, catalyst: CatalystInfo | null) => void;
@@ -177,8 +186,6 @@ export function MacdMomoPanel({ items, onOpenCatalyst, session }: {
   const { selected, setSelected } = useSelection();
   const { hidden } = useHiddenTickers();
   const visible = items.filter((x) => !hidden.has(x.ticker));
-  const curling = visible.filter((x) => x.state === 'curling').length;
-  const crossed = visible.filter((x) => x.state === 'crossed').length;
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -188,37 +195,66 @@ export function MacdMomoPanel({ items, onOpenCatalyst, session }: {
           display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flex: '0 0 auto',
         }}
       >
-        <Tooltip mouseEnterDelay={TIP_DELAY} title="The session's top gainers (top-10 by day change ∪ anything ≥30%, sticky for the ET day) with their live MACD 3/10/8 state. Act on ⤴ CURLING. Sort: ⤴ curling → ✚ crossed → turning → cooling; within a state, <0 (below-zero reset) first, then newest ⤴/✚ event first.">
+        <Tooltip mouseEnterDelay={TIP_DELAY} title="The session's top gainers (top-10 by day change ∪ anything ≥30%, sticky for the ET day) with their live MACD state on both of your setups. Act on ⤴ CURLING. Each lane sorts: ⤴ curling → ✚ crossed → turning → cooling; within a state, <0 (below-zero reset) first, then newest ⤴/✚ event first.">
           <Text style={{ color: '#ffc53d', fontSize: 11, fontWeight: 600, cursor: 'help' }}>
-            ⤴ TOP GAINERS · MACD 3/10/8
+            ⤴ TOP GAINERS · MACD
           </Text>
         </Tooltip>
         <Text type="secondary" style={{ fontSize: 10 }}>
-          {curling > 0 && <span style={{ color: '#ffc53d', fontWeight: 600 }}>⤴{curling} </span>}
-          {crossed > 0 && <span style={{ color: '#95de64' }}>✚{crossed} </span>}
-          <span>/{visible.length}</span>
+          {visible.length === 0 ? '' : `${new Set(visible.map((x) => x.ticker)).size} names`}
         </Text>
       </div>
-      <div style={{ flex: '1 1 auto', overflow: 'auto' }}>
-        {visible.length === 0 ? (
-          <div style={{ padding: '18px 10px', textAlign: 'center' }}>
-            <Text type="secondary" style={{ fontSize: 11 }}>
-              No top gainers qualified yet today (top-10 needs ≥10% · anyone at ≥30%).
-              The set fills as the session's leaders emerge and resets at midnight ET.
-            </Text>
-          </div>
-        ) : (
-          visible.map((x) => (
-            <MomoRow
-              key={x.ticker}
-              item={x}
-              selected={x.ticker === selected}
-              onSelect={setSelected}
-              onOpenCatalyst={() => onOpenCatalyst(x.ticker, x.catalyst ?? null)}
-              session={session}
-            />
-          ))
-        )}
+      <div style={{ flex: '1 1 auto', display: 'flex', gap: 1, overflow: 'hidden', background: '#d48806', minHeight: 0 }}>
+        {MOMO_LANES.map((lane) => {
+          const inLane = visible.filter((x) => x.variant === lane);
+          const curling = inLane.filter((x) => x.state === 'curling').length;
+          const crossed = inLane.filter((x) => x.state === 'crossed').length;
+          return (
+            <div
+              key={lane}
+              style={{
+                flex: '1 1 0', minWidth: 0, display: 'flex', flexDirection: 'column',
+                background: '#0a0a0a', overflow: 'hidden',
+              }}
+            >
+              <div
+                style={{
+                  padding: '3px 8px', background: '#141010', borderBottom: '1px solid #614700',
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flex: '0 0 auto',
+                }}
+              >
+                <Text style={{ color: '#ffc53d', fontSize: 11, fontWeight: 600 }}>⤴ {LANE_LABEL[lane]}</Text>
+                <Text type="secondary" style={{ fontSize: 10 }}>
+                  {curling > 0 && <span style={{ color: '#ffc53d', fontWeight: 600 }}>⤴{curling} </span>}
+                  {crossed > 0 && <span style={{ color: '#95de64' }}>✚{crossed} </span>}
+                  <span>/{inLane.length}</span>
+                </Text>
+              </div>
+              <div style={{ flex: '1 1 auto', overflow: 'auto' }}>
+                {inLane.length === 0 ? (
+                  <div style={{ padding: '18px 10px', textAlign: 'center' }}>
+                    <Text type="secondary" style={{ fontSize: 10, color: '#3f3a30' }}>
+                      {lane === '2m'
+                        ? 'warming — the 3/15/8 needs ~46 min of banked 2m tape per name'
+                        : 'no top gainers qualified yet'}
+                    </Text>
+                  </div>
+                ) : (
+                  inLane.map((x) => (
+                    <MomoRow
+                      key={`${x.variant}|${x.ticker}`}
+                      item={x}
+                      selected={x.ticker === selected}
+                      onSelect={setSelected}
+                      onOpenCatalyst={() => onOpenCatalyst(x.ticker, x.catalyst ?? null)}
+                      session={session}
+                    />
+                  ))
+                )}
+              </div>
+            </div>
+          );
+        })}
       </div>
       <div
         style={{
@@ -228,7 +264,7 @@ export function MacdMomoPanel({ items, onOpenCatalyst, session }: {
       >
         <Text type="secondary" style={{ fontSize: 10 }}>
           Second legs on the day's leaders: cooling → the line resets (often &lt;0) → ⤴ curls toward
-          the signal (entry, tight stop) → ✚ crosses. Closed 5m bars, TV-parity
+          the signal (entry, tight stop) → ✚ crosses. Closed bars, TV-parity
           (&quot;wait for close&quot;). No sounds/Telegram — grading decides promotion.
         </Text>
       </div>

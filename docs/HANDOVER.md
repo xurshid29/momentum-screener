@@ -248,6 +248,24 @@ qualified leaders — 21/24 setups below-zero (the announce-worthy curl IS
 mostly the deep-reset class, consistent with the operator's read). WYHG
 closed the loop: setup→cross staircase fired live at +106%, ran to +565%
 same day.
+**Round 5 (2026-08-07, operator's ask): the SECOND variant — 2m·3/15/8 —
+as a side-by-side lane** (their other TV setup; layout chosen via
+AskUserQuestion: two lanes like the EMA tab, each independently sorted).
+MacdCurlConfig gained `variant` ('5m'|'2m', stamped on every event +
+tier_events meta — the head-to-head grading cut); tickfeed buckets 2m
+closes from the per-second stream itself (no tracker existed on that grid),
+persists them to NEW `bars_2m` (migration 20260807090000, 3d retention,
+2d boot replay, no split-adjust — a 23-bar horizon doesn't span seams);
+poller rows/dedups key `${variant}|${ticker}`, per-lane display caps.
+Same curl knobs (geometry rules are scale-free), same universe, same
+freeze-safe posture. Suite → S9. ⚠️ First deploy: the 2m lane starts
+EMPTY-ish ("warming" rows) — bars_2m only accumulates from this boot, so
+each name warms ~46 min of active tape; full from the next session on.
+⚠️ Watch item: yesterday's tooltip-commit CI rerun (31122015989) is STILL
+'queued' in GitHub pre-queue limbo, uncancellable via API (409 "not yet
+queued", force-cancel included). If it EVER materializes it would rebuild
+adaa4fa images as :latest and deploy = revert prod; the marker-grep deploy
+check catches it, any push re-fixes. Likely dropped internally.
 
 XHYFM. **The basis-break guard wiped a +650% runner mid-run — guard now
 tick-silence-gated (2026-08-03).** HYFM: dead tape at $0.55 for weeks, Monday

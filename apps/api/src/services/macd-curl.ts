@@ -28,10 +28,14 @@
 // SMA(line,8). Warmup = 10 + 8 − 1 = 17 closed bars.
 
 export interface MacdCurlConfig {
+  // Lane label stamped on every event ('5m' | '2m') — the grading cut and
+  // the poller's per-variant row key. Two variants since 2026-08-07: the
+  // operator runs BOTH TV setups — 3/10/8 on 5m and 3/15/8 on 2m.
+  variant: string;
   fast: number;              // SMA length of the fast leg (3)
-  slow: number;              // SMA length of the slow leg (10)
+  slow: number;              // SMA length of the slow leg (10 / 15)
   signal: number;            // SMA length of the signal line (8)
-  interval_sec: number;      // bar interval (300 = 5m)
+  interval_sec: number;      // bar interval (300 = 5m / 120 = 2m)
   // A curl needs this many CONSECUTIVE rising line closes before it can
   // announce. 2 = the line has visibly turned, one bar of confirmation —
   // matches where the operator marks their entries (INLF ~10:30 ET).
@@ -52,10 +56,27 @@ export interface MacdCurlConfig {
 }
 
 export const MACD_CURL: MacdCurlConfig = {
+  variant: '5m',
   fast: 3,
   slow: 10,
   signal: 8,
   interval_sec: 300,
+  curl_rising_bars: 2,
+  curl_max_gap_frac: 0.65,
+  min_dip_frac: 0.003,
+  rearm_on_fail: true,
+};
+
+// The 2m·3/15/8 variant (2026-08-07, operator's ask) — their second TV
+// setup, on 2-minute buckets. Warmup 15+8 = 23 closed bars (~46 min of
+// active tape); bars persist to bars_2m so it survives deploys. Same curl
+// knobs — the geometry rules are scale-free.
+export const MACD_CURL_2M: MacdCurlConfig = {
+  variant: '2m',
+  fast: 3,
+  slow: 15,
+  signal: 8,
+  interval_sec: 120,
   curl_rising_bars: 2,
   curl_max_gap_frac: 0.65,
   min_dip_frac: 0.003,
@@ -70,6 +91,7 @@ export interface MacdCurlEvent {
   //         starts the next episode).
   type: 'setup' | 'cross' | 'fade';
   ticker: string;
+  variant: string;           // which lane fired ('5m' | '2m') — from the config
   ts_sec: number;            // close time of the triggering bar
   price: number;             // close of the triggering bar
   line: number;              // MACD line at this close
@@ -274,7 +296,7 @@ export class MacdCurlTracker {
       && st.prevLine >= st.prevSig && line < sig;
 
     const mk = (type: MacdCurlEvent['type']): MacdCurlEvent => ({
-      type, ticker, ts_sec: closeTs, price: close,
+      type, ticker, variant: this.cfg.variant, ts_sec: closeTs, price: close,
       line, signal_val: sig, gap,
       below_zero: line < 0,
       rising_bars: st.rising,

@@ -4,7 +4,7 @@
 // Real-tape validation lives in scripts/research/macd-curl-replay.ts (the
 // 2026-08-05 leaders); this file pins the state-machine contract.
 
-import { MacdCurlTracker, MACD_CURL, type MacdCurlEvent } from '../src/services/macd-curl.js';
+import { MacdCurlTracker, MACD_CURL, MACD_CURL_2M, type MacdCurlEvent } from '../src/services/macd-curl.js';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail = ''): void {
@@ -179,6 +179,30 @@ console.log('S8 provisional multi-bucket fold — stale holes converge, closed s
     `synth=${overnight.synth_buckets}`);
   check('overnight state equals the immediate fold',
     Math.abs(overnight.line - immediate.line) < 1e-9 && Math.abs(overnight.signal_val - immediate.signal_val) < 1e-9);
+}
+
+console.log('S9 2m·3/15/8 variant — same contract on its own grid, variant stamped');
+{
+  const IV2 = MACD_CURL_2M.interval_sec;
+  const warm2 = MACD_CURL_2M.slow + MACD_CURL_2M.signal - 1; // 22 bars, first signal on the 23rd
+  const tr = new MacdCurlTracker(MACD_CURL_2M);
+  const evs: MacdCurlEvent[] = [];
+  secondLegTape().forEach((c, i) => {
+    const ev = tr.addClosedBar('TEST', T0 + (i + 1) * IV2, c);
+    if (ev) evs.push(ev);
+    if (i < warm2) check('2m warmup silent', ev == null || false, `bar ${i} emitted ${ev?.type}`);
+  });
+  check('2m variant produces the setup→cross sequence',
+    evs.some((e) => e.type === 'setup') && evs.some((e) => e.type === 'cross'),
+    `types: ${evs.map((e) => e.type).join(',')}`);
+  check('events stamped variant=2m', evs.every((e) => e.variant === '2m'));
+  const tr5 = new MacdCurlTracker();
+  const ev5: MacdCurlEvent[] = [];
+  secondLegTape().forEach((c, i) => {
+    const e = tr5.addClosedBar('TEST', T0 + (i + 1) * IV, c);
+    if (e) ev5.push(e);
+  });
+  check('default config stamps variant=5m', ev5.length > 0 && ev5.every((e) => e.variant === '5m'));
 }
 
 if (failures > 0) {

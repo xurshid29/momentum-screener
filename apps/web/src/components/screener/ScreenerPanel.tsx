@@ -417,7 +417,8 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
         items={[
           {
             key: 'momo',
-            label: `⤴ MOMO${payload?.macd_momo?.length ? ` · ${payload.macd_momo.length}` : ''}`,
+            // Distinct names — each ticker carries a row per MACD variant.
+            label: `⤴ MOMO${payload?.macd_momo?.length ? ` · ${new Set(payload.macd_momo.map((x) => x.ticker)).size}` : ''}`,
             children: (
               <MacdMomoPanel
                 items={payload?.macd_momo ?? []}

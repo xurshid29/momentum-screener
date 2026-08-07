@@ -384,6 +384,8 @@ export interface EmaCrossItem {
 // its signal after the pullback reset.
 export interface MacdMomoItem {
   ticker: string;
+  // Which MACD lane: '5m' = 3/10/8 on 5m bars, '2m' = 3/15/8 on 2m bars.
+  variant: '5m' | '2m';
   // curling = SETUP live (line rising toward the signal, most of the gap
   // closed — the entry moment) · crossed = line above the signal · turning =
   // rising below, not announce-worthy yet · cooling = falling below ·
