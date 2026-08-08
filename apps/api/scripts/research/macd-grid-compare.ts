@@ -48,6 +48,12 @@ if (GRIDS.length === 0) {
 const FAST = +(flag('fast') ?? 3);
 const SLOW = +(flag('slow') ?? 15);
 const SIG = +(flag('signal') ?? 8);
+// Trend-EMA split (2026-08-09, operator's proposal: "price above the 21EMA
+// = confirmed/safe entry"). When set (--trendema 21), every grid's stats
+// are additionally split by whether the setup bar closed above an EMA of
+// this length on the SAME grid — the counterfactual test before wiring the
+// badge. 0 disables.
+const TREND = +(flag('trendema') ?? 0);
 
 const gridBars = GRIDS.map((g) => ({ ...g, bars: loadCsv(g.path) }));
 // Finest provided grid = the shared outcome series.
@@ -83,20 +89,35 @@ for (const g of gridBars) {
     ...MACD_CURL, variant: g.label, interval_sec: g.interval,
     fast: FAST, slow: SLOW, signal: SIG,
   };
-  const setups: { t: string; ts: number; price: number; bz: boolean }[] = [];
+  const setups: { t: string; ts: number; price: number; bz: boolean; above21: boolean | null }[] = [];
   let crosses = 0, crossAfterSetup = 0, lastSetupByTicker = new Map<string, number>();
   const daysByName = new Map<string, Set<string>>();
   for (const [t, bars] of g.bars) {
     const tracker = new MacdCurlTracker(cfg);
+    // Trend EMA on this grid's closes — SMA-seeded like the house EMAs.
+    let ema: number | null = null, seedSum = 0, nBars = 0;
     for (const b of bars) {
       const day = new Date((b.ts - 4 * 3600) * 1000).toISOString().slice(0, 10);
       let ds = daysByName.get(t);
       if (!ds) daysByName.set(t, (ds = new Set()));
       ds.add(day);
+      if (TREND > 0) {
+        nBars++;
+        if (nBars <= TREND) {
+          seedSum += b.close;
+          if (nBars === TREND) ema = seedSum / TREND;
+        } else if (ema != null) {
+          const k = 2 / (TREND + 1);
+          ema = b.close * k + ema * (1 - k);
+        }
+      }
       const ev: MacdCurlEvent | null = tracker.addClosedBar(t, b.ts, b.close);
       if (!ev) continue;
       if (ev.type === 'setup') {
-        setups.push({ t, ts: ev.ts_sec, price: ev.price, bz: ev.below_zero });
+        setups.push({
+          t, ts: ev.ts_sec, price: ev.price, bz: ev.below_zero,
+          above21: TREND > 0 && ema != null ? ev.price > ema : null,
+        });
         lastSetupByTicker.set(t, ev.ts_sec);
       } else if (ev.type === 'cross') {
         crosses++;
@@ -107,25 +128,36 @@ for (const g of gridBars) {
     }
   }
   const nameSessions = [...daysByName.values()].reduce((a, s) => a + s.size, 0);
-  const o30 = setups.map((s) => outcome(s.t, s.ts, s.price, H.h30)).filter((x): x is { up: number; dn: number } => !!x);
-  const o60 = setups.map((s) => outcome(s.t, s.ts, s.price, H.h60)).filter((x): x is { up: number; dn: number } => !!x);
-  const o120 = setups.map((s) => outcome(s.t, s.ts, s.price, H.h120)).filter((x): x is { up: number; dn: number } => !!x);
   const pct = (n: number, d: number) => (d > 0 ? Math.round((n / d) * 100) : 0);
-  const n = setups.length;
-  rows.push([
-    g.label.padEnd(4),
-    String(n).padStart(6),
-    `${(n / Math.max(1, nameSessions)).toFixed(1)}/nm-day`.padStart(10),
-    `${pct(setups.filter((s) => s.bz).length, n)}%`.padStart(5),
-    `${pct(crossAfterSetup, n)}%`.padStart(8),
-    `${median(o30.map((x) => x.up)).toFixed(1)}%`.padStart(8),
-    `${median(o30.map((x) => x.dn)).toFixed(1)}%`.padStart(8),
-    `${pct(o60.filter((x) => x.up >= 10).length, o60.length)}%`.padStart(8),
-    `${pct(o60.filter((x) => x.dn <= -5).length, o60.length)}%`.padStart(8),
-    `${median(o120.map((x) => x.up)).toFixed(1)}%`.padStart(8),
-    `${pct(o120.filter((x) => x.up >= 20).length, o120.length)}%`.padStart(8),
-    `${pct(o120.filter((x) => x.dn <= -10).length, o120.length)}%`.padStart(9),
-  ].join(' '));
+  const emit = (label: string, subset: typeof setups, resolveCount: number | null) => {
+    const o30 = subset.map((s) => outcome(s.t, s.ts, s.price, H.h30)).filter((x): x is { up: number; dn: number } => !!x);
+    const o60 = subset.map((s) => outcome(s.t, s.ts, s.price, H.h60)).filter((x): x is { up: number; dn: number } => !!x);
+    const o120 = subset.map((s) => outcome(s.t, s.ts, s.price, H.h120)).filter((x): x is { up: number; dn: number } => !!x);
+    const n = subset.length;
+    rows.push([
+      label.padEnd(9),
+      String(n).padStart(6),
+      `${(n / Math.max(1, nameSessions)).toFixed(1)}/nm-day`.padStart(10),
+      `${pct(subset.filter((s) => s.bz).length, n)}%`.padStart(5),
+      (resolveCount != null ? `${pct(resolveCount, n)}%` : '—').padStart(8),
+      `${median(o30.map((x) => x.up)).toFixed(1)}%`.padStart(8),
+      `${median(o30.map((x) => x.dn)).toFixed(1)}%`.padStart(8),
+      `${pct(o60.filter((x) => x.up >= 10).length, o60.length)}%`.padStart(8),
+      `${pct(o60.filter((x) => x.dn <= -5).length, o60.length)}%`.padStart(8),
+      `${median(o120.map((x) => x.up)).toFixed(1)}%`.padStart(8),
+      `${pct(o120.filter((x) => x.up >= 20).length, o120.length)}%`.padStart(8),
+      `${pct(o120.filter((x) => x.dn <= -10).length, o120.length)}%`.padStart(9),
+    ].join(' '));
+  };
+  emit(g.label, setups, crossAfterSetup);
+  if (TREND > 0) {
+    emit(`  ✓>${TREND}ema`, setups.filter((s) => s.above21 === true), null);
+    emit(`  ✗<${TREND}ema`, setups.filter((s) => s.above21 === false), null);
+    // The 2×2 — is "deep reset that ALREADY reclaimed the trend EMA" the
+    // golden cell, or does the EMA filter just select late entries?
+    emit(`  ✓ema·<0`, setups.filter((s) => s.above21 === true && s.bz), null);
+    emit(`  ✓ema·≥0`, setups.filter((s) => s.above21 === true && !s.bz), null);
+  }
 }
 console.log(['grid', 'setups', 'rate', '<0', 'resolve', 'up30m', 'dn30m', '≥10@1h', '≤-5@1h', 'up2h', '≥20@2h', '≤-10@2h'].map((h, i) =>
   h.padStart([4, 6, 10, 5, 8, 8, 8, 8, 8, 8, 8, 9][i])).join(' '));

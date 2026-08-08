@@ -205,6 +205,34 @@ console.log('S9 2m·3/15/8 variant — same contract on its own grid, variant st
   check('default config stamps variant=5m', ev5.length > 0 && ev5.every((e) => e.variant === '5m'));
 }
 
+console.log('S10 trend-EMA marker — null until seeded, stamped on events, folds in the snapshot');
+{
+  const tr = new MacdCurlTracker();
+  const evs: MacdCurlEvent[] = [];
+  const tape = secondLegTape();
+  tape.forEach((c, i) => {
+    const ev = tr.addClosedBar('TEST', T0 + (i + 1) * IV, c);
+    if (ev) evs.push(ev);
+    if (i < MACD_CURL.trend_ema - 1) {
+      const s = tr.snapshot('TEST');
+      check('above_trend null before the EMA seeds', s == null || s.above_trend == null,
+        `bar ${i}: ${s?.above_trend}`);
+    }
+  });
+  const setup = evs.find((e) => e.type === 'setup');
+  check('setup stamps above_trend once seeded', setup != null && typeof setup.above_trend === 'boolean');
+  // The tape's setup fires at the base of a deep pullback — price sits
+  // UNDER the trend EMA there (the exact geometry the pre-study graded
+  // best).
+  check('deep-reset setup reads below the trend EMA', setup?.above_trend === false,
+    `got ${setup?.above_trend}`);
+  const lastTs = T0 + tape.length * IV;
+  const hi = tr.snapshot('TEST', 200, lastTs + 30)!;
+  const lo = tr.snapshot('TEST', 50, lastTs + 30)!;
+  check('snapshot above_trend follows the live price', hi.above_trend === true && lo.above_trend === false,
+    `hi=${hi.above_trend} lo=${lo.above_trend}`);
+}
+
 if (failures > 0) {
   console.error(`\n${failures} check(s) FAILED`);
   process.exit(1);

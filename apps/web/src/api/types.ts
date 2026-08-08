@@ -401,6 +401,9 @@ export interface MacdMomoItem {
   // (origin — the line rises through zero as the leg runs); other states
   // read the live line. Sorted first within its state.
   below_zero: boolean | null;
+  // Price vs the 21EMA on this grid, live — informational only (the
+  // pre-study graded above-trend setups WORSE; not a safety signal).
+  above_trend: boolean | null;
   rising_bars: number | null;
   // Minutes since the last REAL bar on our feed. Small = the state rides
   // real tape; large = thin tape here — the state is projected from the

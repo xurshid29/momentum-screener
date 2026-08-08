@@ -53,6 +53,14 @@ export interface MacdCurlConfig {
   // has failed — re-arm so the next genuine curl in the same episode can
   // announce again.
   rearm_on_fail: boolean;
+  // Trend-EMA length for the INFORMATIONAL price-position marker
+  // (2026-08-09, operator's ask — tested BEFORE wiring: on 26 leaders × 5
+  // sessions, setups with price ABOVE this EMA graded WORSE on every grid
+  // (lower capture AND more drawdown; the deep below-zero resets that pay
+  // sit under it) — so this is a neutral badge + tier_events meta stamp,
+  // deliberately NOT a "confirmed/safe" gate. The live grading decides if
+  // the 5-session inversion holds. 0 disables.
+  trend_ema: number;
 }
 
 export const MACD_CURL: MacdCurlConfig = {
@@ -65,6 +73,7 @@ export const MACD_CURL: MacdCurlConfig = {
   curl_max_gap_frac: 0.65,
   min_dip_frac: 0.003,
   rearm_on_fail: true,
+  trend_ema: 21,
 };
 
 // The 2m·3/15/8 variant (2026-08-07, operator's ask) — their second TV
@@ -81,6 +90,7 @@ export const MACD_CURL_2M: MacdCurlConfig = {
   curl_max_gap_frac: 0.65,
   min_dip_frac: 0.003,
   rearm_on_fail: true,
+  trend_ema: 21,
 };
 
 // The 15m·3/15/8 variant (2026-08-08, operator's pick from an 8-config
@@ -100,6 +110,7 @@ export const MACD_CURL_15M: MacdCurlConfig = {
   curl_max_gap_frac: 0.65,
   min_dip_frac: 0.003,
   rearm_on_fail: true,
+  trend_ema: 21,
 };
 
 export interface MacdCurlEvent {
@@ -120,6 +131,10 @@ export interface MacdCurlEvent {
                              // post-pullback reset — a grading cut)
   rising_bars: number;       // consecutive rising line closes at this bar
   max_gap: number;           // the episode's widest gap (context for meta)
+  // Price vs the trend EMA (cfg.trend_ema) at this bar's close —
+  // INFORMATIONAL; null until that EMA is seeded. ⚠️ Measured 2026-08-09:
+  // above-trend setups graded WORSE, not safer — grading meta, not a gate.
+  above_trend: boolean | null;
 }
 
 interface SymState {
@@ -133,6 +148,11 @@ interface SymState {
   setupLine: number | null;  // line value at the announced setup
   setupDone: boolean;        // one setup per episode (unless re-armed)
   lastCloseTs: number;
+  // Trend EMA (cfg.trend_ema, SMA-seeded) — the informational price-position
+  // marker. Null until seeded.
+  emaT: number | null;
+  seedSumT: number;
+  seedCntT: number;
 }
 
 function sma(xs: number[], n: number): number {
@@ -198,6 +218,7 @@ export class MacdCurlTracker {
   snapshot(ticker: string, livePrice?: number, nowSec = Math.floor(Date.now() / 1000)): {
     line: number; signal_val: number; gap: number; above: boolean;
     rising_bars: number; below_zero: boolean; setup_active: boolean;
+    above_trend: boolean | null;
     provisional: boolean; synth_buckets: number;
     last_close: number; last_close_ts: number;
   } | null {
@@ -209,6 +230,8 @@ export class MacdCurlTracker {
     let above = st.above;
     let provisional = false;
     let synth = 0;
+    let emaT = st.emaT;
+    let refPx = st.closes.length > 0 ? st.closes[st.closes.length - 1] : 0;
     if (
       livePrice != null && livePrice > 0 &&
       st.closes.length >= this.cfg.slow && st.lines.length >= this.cfg.signal
@@ -227,12 +250,15 @@ export class MacdCurlTracker {
       const closes = st.closes.slice();
       const lines = st.lines.slice();
       let pLine = st.prevLine;
+      const kT = 2 / (this.cfg.trend_ema + 1);
       for (let j = 0; j < k; j++) {
         closes.push(livePrice);
         if (closes.length > this.cfg.slow) closes.shift();
         pLine = sma(closes, this.cfg.fast) - sma(closes, this.cfg.slow);
         lines.push(pLine);
         if (lines.length > this.cfg.signal) lines.shift();
+        // Trend EMA folds forward with the same carries.
+        if (emaT != null) emaT = livePrice * kT + emaT * (1 - kT);
       }
       const pSig = sma(lines, this.cfg.signal);
       // A turn is only claimable off REAL tape: with a fresh ring (k=1) the
@@ -244,6 +270,7 @@ export class MacdCurlTracker {
       sig = pSig;
       provisional = true;
       synth = k - 1;
+      refPx = livePrice;
     }
     return {
       line,
@@ -253,6 +280,7 @@ export class MacdCurlTracker {
       rising_bars: rising,
       below_zero: line < 0,
       setup_active: st.setupDone && !above,
+      above_trend: emaT != null && refPx > 0 ? refPx > emaT : null,
       provisional,
       synth_buckets: synth,
       last_close: st.closes.length > 0 ? st.closes[st.closes.length - 1] : 0,
@@ -277,6 +305,7 @@ export class MacdCurlTracker {
         closes: [], lines: [], prevLine: null, prevSig: null,
         rising: 0, above: false, maxGap: 0, setupLine: null,
         setupDone: false, lastCloseTs: 0,
+        emaT: null, seedSumT: 0, seedCntT: 0,
       };
       this.state.set(ticker, st);
     }
@@ -289,6 +318,19 @@ export class MacdCurlTracker {
     const st = this.ensure(ticker);
     if (closeTs <= st.lastCloseTs) return null; // stale/duplicate replay bar
     st.lastCloseTs = closeTs;
+
+    // Trend EMA updates on EVERY closed bar (its warmup runs independently
+    // of the MACD's — events stamp null until it seeds).
+    if (this.cfg.trend_ema > 0) {
+      if (st.emaT == null) {
+        st.seedSumT += close;
+        st.seedCntT++;
+        if (st.seedCntT === this.cfg.trend_ema) st.emaT = st.seedSumT / this.cfg.trend_ema;
+      } else {
+        const kT = 2 / (this.cfg.trend_ema + 1);
+        st.emaT = close * kT + st.emaT * (1 - kT);
+      }
+    }
 
     st.closes.push(close);
     if (st.closes.length > this.cfg.slow) st.closes.shift();
@@ -320,6 +362,7 @@ export class MacdCurlTracker {
       below_zero: line < 0,
       rising_bars: st.rising,
       max_gap: st.maxGap,
+      above_trend: st.emaT != null ? close > st.emaT : null,
     });
 
     if (firstValid) {

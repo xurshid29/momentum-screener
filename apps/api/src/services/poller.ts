@@ -469,6 +469,11 @@ export interface MacdMomoItem {
   // badge exactly when the leg works); other states read the live line.
   // Sorting ranks below-zero rows first within their state.
   below_zero: boolean | null;
+  // Price vs the 21EMA on this grid's bars, live — INFORMATIONAL only.
+  // Deliberately NOT labeled "confirmed/safe": the 2026-08-09 pre-study
+  // graded above-trend setups WORSE on every grid (the deep resets that
+  // pay sit under the EMA). Null until the EMA seeds (21 bars).
+  above_trend: boolean | null;
   rising_bars: number | null;    // consecutive rising line closes
   // Minutes since the last REAL bar on our feed. Small = the state rides
   // real tape; large = the tape is thin here and the state is projected
@@ -1152,6 +1157,10 @@ class PollerService {
       gap_pct: e.price > 0 ? +((e.gap / e.price) * 100).toFixed(2) : null,
       max_gap_pct: e.price > 0 ? +((e.max_gap / e.price) * 100).toFixed(2) : null,
       below_zero: e.below_zero,
+      // Price vs the 21EMA at the event bar — INFORMATIONAL grading meta.
+      // ⚠️ The 5-session pre-study graded above-trend setups WORSE (lower
+      // capture, more drawdown); this stamp is the live referendum on that.
+      above_ema21: e.above_trend,
       rising: e.rising_bars,
       chg: snap?.chg_pct ?? null,
       via: q.via,
@@ -2795,6 +2804,7 @@ class PollerService {
           price,
           gap_pct: snap && price > 0 ? +((snap.gap / price) * 100).toFixed(2) : null,
           below_zero: belowZero,
+          above_trend: snap?.above_trend ?? null,
           rising_bars: snap?.rising_bars ?? null,
           // Minutes since the last REAL bar on our feed — always reported
           // (the UI chips it at ≥10). Even with the live-price fold, a big
@@ -3375,6 +3385,7 @@ class PollerService {
     | ((ticker: string, livePrice?: number, variant?: '5m' | '2m' | '15m') => {
         line: number; signal_val: number; gap: number; above: boolean;
         rising_bars: number; below_zero: boolean; setup_active: boolean;
+        above_trend: boolean | null;
         provisional: boolean; synth_buckets: number;
         last_close: number; last_close_ts: number;
         chg_pct: number | null;

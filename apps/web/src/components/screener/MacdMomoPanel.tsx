@@ -118,6 +118,16 @@ function MomoRow({ item, selected, onSelect, onOpenCatalyst, session }: {
             </span>
           </Tooltip>
         )}
+        {item.above_trend != null && (
+          <Tooltip mouseEnterDelay={TIP_DELAY} title={item.above_trend
+            ? 'Price above the 21EMA on this grid. Informational — measured on 5 sessions, setups taken above the trend EMA graded WORSE (lower capture, more drawdown): the deep resets that pay sit under it. Live grading will confirm or refute.'
+            : 'Price below the 21EMA on this grid — the deep-reset zone. Informational; in the 5-session pre-study these setups graded BETTER than above-trend ones.'}
+          >
+            <span style={{ marginLeft: 5, fontSize: 9, cursor: 'help', color: item.above_trend ? '#7a8a7a' : '#5a6b7a' }}>
+              21{item.above_trend ? '↑' : '↓'}
+            </span>
+          </Tooltip>
+        )}
         {item.bar_age_min != null && item.bar_age_min >= 10 && (
           <Tooltip mouseEnterDelay={TIP_DELAY} title={`Thin tape on our feed: the last real print closed ${item.bar_age_min}m ago — the state is projected from the live price across the quiet stretch. Verify on the chart.`}>
             <span style={{ marginLeft: 5, fontSize: 9, color: '#595959', cursor: 'help' }}>⏱{item.bar_age_min}m</span>

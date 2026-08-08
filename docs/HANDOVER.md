@@ -296,6 +296,23 @@ winner — it's the classic MTF division of labor (2m = entry timing, 5m =
 primary, 15m = context), which is what the three-lane tab already is.
 Also measured: **5m 3/10/8 vs 3/15/8 = a wash** (identical within noise)
 — the 5m lane keeps 3/10/8. Below-zero share stable 75-83% everywhere.
+**Round 8 (2026-08-09): the 21EMA "confirmed/safe" proposal TESTED
+INVERTED — shipped as a neutral marker instead (operator's choice via
+AskUserQuestion).** Operator proposed "price above 21EMA at the turn =
+confirmed/safe entry". Pre-study (grid-compare harness gained --trendema
+N + the 2×2 vs below_zero; 26 leaders × 5 sessions): above-trend setups
+graded WORSE on EVERY grid — lower capture AND more drawdown (2m: up30m
++0.9% vs +1.8%, dn −2.1% vs −1.3%; 15m: −10%@2h 18% vs 7%) — because
+below-EMA setups are ~97% deep below-zero resets (the class that pays)
+while above-EMA ones are the late re-extended curls; even the
+"reclaimed-trend deep reset" 2×2 cell underperformed. Classic
+trend-filter wisdom inverts on violent mean-reverters — same family as
+12/26/9 grading worst. **Shipped:** `trend_ema: 21` on all three configs
+(EMA computed per grid, SMA-seeded, folds through the provisional
+carries), events + tier_events meta stamp `above_ema21` (the live
+referendum), rows carry `above_trend`, UI shows a QUIET 21↑/21↓ chip
+whose tooltip states the measured result — deliberately NO
+"confirmed/safe" semantics, no sort/state change. Suite → S10.
 
 XHYFM. **The basis-break guard wiped a +650% runner mid-run — guard now
 tick-silence-gated (2026-08-03).** HYFM: dead tape at $0.55 for weeks, Monday
