@@ -281,6 +281,21 @@ variant rides the 15m RECLAIM layer's bar stream (makeHtfLayer gained
 `alsoOnBar`) and the same split-adjusted bars_15m boot replay — no new
 table, no new aggregation, warm from boot. Lanes now ascending 2M·5M·15M.
 tier_events meta.variant='15m'.
+**Round 7 (research only, same day): the grid trade-off measured** —
+operator asked "2m vs 5m vs 15m, all 3/15/8: easier / better / safer?".
+New durable harness `scripts/research/macd-grid-compare.ts` (signals from
+each grid's own bars, outcomes on the SHARED finest series at WALL-CLOCK
+horizons — without both corrections the coarse grid fake-wins "safety").
+Yahoo-consolidated, 26 leaders × 5 sessions (DB Friday cross-check
+agrees): **frequency scales ~4× down the grid** (2m 7.4 → 5m 3.7 → 15m
+1.7 setups/name-day), **capture is best on the finest grid** (up2h +3.4%
+/ ≥20@2h 9% on 2m vs +2.6% / 4% on 15m — earlier entries), **per-setup
+safety is best on the coarsest** (≤−5%@1h: 15m 16% vs 5m 24% vs 2m 27%),
+and 15m curls resolve to a cross far less (68% vs ~87%). No single
+winner — it's the classic MTF division of labor (2m = entry timing, 5m =
+primary, 15m = context), which is what the three-lane tab already is.
+Also measured: **5m 3/10/8 vs 3/15/8 = a wash** (identical within noise)
+— the 5m lane keeps 3/10/8. Below-zero share stable 75-83% everywhere.
 
 XHYFM. **The basis-break guard wiped a +650% runner mid-run — guard now
 tick-silence-gated (2026-08-03).** HYFM: dead tape at $0.55 for weeks, Monday
