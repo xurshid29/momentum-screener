@@ -313,6 +313,18 @@ carries), events + tier_events meta stamp `above_ema21` (the live
 referendum), rows carry `above_trend`, UI shows a QUIET 21↑/21↓ chip
 whose tooltip states the measured result — deliberately NO
 "confirmed/safe" semantics, no sort/state change. Suite → S10.
+**Round 8b (operator pushback, chart evidence — the NAMI 19:20 exhibit):**
+MACD crosses under a DECLINING 21EMA on a bleeding chart are dead-cat
+bounces; operator reaffirmed "safer with confirmation anyway". Tested the
+slope hypothesis (fade vs repaired-base split of the below-EMA bucket,
+±0.15%/5-bars) — **REFUTED: 94% of below-EMA setups fire while the EMA is
+still falling and that cell carries the good aggregate stats**; after a
+violent pullback the 21EMA keeps catching down through the real base, so
+a lagging-line rule cannot separate INLF-class resets from NAMI-class
+drifts. Resolution: the operator's discipline preference stands — chip
+promoted to a green **✓21 badge** (above-EMA) vs muted 21↓, tooltips
+carry BOTH sides honestly; still display-only, no gate/sort change;
+`above_ema21` meta keeps grading the live referendum.
 
 XHYFM. **The basis-break guard wiped a +650% runner mid-run — guard now
 tick-silence-gated (2026-08-03).** HYFM: dead tape at $0.55 for weeks, Monday

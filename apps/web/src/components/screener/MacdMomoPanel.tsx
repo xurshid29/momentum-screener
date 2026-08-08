@@ -118,14 +118,22 @@ function MomoRow({ item, selected, onSelect, onOpenCatalyst, session }: {
             </span>
           </Tooltip>
         )}
-        {item.above_trend != null && (
-          <Tooltip mouseEnterDelay={TIP_DELAY} title={item.above_trend
-            ? 'Price above the 21EMA on this grid. Informational — measured on 5 sessions, setups taken above the trend EMA graded WORSE (lower capture, more drawdown): the deep resets that pay sit under it. Live grading will confirm or refute.'
-            : 'Price below the 21EMA on this grid — the deep-reset zone. Informational; in the 5-session pre-study these setups graded BETTER than above-trend ones.'}
-          >
-            <span style={{ marginLeft: 5, fontSize: 9, cursor: 'help', color: item.above_trend ? '#7a8a7a' : '#5a6b7a' }}>
-              21{item.above_trend ? '↑' : '↓'}
+        {item.above_trend === true && (
+          <Tooltip mouseEnterDelay={TIP_DELAY} title="✓ Price above the 21EMA on this grid — the operator's confirmation condition (trend has repaired; entries here avoid the counter-trend fade-bounce class, e.g. MACD crosses under a declining EMA on a bleeding chart). Note the 5-session backtest graded above-EMA entries lower on capture — live grading via tier_events is the referee.">
+            <span
+              style={{
+                marginLeft: 5, fontSize: 9, fontWeight: 700, cursor: 'help',
+                padding: '0 4px', borderRadius: 3,
+                background: '#162312', color: '#95de64', border: '1px solid #3f6600',
+              }}
+            >
+              ✓21
             </span>
+          </Tooltip>
+        )}
+        {item.above_trend === false && (
+          <Tooltip mouseEnterDelay={TIP_DELAY} title="Price below the 21EMA — counter-trend zone. Holds BOTH the deep-reset bases that graded best in the backtest AND the dead-cat fade bounces (the NAMI 19:20 class); the EMA can't tell them apart while it's still catching down. Judge day-freshness and the chart before entering unconfirmed.">
+            <span style={{ marginLeft: 5, fontSize: 9, cursor: 'help', color: '#5a6b7a' }}>21↓</span>
           </Tooltip>
         )}
         {item.bar_age_min != null && item.bar_age_min >= 10 && (

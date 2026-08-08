@@ -89,13 +89,21 @@ for (const g of gridBars) {
     ...MACD_CURL, variant: g.label, interval_sec: g.interval,
     fast: FAST, slow: SLOW, signal: SIG,
   };
-  const setups: { t: string; ts: number; price: number; bz: boolean; above21: boolean | null }[] = [];
+  const setups: {
+    t: string; ts: number; price: number; bz: boolean; above21: boolean | null;
+    // Trend-EMA slope over the last 5 bars as % of price — the fade-vs-base
+    // discriminator (2026-08-09, the NAMI 19:20 exhibit: a MACD cross under
+    // a steeply FALLING EMA is a dead-cat bounce in an active fade; a curl
+    // under a FLAT EMA is the repaired deep-reset base).
+    slope: number | null;
+  }[] = [];
   let crosses = 0, crossAfterSetup = 0, lastSetupByTicker = new Map<string, number>();
   const daysByName = new Map<string, Set<string>>();
   for (const [t, bars] of g.bars) {
     const tracker = new MacdCurlTracker(cfg);
     // Trend EMA on this grid's closes — SMA-seeded like the house EMAs.
     let ema: number | null = null, seedSum = 0, nBars = 0;
+    const emaRing: number[] = [];
     for (const b of bars) {
       const day = new Date((b.ts - 4 * 3600) * 1000).toISOString().slice(0, 10);
       let ds = daysByName.get(t);
@@ -110,6 +118,10 @@ for (const g of gridBars) {
           const k = 2 / (TREND + 1);
           ema = b.close * k + ema * (1 - k);
         }
+        if (ema != null) {
+          emaRing.push(ema);
+          if (emaRing.length > 6) emaRing.shift();
+        }
       }
       const ev: MacdCurlEvent | null = tracker.addClosedBar(t, b.ts, b.close);
       if (!ev) continue;
@@ -117,6 +129,9 @@ for (const g of gridBars) {
         setups.push({
           t, ts: ev.ts_sec, price: ev.price, bz: ev.below_zero,
           above21: TREND > 0 && ema != null ? ev.price > ema : null,
+          slope: TREND > 0 && emaRing.length === 6 && ev.price > 0
+            ? ((emaRing[5] - emaRing[0]) / ev.price) * 100
+            : null,
         });
         lastSetupByTicker.set(t, ev.ts_sec);
       } else if (ev.type === 'cross') {
@@ -157,6 +172,11 @@ for (const g of gridBars) {
     // golden cell, or does the EMA filter just select late entries?
     emit(`  ✓ema·<0`, setups.filter((s) => s.above21 === true && s.bz), null);
     emit(`  ✓ema·≥0`, setups.filter((s) => s.above21 === true && !s.bz), null);
+    // Slope split of the BELOW-EMA bucket (the NAMI exhibit): a curl under
+    // a steeply falling EMA is an active-fade bounce; under a flat/rising
+    // EMA it's the repaired base. Threshold ±0.15%/5 bars of price.
+    emit(`  ✗·fading`, setups.filter((s) => s.above21 === false && s.slope != null && s.slope < -0.15), null);
+    emit(`  ✗·base`, setups.filter((s) => s.above21 === false && s.slope != null && s.slope >= -0.15), null);
   }
 }
 console.log(['grid', 'setups', 'rate', '<0', 'resolve', 'up30m', 'dn30m', '≥10@1h', '≤-5@1h', 'up2h', '≥20@2h', '≤-10@2h'].map((h, i) =>
