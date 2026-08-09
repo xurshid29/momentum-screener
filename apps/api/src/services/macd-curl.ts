@@ -113,6 +113,39 @@ export const MACD_CURL_15M: MacdCurlConfig = {
   trend_ema: 21,
 };
 
+// The 1h and 4h variants (2026-08-09, operator's ask): the swing end of the
+// MOMO ladder — same 3/15/8 + 21EMA on the coarse grids, riding the 1h/4h
+// reclaim layers' bar streams and their Databento-backfilled stores
+// (bars_1h 35d / bars_4h 130d) — warm from boot, no new tables. The 4h
+// bars arrive already anchored to the ET session grid by the EMA layer's
+// bucketing; this tracker just consumes close times. Grading note: 30m-2h
+// outcome horizons are sub-bar here — judge these lanes on the daily
+// forward grading, not the intraday cuts.
+export const MACD_CURL_1H: MacdCurlConfig = {
+  variant: '1h',
+  fast: 3,
+  slow: 15,
+  signal: 8,
+  interval_sec: 3600,
+  curl_rising_bars: 2,
+  curl_max_gap_frac: 0.65,
+  min_dip_frac: 0.003,
+  rearm_on_fail: true,
+  trend_ema: 21,
+};
+export const MACD_CURL_4H: MacdCurlConfig = {
+  variant: '4h',
+  fast: 3,
+  slow: 15,
+  signal: 8,
+  interval_sec: 14_400,
+  curl_rising_bars: 2,
+  curl_max_gap_frac: 0.65,
+  min_dip_frac: 0.003,
+  rearm_on_fail: true,
+  trend_ema: 21,
+};
+
 export interface MacdCurlEvent {
   // setup = the curl (the operator's entry moment): line rising toward the
   //         signal from below, most of the gap closed.

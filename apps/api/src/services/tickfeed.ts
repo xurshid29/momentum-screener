@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { TickDetector, type TickBar } from './tick-detect.js';
 import { EmaCrossTracker, EMA_CROSS, EMA_CROSS_15M, EMA_CROSS_1H, EMA_CROSS_4H, EMA_CROSS_1D, adjustSplitHistory, type SeedHistoryBar } from './ema-cross.js';
-import { MacdCurlTracker, MACD_CURL_2M, MACD_CURL_15M } from './macd-curl.js';
+import { MacdCurlTracker, MACD_CURL_2M, MACD_CURL_15M, MACD_CURL_1H, MACD_CURL_4H } from './macd-curl.js';
 import { universe } from './universe.js';
 import { poller } from './poller.js';
 import { getDb } from '../db/index.js';
@@ -459,6 +459,11 @@ class TickFeedService {
   // layer's 15m bar stream (see the htfLayers construction) and bars_15m
   // seed replay; no aggregation or table of its own.
   private macdCurl15m = new MacdCurlTracker(MACD_CURL_15M);
+  // ⤴ swing-end variants (2026-08-09): 3/15/8 on the 1h and 4h grids, fed
+  // by those reclaim layers' bar streams + seed replays. 4h buckets arrive
+  // pre-anchored to the ET session grid by the EMA layer's bucketing.
+  private macdCurl1h = new MacdCurlTracker(MACD_CURL_1H);
+  private macdCurl4h = new MacdCurlTracker(MACD_CURL_4H);
   // 📈 higher-timeframe layers (1h 2026-07-21, 4h 2026-07-17): the
   // operator's swing-timing tools. Dashboard-only; nomination is the
   // product. 1h buckets are hour-aligned everywhere (offset 0); 4h anchors
@@ -473,8 +478,20 @@ class TickFeedService {
         if (mev) poller.onMacdCurlEvent(mev);
       },
     }),
-    makeHtfLayer(EMA_CROSS_1H, 'bars_1h', { spanDays: 30, retentionDays: 35, deepDays: 25, offset: () => 0, schema: 'ohlcv-1h', yahooInterval: '1h', yahooRange: '60d' }),
-    makeHtfLayer(EMA_CROSS_4H, 'bars_4h', { spanDays: 120, retentionDays: 130, deepDays: 100, offset: etBucketOffsetSec, schema: 'ohlcv-1h', yahooInterval: '1h', yahooRange: '60d' }),
+    makeHtfLayer(EMA_CROSS_1H, 'bars_1h', {
+      spanDays: 30, retentionDays: 35, deepDays: 25, offset: () => 0, schema: 'ohlcv-1h', yahooInterval: '1h', yahooRange: '60d',
+      alsoOnBar: (t, ts, c) => {
+        const mev = this.macdCurl1h.addClosedBar(t, ts, c);
+        if (mev) poller.onMacdCurlEvent(mev);
+      },
+    }),
+    makeHtfLayer(EMA_CROSS_4H, 'bars_4h', {
+      spanDays: 120, retentionDays: 130, deepDays: 100, offset: etBucketOffsetSec, schema: 'ohlcv-1h', yahooInterval: '1h', yahooRange: '60d',
+      alsoOnBar: (t, ts, c) => {
+        const mev = this.macdCurl4h.addClosedBar(t, ts, c);
+        if (mev) poller.onMacdCurlEvent(mev);
+      },
+    }),
     // 1d (2026-07-26): the swing layer. 240d of ohlcv-1h re-bucketed to the
     // 04:00-ET day grid; deepDays (not minBars=200 ≈ 10 months) is the
     // realistic convergence skip; Yahoo daily as fallback.
@@ -532,6 +549,8 @@ class TickFeedService {
       macd_curl_tracked: this.macdCurl.symbolsTracked(),
       macd_curl_2m_tracked: this.macdCurl2m.symbolsTracked(),
       macd_curl_15m_tracked: this.macdCurl15m.symbolsTracked(),
+      macd_curl_1h_tracked: this.macdCurl1h.symbolsTracked(),
+      macd_curl_4h_tracked: this.macdCurl4h.symbolsTracked(),
       ...Object.fromEntries(this.htfLayers.map((l) => [`ema_cross_${l.cfg.tf}_tracked`, l.tracker.symbolsTracked()])),
       ema_bars_persisted: this.barsPersisted,
       ema_backfilled: this.backfilledOk,
@@ -610,6 +629,8 @@ class TickFeedService {
     for (const l of this.htfLayers) l.tracker.setEtOffset(etOff);
     this.macdCurl2m.setEtOffset(etOff);
     this.macdCurl15m.setEtOffset(etOff);
+    this.macdCurl1h.setEtOffset(etOff);
+    this.macdCurl4h.setEtOffset(etOff);
     // The MACD curl tracker warms from the same split-adjusted 5m replay
     // (17-bar warmup — trivial next to the EMA65's).
     await this.seedTrackerFromTable('bars_5m', 5 * 86_400_000, this.emaCross, '5m',
@@ -632,11 +653,10 @@ class TickFeedService {
       console.error('[macd-momo] 2m bar seed failed (continuing unseeded):', err instanceof Error ? err.message : err);
     }
     for (const l of this.htfLayers) {
+      // The 15m/1h/4h MACD variants warm from the same split-adjusted replay.
+      const mt = this.macdForTf(l.cfg.tf);
       await this.seedTrackerFromTable(l.table, l.retentionDays * 86_400_000, l.tracker, l.cfg.tf,
-        // The 15m MACD variant warms from the same split-adjusted replay.
-        l.cfg.tf === '15m'
-          ? (ticker, closeTs, close) => this.macdCurl15m.addClosedBar(ticker, closeTs, close, true)
-          : undefined);
+        mt ? (ticker, closeTs, close) => mt.addClosedBar(ticker, closeTs, close, true) : undefined);
     }
   }
 
@@ -668,7 +688,13 @@ class TickFeedService {
   // 17-bar warmup (fresh symbol on a fresh boot with no banked bars).
   // `livePrice` (screen-row price, consolidated tape) renders the forming
   // bar provisionally — see MacdCurlTracker.snapshot.
-  macdSnapshot(ticker: string, livePrice?: number, variant: '5m' | '2m' | '15m' = '5m'):
+  // Variant → tracker map for the HTF-fed lanes (15m/1h/4h ride the
+  // reclaim layers' streams; 5m/2m have their own aggregation).
+  private macdForTf(tf: string): MacdCurlTracker | null {
+    return tf === '15m' ? this.macdCurl15m : tf === '1h' ? this.macdCurl1h : tf === '4h' ? this.macdCurl4h : null;
+  }
+
+  macdSnapshot(ticker: string, livePrice?: number, variant: '5m' | '2m' | '15m' | '1h' | '4h' = '5m'):
     (NonNullable<ReturnType<MacdCurlTracker['snapshot']>> & { chg_pct: number | null }) | null {
     // Off-screen sticky names have no screen-row price; the 5m EMA tracker's
     // OPEN bucket still carries the newest MINI print, which beats freezing
@@ -678,7 +704,7 @@ class TickFeedService {
       const e5 = this.emaCross.snapshot(ticker);
       if (e5?.open_bucket_close != null && e5.open_bucket_close > 0) px = e5.open_bucket_close;
     }
-    const tracker = variant === '2m' ? this.macdCurl2m : variant === '15m' ? this.macdCurl15m : this.macdCurl;
+    const tracker = variant === '2m' ? this.macdCurl2m : this.macdForTf(variant) ?? this.macdCurl;
     const s = tracker.snapshot(ticker, px);
     if (!s) return null;
     const prior = universe.getPriorCloses().get(ticker);
@@ -1172,6 +1198,8 @@ class TickFeedService {
       this.macdCurl.resetDaily();
       this.macdCurl2m.resetDaily();
       this.macdCurl15m.resetDaily();
+      this.macdCurl1h.resetDaily();
+      this.macdCurl4h.resetDaily();
       void getDb()
         .deleteFrom('bars_2m')
         .where('bar_ts', '<', new Date(Date.now() - 3 * 86_400_000))
@@ -1218,6 +1246,8 @@ class TickFeedService {
     this.macdCurl.setEtOffset(etOff);
     this.macdCurl2m.setEtOffset(etOff);
     this.macdCurl15m.setEtOffset(etOff);
+    this.macdCurl1h.setEtOffset(etOff);
+    this.macdCurl4h.setEtOffset(etOff);
     for (const l of this.htfLayers) {
       l.tracker.setSessionOpen(sessionOpen);
       l.tracker.setEtOffset(etOff);

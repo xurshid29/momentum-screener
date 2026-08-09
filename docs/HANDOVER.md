@@ -325,6 +325,18 @@ drifts. Resolution: the operator's discipline preference stands — chip
 promoted to a green **✓21 badge** (above-EMA) vs muted 21↓, tooltips
 carry BOTH sides honestly; still display-only, no gate/sort change;
 `above_ema21` meta keeps grading the live referendum.
+**Round 9 (2026-08-09): 1h + 4h lanes** — same 3/15/8 + 21EMA on the
+swing grids, riding the 1h/4h reclaim layers' bar streams via alsoOnBar
++ their Databento-backfilled stores (bars_1h 35d / bars_4h 130d; warm
+from boot, no new tables; 4h bars arrive pre-anchored to the ET session
+grid). MOMO tab = FIVE ascending lanes (2M·5M·15M·1H·4H), mirroring the
+EMA tab. The ⏱ thin-tape chip threshold now scales per grid (~2 buckets:
+2m 6min … 4h 480min). ⚠️ Grading: 30m-2h horizons are sub-bar on these
+lanes — judge 1h/4h setups on daily forward grading only. Also on the
+record: a background commit task silently failed on a drifted working
+directory (git add ran inside apps/api) and was reported shipped before
+verification caught it — commits from background tasks now use absolute
+repo paths; verify-by-bundle-marker caught it same turn.
 
 XHYFM. **The basis-break guard wiped a +650% runner mid-run — guard now
 tick-silence-gated (2026-08-03).** HYFM: dead tape at $0.55 for weeks, Monday

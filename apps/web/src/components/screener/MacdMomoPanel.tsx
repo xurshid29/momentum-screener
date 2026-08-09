@@ -136,7 +136,7 @@ function MomoRow({ item, selected, onSelect, onOpenCatalyst, session }: {
             <span style={{ marginLeft: 5, fontSize: 9, cursor: 'help', color: '#5a6b7a' }}>21↓</span>
           </Tooltip>
         )}
-        {item.bar_age_min != null && item.bar_age_min >= 10 && (
+        {item.bar_age_min != null && item.bar_age_min >= AGE_CHIP_MIN[item.variant] && (
           <Tooltip mouseEnterDelay={TIP_DELAY} title={`Thin tape on our feed: the last real print closed ${item.bar_age_min}m ago — the state is projected from the live price across the quiet stretch. Verify on the chart.`}>
             <span style={{ marginLeft: 5, fontSize: 9, color: '#595959', cursor: 'help' }}>⏱{item.bar_age_min}m</span>
           </Tooltip>
@@ -191,11 +191,18 @@ function MomoRow({ item, selected, onSelect, onOpenCatalyst, session }: {
 // TV setups side by side, same universe, independently sorted — like the
 // EMA tab's timeframe lanes.
 // Ascending by interval, like the EMA tab's timeframe lanes.
-const MOMO_LANES = ['2m', '5m', '15m'] as const;
+const MOMO_LANES = ['2m', '5m', '15m', '1h', '4h'] as const;
 const LANE_LABEL: Record<(typeof MOMO_LANES)[number], string> = {
   '2m': '2M · 3/15/8',
   '5m': '5M · 3/10/8',
   '15m': '15M · 3/15/8',
+  '1h': '1H · 3/15/8',
+  '4h': '4H · 3/15/8',
+};
+// Thin-tape ⏱ threshold per grid — a 4h bar being hours old is normal
+// bucketing, not staleness; chip only when the age is ~2 buckets.
+const AGE_CHIP_MIN: Record<(typeof MOMO_LANES)[number], number> = {
+  '2m': 6, '5m': 10, '15m': 30, '1h': 120, '4h': 480,
 };
 
 export function MacdMomoPanel({ items, onOpenCatalyst, session }: {
