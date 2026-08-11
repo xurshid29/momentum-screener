@@ -325,6 +325,18 @@ drifts. Resolution: the operator's discipline preference stands — chip
 promoted to a green **✓21 badge** (above-EMA) vs muted 21↓, tooltips
 carry BOTH sides honestly; still display-only, no gate/sort change;
 `above_ema21` meta keeps grading the live referendum.
+**Round 10 (2026-08-11, Monday premarket — operator report): the tab
+opened with ~15 deep-red Friday leftovers.** Root cause: between 00:00
+and 04:00 ET the screens still carry the FINISHED day's board with its
+locked chg%, so the overnight cycles ranked Friday's leaders as
+"today's" top-10 and pre-seeded Monday's sticky set (weekends
+compounded it). Fixes: (1) qualification only runs while `session !==
+'closed'` (the 04:00-ET-day philosophy — overnight + weekends qualify
+nobody); (2) display hides rows RED on the full-day anchor — sticky set
+untouched, a name reappears the moment it turns green, so deep pullbacks
+that HOLD green (the entry zone) still show while gap-downs and
+round-trippers don't. Reseed residual: contaminated names with 04:00+
+events re-qualify on a deploy but stay hidden while red.
 **Round 9 (2026-08-09): 1h + 4h lanes** — same 3/15/8 + 21EMA on the
 swing grids, riding the 1h/4h reclaim layers' bar streams via alsoOnBar
 + their Databento-backfilled stores (bars_1h 35d / bars_4h 130d; warm

@@ -2753,7 +2753,14 @@ class PollerService {
     // screener overlay makes that the AH move, so late qualifiers enter on
     // their AH change — acceptable (a +30% AH mover IS a session leader) and
     // the sticky set carries the day's earlier leaders through regardless.
-    {
+    // Qualification only while a session is LIVE (2026-08-11, the Monday
+    // premarket report): between 00:00 and 04:00 ET the screens still carry
+    // the FINISHED day's board with its locked change%, so the overnight
+    // cycles were ranking Friday's leaders as "today's top-10" and
+    // pre-seeding Monday's sticky set with them — the tab opened premarket
+    // with ~15 deep-red leftovers. Same 04:00-ET-day philosophy as the news
+    // roll; weekends are 'closed' throughout, so they stop qualifying too.
+    if (session !== 'closed') {
       const ranked = [...screenRowByTicker.values()]
         .filter((r) => (r.change_pct ?? 0) > 0)
         .sort((a, b) => (b.change_pct ?? 0) - (a.change_pct ?? 0));
@@ -2843,11 +2850,18 @@ class PollerService {
       MOMO_STATE_ORDER[a.state] - MOMO_STATE_ORDER[b.state]
       || Number(b.below_zero === true) - Number(a.below_zero === true)
       || momoTs(b) - momoTs(a));
+    // TOP GAINERS means green on the day: rows RED on the full-day anchor
+    // hide from display until they reclaim positive (2026-08-11, same
+    // Monday report — gap-downs and round-trippers were cluttering every
+    // lane). The sticky set is untouched: a deep pullback that HOLDS green
+    // still shows (that is the entry zone), and an evicted name reappears
+    // the moment it turns green again. Unknown chg stays visible.
+    const momoVisible = macdMomoList.filter((x) => !(x.chg_pct != null && x.chg_pct < 0));
     // Cap per lane — the panel splits by variant, so a global slice would
     // let one lane starve the other. Array.sort is stable, so per-variant
     // order survives the filter.
     const macdMomoDisplay = (['5m', '2m', '15m', '1h', '4h'] as const).flatMap((v) =>
-      macdMomoList.filter((x) => x.variant === v).slice(0, MACD_MOMO.max_display));
+      momoVisible.filter((x) => x.variant === v).slice(0, MACD_MOMO.max_display));
 
     // After-hours: re-impose a volume gate on the momentum list. Finviz drops
     // its relvol filter at the close, so names that ticked >5% on a few AH
