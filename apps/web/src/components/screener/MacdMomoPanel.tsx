@@ -222,9 +222,9 @@ export function MacdMomoPanel({ items, onOpenCatalyst, session }: {
           display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flex: '0 0 auto',
         }}
       >
-        <Tooltip mouseEnterDelay={TIP_DELAY} title="The session's top gainers (top-10 by day change ∪ anything ≥30%, sticky for the ET day) with their live MACD state on both of your setups. Act on ⤴ CURLING. Each lane sorts: ⤴ curling → ✚ crossed → turning → cooling; within a state, <0 (below-zero reset) first, then newest ⤴/✚ event first.">
+        <Tooltip mouseEnterDelay={TIP_DELAY} title="Every Momentum-screen name this session (∪ top-10/≥30% ignition movers), sticky for the ET day, with its live MACD state per grid. Rows red on the day hide until they reclaim green. Act on ⤴ CURLING. Each lane sorts: ⤴ curling → ✚ crossed → turning → cooling; within a state, <0 (below-zero reset) first, then newest ⤴/✚ event first.">
           <Text style={{ color: '#ffc53d', fontSize: 11, fontWeight: 600, cursor: 'help' }}>
-            ⤴ TOP GAINERS · MACD
+            ⤴ MOMENTUM · MACD
           </Text>
         </Tooltip>
         <Text type="secondary" style={{ fontSize: 10 }}>
@@ -263,7 +263,7 @@ export function MacdMomoPanel({ items, onOpenCatalyst, session }: {
                     <Text type="secondary" style={{ fontSize: 10, color: '#3f3a30' }}>
                       {lane === '2m'
                         ? 'warming — the 3/15/8 needs ~46 min of banked 2m tape per name'
-                        : 'no top gainers qualified yet'}
+                        : 'no momentum names adopted yet this session'}
                     </Text>
                   </div>
                 ) : (

@@ -488,15 +488,17 @@ export interface MacdMomoItem {
 }
 
 const MACD_MOMO = {
-  // Universe: union of the day's top-N by change and anything ≥ min_chg —
-  // STICKY for the ET day (once a leader, watched all session; the operator
-  // returns to these names for later legs even after they cool off the
-  // screens). The rank path carries its own change floor so a dead tape's
-  // "top 10" (+3% leaders) doesn't qualify noise.
+  // Universe (widened 2026-08-12, the RMCF case): EVERY Momentum-screen name
+  // this session — membership already carries the screen's change + relvol
+  // gates — plus, for IGNITION-only movers the momentum price floor
+  // excludes, the day's top-N by change (with its own floor) and anything
+  // ≥ min_chg. All STICKY for the ET day (once adopted, watched all
+  // session; the operator returns to these names for later legs even after
+  // they cool off the screens).
   top_n: 10,
   top_n_min_chg_pct: 10,
   min_chg_pct: 30,
-  max_display: 30,
+  max_display: 40,
 } as const;
 
 export interface CyclePayload {
@@ -756,7 +758,7 @@ class PollerService {
   // cycle). Both cleared at midnight; events reseed from tier_events on boot
   // (a name reseeds as qualified iff it has an event — names that qualified
   // without ever curling re-qualify from the live rows within a cycle).
-  private macdMomoQualified = new Map<string, { qualified_at: string; via: 'top10' | 'chg' | 'reseed' }>();
+  private macdMomoQualified = new Map<string, { qualified_at: string; via: 'momentum' | 'top10' | 'chg' | 'reseed' }>();
   // Keyed `${variant}|${ticker}` since the 2m lane landed (2026-08-07).
   private macdMomoEvents = new Map<string, {
     setup_at: string | null; cross_at: string | null;
@@ -2753,6 +2755,21 @@ class PollerService {
     // screener overlay makes that the AH move, so late qualifiers enter on
     // their AH change — acceptable (a +30% AH mover IS a session leader) and
     // the sticky set carries the day's earlier leaders through regardless.
+    // After-hours: re-impose a volume gate on the momentum list. Finviz drops
+    // its relvol filter at the close, so names that ticked >5% on a few AH
+    // shares (BLIV on 5, GRAN on 90) otherwise flood it. Keep a row only if it
+    // shows real AH volume by our own metric, or it just appeared (cold-start,
+    // RVol not yet measurable). Regular/PM keep Finviz's live relvol gate.
+    // (Hoisted above the ⤴ MOMO qualification 2026-08-12 so the MOMO universe
+    // sees the same AH-gated list the Momentum tab shows.)
+    const momentumRows = session === 'afterhours'
+      ? enriched.filter((r) => {
+          const firstSeenMs = Date.parse(r.first_seen_at);
+          const fresh = Number.isFinite(firstSeenMs) && nowMs - firstSeenMs <= AH_MOMENTUM.cold_start_ms;
+          return fresh || Math.max(r.rel_vol_5min ?? 0, r.rel_vol_1min ?? 0) >= AH_MOMENTUM.rvol_min;
+        })
+      : enriched;
+
     // Qualification only while a session is LIVE (2026-08-11, the Monday
     // premarket report): between 00:00 and 04:00 ET the screens still carry
     // the FINISHED day's board with its locked change%, so the overnight
@@ -2761,10 +2778,24 @@ class PollerService {
     // with ~15 deep-red leftovers. Same 04:00-ET-day philosophy as the news
     // roll; weekends are 'closed' throughout, so they stop qualifying too.
     if (session !== 'closed') {
+      const nowIso = new Date(nowMsTick).toISOString();
+      // EVERY Momentum-screen name qualifies (2026-08-12, the RMCF case: it
+      // ran +40% and printed a textbook 2m curl-and-cross at its pullback,
+      // but on a busy premarket it never cracked the top-10 nor +30% at a
+      // cycle boundary — so the layer never adopted it and the cross went
+      // unrecorded). Momentum membership already IS the quality gate (the
+      // screen carries its own change + relvol filters); sticky for the ET
+      // day like everything else here.
+      for (const r of momentumRows) {
+        if (!this.macdMomoQualified.has(r.ticker)) {
+          this.macdMomoQualified.set(r.ticker, { qualified_at: nowIso, via: 'momentum' });
+        }
+      }
+      // The union ranking stays for IGNITION-only movers (sub-$1 names the
+      // momentum screen's price floor excludes): top-10 by change or ≥30%.
       const ranked = [...screenRowByTicker.values()]
         .filter((r) => (r.change_pct ?? 0) > 0)
         .sort((a, b) => (b.change_pct ?? 0) - (a.change_pct ?? 0));
-      const nowIso = new Date(nowMsTick).toISOString();
       ranked.forEach((r, i) => {
         if (this.macdMomoQualified.has(r.ticker)) return;
         const chg = r.change_pct ?? 0;
@@ -2862,19 +2893,6 @@ class PollerService {
     // order survives the filter.
     const macdMomoDisplay = (['5m', '2m', '15m', '1h', '4h'] as const).flatMap((v) =>
       momoVisible.filter((x) => x.variant === v).slice(0, MACD_MOMO.max_display));
-
-    // After-hours: re-impose a volume gate on the momentum list. Finviz drops
-    // its relvol filter at the close, so names that ticked >5% on a few AH
-    // shares (BLIV on 5, GRAN on 90) otherwise flood it. Keep a row only if it
-    // shows real AH volume by our own metric, or it just appeared (cold-start,
-    // RVol not yet measurable). Regular/PM keep Finviz's live relvol gate.
-    const momentumRows = session === 'afterhours'
-      ? enriched.filter((r) => {
-          const firstSeenMs = Date.parse(r.first_seen_at);
-          const fresh = Number.isFinite(firstSeenMs) && nowMs - firstSeenMs <= AH_MOMENTUM.cold_start_ms;
-          return fresh || Math.max(r.rel_vol_5min ?? 0, r.rel_vol_1min ?? 0) >= AH_MOMENTUM.rvol_min;
-        })
-      : enriched;
 
     const payload: CyclePayload = {
       cycle_id: cycleId,

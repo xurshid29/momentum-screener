@@ -325,6 +325,19 @@ drifts. Resolution: the operator's discipline preference stands — chip
 promoted to a green **✓21 badge** (above-EMA) vs muted 21↓, tooltips
 carry BOTH sides honestly; still display-only, no gate/sort change;
 `above_ema21` meta keeps grading the live referendum.
+**Round 11 (2026-08-12, the RMCF case): the MOMO universe is now EVERY
+Momentum-screen name this session** — RMCF ran +40%, pulled back, and
+printed a textbook 2m curl-and-cross at 16:07 loc, but on a busy
+premarket it never cracked the top-10 nor +30% at a cycle boundary, so
+the layer never adopted it and the cross went unrecorded. Momentum
+membership already carries the screen's change+relvol gates, so it IS
+the quality filter; the top-10/≥30 union ranking stays only for
+IGNITION-only movers (sub-$1 names below the momentum price floor).
+Qualification reads the AH-gated momentumRows (hoisted above the MOMO
+block so AH junk can't qualify); via gains 'momentum'; per-lane display
+cap 30→40 for the wider set. Red-row hiding + closed-session gate keep
+the lanes clean. Forward-looking only: names that left the screens
+before the deploy don't qualify retroactively.
 **Round 10 (2026-08-11, Monday premarket — operator report): the tab
 opened with ~15 deep-red Friday leftovers.** Root cause: between 00:00
 and 04:00 ET the screens still carry the FINISHED day's board with its
