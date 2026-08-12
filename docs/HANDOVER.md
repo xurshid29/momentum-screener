@@ -1,4 +1,4 @@
-# Session Handover — updated 2026-08-06
+# Session Handover — updated 2026-08-12
 
 A running handover so a fresh session can continue without re-deriving context.
 **Read `docs/web-dashboard.md` first** (the canonical status doc); this file is
@@ -7,16 +7,23 @@ the "where we are right now + what's open" layer on top of it.
 detection chain** (📰/🤫/📈/👀/🛰️ — how each layer works, knobs, grading SQL).
 Memory files under `…/memory/` also carry the durable facts.
 
-**CURRENT FOCUS (refreshed 2026-08-06): TWO instruments now. (1) The ↗
+**CURRENT FOCUS (refreshed 2026-08-12): TWO instruments. (1) The ↗
 price-reclaim layer — reclaim-ONLY on FIVE timeframes — remains the only
 Telegram-alerting component, with A+/A/B attention tiers on the ↗ EMA tab.
-(2) NEW ⤴ MACD MOMO tab (the DEFAULT view since 08-06, operator's call) —
-the operator's actual live strategy automated: second-leg entries on the
-session's top gainers via the 3/10/8 all-SMA MACD curl on 5m (they have a
-day job, miss the first move, and trade the later legs; playbook = wait for
-the pullback reset, enter when the line curls up toward the signal, tight
-stop). Display+grading only (tier='macd'), no sounds/Telegram until graded
-— see XMOMO below + docs/detection-layers.md ⤴ section.** The 10/65 crossover channel is RETIRED
+(2) The ⤴ MACD MOMO tab (DEFAULT view since 08-06; built out over rounds
+1-11, see XMOMO) — the operator's live second-leg strategy automated, now
+in its full shape: FIVE ascending lanes (2M·5M·15M·1H·4H — 5m is 3/10/8,
+the rest 3/15/8, settings sweep-picked), universe = EVERY Momentum-screen
+name this session (∪ top-10/≥30% ignition-only movers), sticky per ET day,
+red-on-day rows hidden, no qualification while the market is closed.
+States render TV-parity off the live forming bar (multi-bucket synthesis
+over MINI holes); events stay closed-bar. Badges: <0 (below-zero reset,
+ranked first — 21/24 day-1 setups were <0) and ✓21 (operator's 21EMA
+confirmation preference; the 5-session backtest graded above-EMA entries
+WORSE — tooltips carry both sides, meta.above_ema21 is the live
+referendum). Sort: state → <0 → newest event. Display+grading only
+(tier='macd' with variant/below_zero/above_ema21 meta), no sounds/Telegram
+until graded — see XMOMO below + docs/detection-layers.md ⤴ section.** The 10/65 crossover channel is RETIRED
 (2026-07-26, `cross_detect: false` everywhere; machinery kept + tested for a
 data revisit). The chain otherwise runs in full (🤫 accum → ↗ reclaim →
 👀 watch → 🛰️ confirm → screens; 📰 radar is DARK while Benzinga is parked;
@@ -79,7 +86,12 @@ segmentation: 07-22 10/65 · 07-23 gap-decay+pends · 07-24 reclaim channel ·
 (additive). Also still owed: (b) 👀 evidence-gate cost audit; (c) accum v2
 precision re-check; radar grading moot while Benzinga is parked.
 
-**Recent focus trail** (each has a dated entry below): 08-06 XMOMO (⤴ MACD
+**Recent focus trail** (each has a dated entry below): 08-12 XFEED402
+(Databento unpaid-invoice outage — 08-12 partial-blind; pay→restart→verify)
+· 08-07→08-12 XMOMO rounds 2-11 (forming-bar parity → below-zero rank →
+time sort → 2m/15m/1h/4h lanes → 21EMA tested-inverted → ✓21 badge →
+dead-zone fix → momentum universe — all inside the XMOMO entry) · 08-06
+XMOMO (⤴ MACD
 3/10/8 curl detector + top-gainers MOMO tab, now the default view —
 replay-validated on the 08-05 leaders before wiring) · 08-03 XHYFM (the
 basis-break guard wiped a +650% runner mid-run → guard now first-tick-after-
@@ -162,6 +174,24 @@ Journal; **attribution join still the open payoff**) · 06-17 tick feed go-live.
 ---
 
 ## What shipped this session (newest first, all on prod unless noted)
+
+XFEED402. **Databento feed DOWN 00:00–11:45 ET 2026-08-12 — unpaid
+invoice (billing renewal); ⚠️ 08-12 is a PARTIAL-BLIND day for ALL
+grading.** The midnight sidecar respawn hit HTTP 402
+`account_delinquent_invoice`; the sidecar looped subscribe→fail all
+premarket + 2h of regular session. ZERO tier_events all morning (reclaim
+AND macd, every lane) — alert silence was outage, not absence; the
+operator discovered it via giant ⏱ ages on the MOMO tab (states kept
+rendering from live Finviz prices — the provisional fold masks a dead
+feed) and missed real 2m crosses on BQ/SCKT. bars_5m looked deceptively
+current (Yahoo-fallback backfills persist there); bars_2m told the truth
+(nothing since Tue 19:58 ET). Recovery: operator paid; **the sidecar did
+NOT self-heal after payment — `docker compose restart api` was required**
+(free at that moment: no in-flight state existed). Ops rule for next
+time: pay → restart api → confirm bars_seen climbs. OPEN: the
+feed-watchdog Telegram alert (no bars ~10 in-session min → one push,
+own `feed` slug) — proposed, operator hasn't confirmed; would have made
+this a 04:10 ET buzz instead of an 11:30 discovery.
 
 XMOMO. **⤴ MACD momentum-curl layer + top-gainers MOMO tab — the operator's
 live strategy automated (2026-08-06).** The operator explained how they

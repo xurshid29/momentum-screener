@@ -1,4 +1,4 @@
-# The Early-Detection Layers — reference (current as of 2026-08-06)
+# The Early-Detection Layers — reference (current as of 2026-08-12)
 
 The dashboard detects runners through a chain of layers, ordered by how early
 they can speak. Each was measured before (or while) shipping, each is graded
@@ -48,7 +48,8 @@ case), and news-radar names (prior close from `daily_bars`).
 transition is inserted fire-and-forget (never blocks a cycle):
 `accum` flag/promote/expire · `tick` watch/watch_suppressed/confirm/fade/
 watch_expired · `radar` hit/moving/expired/dropped · `cross`
-nominate/confirm/expire — each with a meta jsonb (chg, rel_vol, mom, via, pts,
+nominate/confirm/expire · `macd` setup/cross (variant/below_zero/
+above_ema21 meta) — each with a meta jsonb (chg, rel_vol, mom, via, pts,
 minutes, impact, reason, source…). Grading is SQL over any date range; docker
 logs reset on every deploy, this doesn't.
 
@@ -348,14 +349,19 @@ study (pullback comes 81%, pullback-hold entry ≈2× win rate). NOT the
 twice-killed standalone MACD signal — the universe conditioning (already a
 top gainer today) is the entire point.
 
-**Universe** (`MACD_MOMO`, poller): top-10 by day change (rank floor ≥10%)
-∪ anything ≥30%, over the momentum∪ignition union rows; **sticky per ET
-day** — once a leader, watched all session even after cooling off the
-screens. AH note: late qualifiers rank on the AH-anchored row change; row
-display change is FULL-DAY (tick-feed prior close), same anchor as the EMA
-tab.
+**Universe** (`MACD_MOMO`, poller; widened 2026-08-12, the RMCF case):
+EVERY Momentum-screen name this session (the AH-gated momentumRows — the
+screen's change+relvol gates ARE the quality filter), ∪ top-10 by day
+change (rank floor ≥10%) / ≥30% over the momentum∪ignition union for
+IGNITION-only movers below the momentum price floor; **sticky per ET
+day** — once adopted, watched all session even after cooling off the
+screens. Qualification only while `session !== 'closed'` (the overnight
+dead zone was adopting the finished day's board — 2026-08-11); rows RED
+on the full-day anchor hide until they reclaim green. AH note: late
+qualifiers rank on the AH-anchored row change; row display change is
+FULL-DAY (tick-feed prior close), same anchor as the EMA tab.
 
-**Three variants (lanes ascending 2M·5M·15M)** — same universe,
+**Five variants (lanes ascending 2M·5M·15M·1H·4H; 1h/4h added 2026-08-09 riding those reclaim layers' streams via alsoOnBar — judge them on daily forward grading, intraday horizons are sub-bar)** — same universe,
 independently sorted; every event + tier_events meta carries `variant`,
 the head-to-head grading cut: **2m·3/15/8** (2026-08-07; warmup 23 bars ≈
 46 min, bars_2m — 3d retention, 2d boot replay, closes bucketed in
