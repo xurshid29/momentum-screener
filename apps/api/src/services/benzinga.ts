@@ -3,6 +3,7 @@
 // but classify articles as truly fresh ONLY if their ts > stored_max.
 
 const ENDPOINT = 'https://api.benzinga.com/api/v2/news';
+const REQUEST_TIMEOUT_MS = 15_000;
 
 export interface BenzingaArticle {
   title: string;
@@ -47,10 +48,13 @@ export async function fetchBenzingaDelta(
   const items: unknown[] = [];
   for (let page = 0; page < MAX_PAGES; page++) {
     let json: unknown;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
     try {
       const url = `${ENDPOINT}?pageSize=${PAGE_SIZE}&page=${page}&updatedSince=${since}&displayOutput=headline&token=${tk}`;
       const res = await fetch(url, {
         headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0' },
+        signal: ctrl.signal,
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       json = await res.json();
@@ -59,6 +63,8 @@ export async function fetchBenzingaDelta(
       // next cycle). A later page failing → process the pages we did get.
       if (page === 0) return null;
       break;
+    } finally {
+      clearTimeout(timer);
     }
     if (!Array.isArray(json)) break;
     items.push(...json);
