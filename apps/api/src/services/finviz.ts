@@ -5,6 +5,11 @@ import type { TradingSession } from '../db/types.js';
 
 const FINVIZ_BASE = 'https://elite.finviz.com';
 const UA = 'Mozilla/5.0';
+// A stalled Elite response must not hold the poller's `inFlight` flag forever.
+// The global rate gate serialises starts but cannot recover a fetch whose body
+// never completes. Fifteen seconds is comfortably above normal export latency
+// while still allowing the next 20s poll cycle to retry.
+const REQUEST_TIMEOUT_MS = 15_000;
 
 export interface ScreenerRow {
   ticker: string;
@@ -76,16 +81,22 @@ function rateLimitGate(): Promise<void> {
 
 async function fetchCsv(url: string): Promise<string[][]> {
   await rateLimitGate();
-  const res = await fetch(url, { headers: { 'User-Agent': UA } });
-  if (res.status === 429) {
-    // Spacing should prevent this; if it still happens it's a real signal, not
-    // silent "no rows". Typed so the screener fetch surfaces it.
-    console.warn('[finviz] HTTP 429 — rate limited (despite spacing)');
-    throw new FinvizRateLimitError();
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { headers: { 'User-Agent': UA }, signal: ctrl.signal });
+    if (res.status === 429) {
+      // Spacing should prevent this; if it still happens it's a real signal, not
+      // silent "no rows". Typed so the screener fetch surfaces it.
+      console.warn('[finviz] HTTP 429 — rate limited (despite spacing)');
+      throw new FinvizRateLimitError();
+    }
+    if (!res.ok) throw new Error(`Finviz HTTP ${res.status}`);
+    const text = await res.text();
+    return parseCsv(text);
+  } finally {
+    clearTimeout(timer);
   }
-  if (!res.ok) throw new Error(`Finviz HTTP ${res.status}`);
-  const text = await res.text();
-  return parseCsv(text);
 }
 
 // Minimal CSV parser tolerant of quoted fields with commas (Finviz quotes
