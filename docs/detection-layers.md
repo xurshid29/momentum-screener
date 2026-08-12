@@ -415,6 +415,31 @@ signal, gap_pct, max_gap_pct, below_zero, rising, chg, via
 after SETUP by below_zero × day-change band × time-of-day, vs the same
 name's non-setup bars.
 
+### 🎯 MOMO SETUPS experiment (`momo-setup.ts`; shipped 2026-08-12)
+
+Raw ⤴ MOMO remains the control. The separate 🎯 SETUPS tab asks the narrower
+question: does adding price structure and volume confirmation turn a MACD
+attention cue into a better-timed setup? It is one row per sticky qualified
+ticker and is dashboard-only.
+
+Closed-bar lifecycle: **RESETTING** begins on a 5m MACD fade; **BASING** needs
+a pullback of at least 3% plus one closed 5m bar without a new low;
+**CURLING** means the 5m setup exists but structure/stop is not acceptable;
+**READY** requires the base plus a structural stop no wider than 15%;
+**TRIGGERED** requires a closed 2m close above the prior three-bar pivot,
+volume ≥1.5× the prior-five-bar median, and ≥$2k EQUS.MINI notional. A break
+of the pullback low or eight 5m bars without a trigger becomes **FAILED**.
+The 15m/5m/2m MACD states are shown as context, not gates, so grading can
+measure whether 15m agreement helps rather than assuming it.
+
+Persistence: live 2m buckets now retain nullable OHLC in `bars_2m`; boot
+replay warms price/volume context without inventing a lifecycle. State
+transitions persist in `tier_events tier='momo_v2'` with both `bar_ts` and
+`observed_at`, entry/trigger/stop, pullback/base, volume ratios, MACD context,
+feed age, and display eligibility. Grade target-before-stop from persisted
+OHLC and compare READY/TRIGGERED against the same-day raw `tier='macd'`
+control. No sound or Telegram promotion before that comparison matures.
+
 ---
 
 ## ⚡ Screens (the established layer — pointers only)

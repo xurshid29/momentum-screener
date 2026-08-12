@@ -16,6 +16,7 @@ import { dirname, resolve } from 'node:path';
 import { TickDetector, type TickBar } from './tick-detect.js';
 import { EmaCrossTracker, EMA_CROSS, EMA_CROSS_15M, EMA_CROSS_1H, EMA_CROSS_4H, EMA_CROSS_1D, adjustSplitHistory, type SeedHistoryBar } from './ema-cross.js';
 import { MacdCurlTracker, MACD_CURL_2M, MACD_CURL_15M, MACD_CURL_1H, MACD_CURL_4H } from './macd-curl.js';
+import { MomoSetupTracker, type MomoSetupBar } from './momo-setup.js';
 import { universe } from './universe.js';
 import { poller } from './poller.js';
 import { getDb } from '../db/index.js';
@@ -437,24 +438,42 @@ class TickFeedService {
       ticker, bar_ts: new Date(closeTs * 1000), close, volume,
       open: ohl?.o ?? null, high: ohl?.h ?? null, low: ohl?.l ?? null,
     });
+    this.momoSetup.add5mBar(ticker, {
+      closeTs, open: ohl?.o ?? close, high: ohl?.h ?? close,
+      low: ohl?.l ?? close, close, volume,
+    });
     // ⤴ MACD momentum-curl layer (2026-08-06): rides the exact same closed
     // 5m bars — the callback only fires for known runners, and the poller
     // gates events to the day's top-gainer set. Closed-bar only by design
     // (the operator's TV MACD has "Wait for timeframe closes" checked).
     const mev = this.macdCurl.addClosedBar(ticker, closeTs, close);
-    if (mev) poller.onMacdCurlEvent(mev);
+    if (mev) {
+      this.momoSetup.onMacdEvent(mev);
+      poller.onMacdCurlEvent(mev);
+    }
+    this.flushMomoSetupTransitions();
   });
   // ⤴ MACD 3/10/8 (all-SMA) state per known runner — the second-leg
   // detector behind the top-gainers MOMO tab. See services/macd-curl.ts.
   private macdCurl = new MacdCurlTracker();
+  private momoSetup = new MomoSetupTracker();
+
+  private flushMomoSetupTransitions(): void {
+    for (const transition of this.momoSetup.drainTransitions()) {
+      poller.onMomoSetupTransition(transition);
+    }
+  }
   // ⤴ second variant (2026-08-07): 3/15/8 on 2-minute buckets — the
   // operator's other TV setup. Bars aggregate below from the per-second
   // stream (no tracker exists on this grid otherwise) and persist to
   // bars_2m so the 23-bar warmup survives deploys.
   private macdCurl2m = new MacdCurlTracker(MACD_CURL_2M);
   // Open 2m bucket per known runner: {bucket start, running close, vol}.
-  private bucket2m = new Map<string, { bucket: number; close: number; vol: number }>();
-  private bar2Buffer: { ticker: string; bar_ts: Date; close: number; volume: number }[] = [];
+  private bucket2m = new Map<string, { bucket: number; open: number; high: number; low: number; close: number; vol: number }>();
+  private bar2Buffer: {
+    ticker: string; bar_ts: Date; close: number; volume: number;
+    open: number | null; high: number | null; low: number | null;
+  }[] = [];
   // ⤴ third variant (2026-08-08): 3/15/8 on 15m — rides the reclaim
   // layer's 15m bar stream (see the htfLayers construction) and bars_15m
   // seed replay; no aggregation or table of its own.
@@ -577,6 +596,7 @@ class TickFeedService {
     // as a callback because tickfeed imports poller, not the reverse.
     poller.setReclaimProgressSource((ticker, tf, xp) => this.reclaimProgress(ticker, tf, xp));
     poller.setMacdSnapshotSource((ticker, livePrice, variant) => this.macdSnapshot(ticker, livePrice, variant));
+    poller.setMomoSetupSnapshotSource((ticker) => this.momoSetup.snapshot(ticker));
     console.log('[tickfeed] starting');
     // Seed the EMA-cross tracker from persisted bars BEFORE the sidecar
     // starts streaming, so live ticks can't interleave with the replay.
@@ -627,6 +647,7 @@ class TickFeedService {
     const etOff = etUtcOffsetHours();
     this.emaCross.setEtOffset(etOff);
     for (const l of this.htfLayers) l.tracker.setEtOffset(etOff);
+    this.macdCurl.setEtOffset(etOff);
     this.macdCurl2m.setEtOffset(etOff);
     this.macdCurl15m.setEtOffset(etOff);
     this.macdCurl1h.setEtOffset(etOff);
@@ -634,19 +655,28 @@ class TickFeedService {
     // The MACD curl tracker warms from the same split-adjusted 5m replay
     // (17-bar warmup — trivial next to the EMA65's).
     await this.seedTrackerFromTable('bars_5m', 5 * 86_400_000, this.emaCross, '5m',
-      (ticker, closeTs, close) => this.macdCurl.addClosedBar(ticker, closeTs, close, true));
+      (ticker, closeTs, close, volume) => {
+        this.macdCurl.addClosedBar(ticker, closeTs, close, true);
+        this.momoSetup.add5mBar(ticker, { closeTs, open: close, high: close, low: close, close, volume }, true);
+      });
     // 2m variant: replay bars_2m (2d — the 23-bar warmup needs far less; no
     // split adjustment on a horizon this short, splits land at day seams).
     try {
       const rows = await getDb()
         .selectFrom('bars_2m')
-        .select(['ticker', 'bar_ts', 'close'])
+        .select(['ticker', 'bar_ts', 'open', 'high', 'low', 'close', 'volume'])
         .where('bar_ts', '>', new Date(Date.now() - 2 * 86_400_000))
         .orderBy('ticker', 'asc')
         .orderBy('bar_ts', 'asc')
         .execute();
       for (const r of rows) {
-        this.macdCurl2m.addClosedBar(r.ticker, Math.floor(new Date(r.bar_ts).getTime() / 1000), Number(r.close), true);
+        const closeTs = Math.floor(new Date(r.bar_ts).getTime() / 1000);
+        const close = Number(r.close);
+        this.macdCurl2m.addClosedBar(r.ticker, closeTs, close, true);
+        this.momoSetup.add2mBar(r.ticker, {
+          closeTs, open: Number(r.open ?? close), high: Number(r.high ?? close),
+          low: Number(r.low ?? close), close, volume: Number(r.volume),
+        }, true);
       }
       console.log(`[macd-momo] seeded ${rows.length} closed 2m bars — 3/15/8 warmup carried over`);
     } catch (err) {
@@ -695,7 +725,7 @@ class TickFeedService {
   }
 
   macdSnapshot(ticker: string, livePrice?: number, variant: '5m' | '2m' | '15m' | '1h' | '4h' = '5m'):
-    (NonNullable<ReturnType<MacdCurlTracker['snapshot']>> & { chg_pct: number | null }) | null {
+    (NonNullable<ReturnType<MacdCurlTracker['snapshot']>> & { chg_pct: number | null; current_price: number }) | null {
     // Off-screen sticky names have no screen-row price; the 5m EMA tracker's
     // OPEN bucket still carries the newest MINI print, which beats freezing
     // on the last closed bar.
@@ -711,6 +741,7 @@ class TickFeedService {
     const cur = px != null && px > 0 ? px : s.last_close;
     return {
       ...s,
+      current_price: cur,
       chg_pct: prior && prior > 0 && cur > 0
         ? +(((cur / prior) - 1) * 100).toFixed(2)
         : null,
@@ -738,7 +769,7 @@ class TickFeedService {
     windowMs: number,
     tracker: EmaCrossTracker,
     label: string,
-    also?: (ticker: string, closeTs: number, close: number) => void,
+    also?: (ticker: string, closeTs: number, close: number, volume: number) => void,
   ): Promise<void> {
     try {
       const rows = await getDb()
@@ -755,7 +786,7 @@ class TickFeedService {
         if (!curTk || buf.length === 0) return;
         for (const b of adjustSplitHistory(buf)) {
           tracker.seedBar(curTk, b.closeTs, b.close, b.volume);
-          also?.(curTk, b.closeTs, b.close);
+          also?.(curTk, b.closeTs, b.close, b.volume);
         }
         syms++;
         buf = [];
@@ -922,8 +953,10 @@ class TickFeedService {
       const adj = adjustSplitHistory(yahoo).slice(-200);
       if (this.emaCross.canSeed(tk)) {
         for (const b of adj) this.emaCross.seedBar(tk, b.closeTs, b.close, b.volume, true);
+        this.macdCurl.reseedFromHistory(tk, adj);
         reseeded++;
       } else if (this.emaCross.reseedFromHistory(tk, adj, true)) {
+        this.macdCurl.reseedFromHistory(tk, adj);
         reseeded++;
       } else {
         inFlight++; // an observation/pending is live — never disturb it
@@ -1056,11 +1089,13 @@ class TickFeedService {
         const adj = adjustSplitHistory(bars);
         if (l.tracker.canSeed(tk)) {
           for (const b of adj) l.tracker.seedBar(tk, b.closeTs, b.close, b.volume, fromYahoo);
+          this.macdForTf(l.cfg.tf)?.reseedFromHistory(tk, adj);
           seeded++;
         } else if (l.tracker.reseedFromHistory(tk, adj, fromYahoo)) {
           // Warm but sparse/stale (the CPHI 1h class: EMA65 2.73 vs fast
           // 1.92 off a weeks-deep MINI horizon) — the denser consolidated
           // series replaces the EMA state; in-flight observations refuse.
+          this.macdForTf(l.cfg.tf)?.reseedFromHistory(tk, adj);
           seeded++;
         }
         persisted += bars.length;
@@ -1096,8 +1131,10 @@ class TickFeedService {
     const recentFirst = bars.slice(-200);
     if (this.emaCross.canSeed(tk)) {
       for (const b of recentFirst) this.emaCross.seedBar(tk, b.closeTs, b.close, b.volume, consolidated);
+      this.macdCurl.reseedFromHistory(tk, recentFirst);
       seeded = 1;
     } else if (this.emaCross.reseedFromHistory(tk, recentFirst, consolidated)) {
+      this.macdCurl.reseedFromHistory(tk, recentFirst);
       seeded = 1;
     }
     const recent = bars.filter((b) => b.closeTs * 1000 > Date.now() - 5 * 86_400_000);
@@ -1200,6 +1237,7 @@ class TickFeedService {
       this.macdCurl15m.resetDaily();
       this.macdCurl1h.resetDaily();
       this.macdCurl4h.resetDaily();
+      this.momoSetup.resetDaily();
       void getDb()
         .deleteFrom('bars_2m')
         .where('bar_ts', '<', new Date(Date.now() - 3 * 86_400_000))
@@ -1388,18 +1426,27 @@ class TickFeedService {
       const b2 = Math.floor(m.t / MACD_CURL_2M.interval_sec) * MACD_CURL_2M.interval_sec;
       const cur2 = this.bucket2m.get(m.s);
       if (!cur2) {
-        this.bucket2m.set(m.s, { bucket: b2, close: m.c, vol: m.v });
+        this.bucket2m.set(m.s, { bucket: b2, open: m.o, high: m.h, low: m.l, close: m.c, vol: m.v });
       } else if (b2 === cur2.bucket) {
+        if (m.h > cur2.high) cur2.high = m.h;
+        if (m.l < cur2.low) cur2.low = m.l;
         cur2.close = m.c;
         cur2.vol += m.v;
       } else if (b2 > cur2.bucket) {
         const closeTs = cur2.bucket + MACD_CURL_2M.interval_sec;
+        const setupBar: MomoSetupBar = {
+          closeTs, open: cur2.open, high: cur2.high, low: cur2.low,
+          close: cur2.close, volume: cur2.vol,
+        };
+        this.momoSetup.add2mBar(m.s, setupBar);
+        this.flushMomoSetupTransitions();
         const mev2 = this.macdCurl2m.addClosedBar(m.s, closeTs, cur2.close);
         if (mev2) poller.onMacdCurlEvent(mev2);
         this.bar2Buffer.push({
           ticker: m.s, bar_ts: new Date(closeTs * 1000), close: cur2.close, volume: cur2.vol,
+          open: cur2.open, high: cur2.high, low: cur2.low,
         });
-        this.bucket2m.set(m.s, { bucket: b2, close: m.c, vol: m.v });
+        this.bucket2m.set(m.s, { bucket: b2, open: m.o, high: m.h, low: m.l, close: m.c, vol: m.v });
       }
       // b2 < cur2.bucket = stale/out-of-order tick — ignore, like addBar.
     }

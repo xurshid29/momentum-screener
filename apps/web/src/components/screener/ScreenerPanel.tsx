@@ -21,6 +21,7 @@ import { HistoryByDayPanel } from './HistoryByDayPanel';
 import { OutcomesPanel } from './OutcomesPanel';
 import { EmaReclaimPanel } from './EmaReclaimPanel';
 import { MacdMomoPanel } from './MacdMomoPanel';
+import { MomoSetupsPanel } from './MomoSetupsPanel';
 
 const { Text } = Typography;
 
@@ -50,7 +51,7 @@ const SESSION_COLOR: Record<TradingSession, string> = {
   closed: '#8c8c8c',
 };
 
-type ScreenerTab = 'momo' | 'ema' | 'momentum' | 'swing' | 'continuation' | 'history';
+type ScreenerTab = 'momo' | 'setups' | 'ema' | 'momentum' | 'swing' | 'continuation' | 'history';
 
 // First-appeared time in the operator's TZ (UTC+5), HH:MM, plus how long ago.
 // The "ago" is the staleness cue: a top-of-list +600% name first seen 9h ago is
@@ -428,6 +429,17 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
             ),
           },
           {
+            key: 'setups',
+            label: `🎯 SETUPS${payload?.momo_setups?.length ? ` · ${payload.momo_setups.length}` : ''}`,
+            children: (
+              <MomoSetupsPanel
+                items={payload?.momo_setups ?? []}
+                session={payload?.session}
+                onOpenCatalyst={(ticker, catalyst) => setCatalystModal({ ticker, catalyst })}
+              />
+            ),
+          },
+          {
             key: 'ema',
             label: `↗ EMA${payload?.ema_crosses?.length ? ` · ${payload.ema_crosses.length}` : ''}`,
             children: (
@@ -516,4 +528,3 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
     </div>
   );
 }
-

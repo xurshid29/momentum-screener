@@ -390,7 +390,7 @@ export interface MacdMomoItem {
   // closed — the entry moment) · crossed = line above the signal · turning =
   // rising below, not announce-worthy yet · cooling = falling below ·
   // warming = MACD not yet computable (<18 closed 5m bars).
-  state: 'curling' | 'crossed' | 'turning' | 'cooling' | 'warming';
+  state: 'curling' | 'crossing' | 'crossed' | 'turning' | 'cooling' | 'warming';
   // FULL-DAY change vs the prior close in every session (same anchor as the
   // EMA tab — differs from Momentum/Ignition in after-hours).
   chg_pct: number | null;
@@ -416,6 +416,38 @@ export interface MacdMomoItem {
   catalyst: CatalystInfo | null;
 }
 
+export type MomoSetupContext = 'warming' | 'cooling' | 'turning' | 'curling' | 'crossing' | 'crossed';
+
+export interface MomoSetupItem {
+  ticker: string;
+  state: 'warming' | 'resetting' | 'basing' | 'curling' | 'ready' | 'triggered' | 'failed';
+  state_at: string | null;
+  setup_number: number;
+  setup_at: string | null;
+  trigger_at: string | null;
+  chg_pct: number | null;
+  price: number;
+  pullback_depth_pct: number | null;
+  base_bars: number;
+  volume_dryup_ratio: number | null;
+  volume_reexpansion_ratio: number | null;
+  entry: number | null;
+  trigger: number | null;
+  stop: number | null;
+  stop_distance_pct: number | null;
+  below_zero: boolean | null;
+  above_ema21: boolean | null;
+  context_2m: MomoSetupContext;
+  context_5m: MomoSetupContext;
+  context_15m: MomoSetupContext;
+  feed_age_min: number | null;
+  failure_reason: string | null;
+  qualified_at: string;
+  news_title: string | null;
+  news_url: string | null;
+  catalyst: CatalystInfo | null;
+}
+
 export interface CyclePayload {
   cycle_id: string;
   polled_at: string | null;
@@ -431,6 +463,7 @@ export interface CyclePayload {
   news_radar: NewsRadarItem[];
   ema_crosses: EmaCrossItem[];
   macd_momo: MacdMomoItem[];
+  momo_setups: MomoSetupItem[];
 }
 
 export interface HistoryRow {

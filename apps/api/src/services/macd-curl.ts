@@ -168,6 +168,8 @@ export interface MacdCurlEvent {
   // INFORMATIONAL; null until that EMA is seeded. ⚠️ Measured 2026-08-09:
   // above-trend setups graded WORSE, not safer — grading meta, not a gate.
   above_trend: boolean | null;
+  episode: number;
+  setup_number: number;
 }
 
 interface SymState {
@@ -180,6 +182,8 @@ interface SymState {
   maxGap: number;            // widest (signal − line) this episode
   setupLine: number | null;  // line value at the announced setup
   setupDone: boolean;        // one setup per episode (unless re-armed)
+  episode: number;           // cross-down episodes since process/day reset
+  setupCountDay: number;     // announced setups in the current ET day
   lastCloseTs: number;
   // Trend EMA (cfg.trend_ema, SMA-seeded) — the informational price-position
   // marker. Null until seeded.
@@ -250,6 +254,7 @@ export class MacdCurlTracker {
   // the market printed but we never saw.
   snapshot(ticker: string, livePrice?: number, nowSec = Math.floor(Date.now() / 1000)): {
     line: number; signal_val: number; gap: number; above: boolean;
+    committed_above: boolean;
     rising_bars: number; below_zero: boolean; setup_active: boolean;
     above_trend: boolean | null;
     provisional: boolean; synth_buckets: number;
@@ -310,9 +315,13 @@ export class MacdCurlTracker {
       signal_val: sig,
       gap: sig - line,
       above,
+      committed_above: st.above,
       rising_bars: rising,
       below_zero: line < 0,
-      setup_active: st.setupDone && !above,
+      // A provisional flat carry may show the line below the level where
+      // the committed setup announced. That setup has failed/re-armed; do
+      // not keep presenting it as an active curl until a real bar arrives.
+      setup_active: st.setupDone && !above && (st.setupLine == null || line >= st.setupLine),
       above_trend: emaT != null && refPx > 0 ? refPx > emaT : null,
       provisional,
       synth_buckets: synth,
@@ -328,6 +337,11 @@ export class MacdCurlTracker {
     for (const st of this.state.values()) {
       st.setupDone = false;
       st.setupLine = null;
+      st.rising = 0;
+      st.maxGap = st.above || st.prevLine == null || st.prevSig == null
+        ? 0 : Math.max(0, st.prevSig - st.prevLine);
+      st.episode = st.above ? 0 : 1;
+      st.setupCountDay = 0;
     }
   }
 
@@ -337,7 +351,7 @@ export class MacdCurlTracker {
       st = {
         closes: [], lines: [], prevLine: null, prevSig: null,
         rising: 0, above: false, maxGap: 0, setupLine: null,
-        setupDone: false, lastCloseTs: 0,
+        setupDone: false, episode: 0, setupCountDay: 0, lastCloseTs: 0,
         emaT: null, seedSumT: 0, seedCntT: 0,
       };
       this.state.set(ticker, st);
@@ -396,6 +410,8 @@ export class MacdCurlTracker {
       rising_bars: st.rising,
       max_gap: st.maxGap,
       above_trend: st.emaT != null ? close > st.emaT : null,
+      episode: st.episode,
+      setup_number: st.setupCountDay,
     });
 
     if (firstValid) {
@@ -416,6 +432,7 @@ export class MacdCurlTracker {
         st.maxGap = gap;
         st.setupDone = false;
         st.setupLine = null;
+        st.episode++;
       } else {
         if (gap > st.maxGap) st.maxGap = gap;
         // The announced curl failed (line broke below its announce level) —
@@ -430,9 +447,10 @@ export class MacdCurlTracker {
           st.maxGap >= this.cfg.min_dip_frac * close &&
           gap <= this.cfg.curl_max_gap_frac * st.maxGap
         ) {
-          out = mk('setup');
           st.setupDone = true;
           st.setupLine = line;
+          st.setupCountDay++;
+          out = mk('setup');
         }
       }
     }
@@ -442,5 +460,19 @@ export class MacdCurlTracker {
     st.prevLine = line;
     st.prevSig = sig;
     return out;
+  }
+
+  // Keep MACD aligned with the EMA layer when a sparse MINI series is
+  // replaced by consolidated history. Active setups are intentionally not
+  // disturbed; the next scan can retry after the episode resolves.
+  reseedFromHistory(ticker: string, bars: Array<{ closeTs: number; close: number }>): boolean {
+    const old = this.state.get(ticker);
+    if (old?.setupDone) return false;
+    const count = old?.setupCountDay ?? 0;
+    this.state.delete(ticker);
+    for (const b of bars) this.addClosedBar(ticker, b.closeTs, b.close, true);
+    const next = this.state.get(ticker);
+    if (next) next.setupCountDay = count;
+    return next != null;
   }
 }

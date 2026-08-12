@@ -7,7 +7,7 @@ the "where we are right now + what's open" layer on top of it.
 detection chain** (📰/🤫/📈/👀/🛰️ — how each layer works, knobs, grading SQL).
 Memory files under `…/memory/` also carry the durable facts.
 
-**CURRENT FOCUS (refreshed 2026-08-12): TWO instruments. (1) The ↗
+**CURRENT FOCUS (refreshed 2026-08-12): THREE instruments. (1) The ↗
 price-reclaim layer — reclaim-ONLY on FIVE timeframes — remains the only
 Telegram-alerting component, with A+/A/B attention tiers on the ↗ EMA tab.
 (2) The ⤴ MACD MOMO tab (DEFAULT view since 08-06; built out over rounds
@@ -23,7 +23,20 @@ confirmation preference; the 5-session backtest graded above-EMA entries
 WORSE — tooltips carry both sides, meta.above_ema21 is the live
 referendum). Sort: state → <0 → newest event. Display+grading only
 (tier='macd' with variant/below_zero/above_ema21 meta), no sounds/Telegram
-until graded — see XMOMO below + docs/detection-layers.md ⤴ section.** The 10/65 crossover channel is RETIRED
+until graded — see XMOMO below + docs/detection-layers.md ⤴ section. (3) A
+new separate **🎯 SETUPS experimental tab** keeps raw MOMO as the control but
+adds closed-bar structure confirmation: 5m curl → pullback/base → READY →
+closed 2m pivot break with ≥1.5× volume and ≥$2k MINI notional → TRIGGERED.
+It shows one row/ticker with pullback depth, base age, dry-up/re-expansion,
+entry/trigger, structural stop/distance, 15m/5m/2m MACD context and feed age.
+No sound/Telegram; transitions persist as `tier='momo_v2'`. New
+`momo-setup.ts`, `MomoSetupsPanel.tsx`, and nullable OHLC on `bars_2m`
+(migration `20260812150000`). Foundational XMOMO audit fixes shipped with it:
+durable `qualify` events preserve sticky no-signal names across deploys;
+event meta now separates `bar_ts`/`observed_at`; provisional crosses render
+as `crossing`, not committed `crossed`; failed provisional setup geometry no
+longer stays curling; daily episode counters reset; MACD reseeds alongside EMA
+consolidated-history reseeds.** The 10/65 crossover channel is RETIRED
 (2026-07-26, `cross_detect: false` everywhere; machinery kept + tested for a
 data revisit). The chain otherwise runs in full (🤫 accum → ↗ reclaim →
 👀 watch → 🛰️ confirm → screens; 📰 radar is DARK while Benzinga is parked;

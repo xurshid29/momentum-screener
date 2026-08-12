@@ -63,6 +63,7 @@ See **Recent additions** for what shipped lately and **Remaining work** for what
 | SSE broadcaster | ✅ | `services/sse.ts` |
 | Live tick feed (Databento EQUS.MINI per-second) + 👀/🛰️ detector | ✅ | `services/tickfeed.ts`, `tick-detect.ts`, `sidecar/tickfeed.py` |
 | ↗ EMA price-reclaim layer — 5 timeframes (5m/15m/1h/4h/1d) | ✅ TRIAL | `services/ema-cross.ts`, `bars_5m/15m/1h/4h/1d`; spec in `docs/detection-layers.md` |
+| 🎯 MOMO SETUPS — structure + 2m volume-confirmed MACD experiment | ✅ TRIAL | Separate tab; `services/momo-setup.ts`, `tier_events tier='momo_v2'`; no alerts |
 | tier_events — deploy-proof grading log for every layer transition | ✅ | `services/tier-events.ts` |
 | 📰 News radar (market-wide Benzinga × known runners) | ⏸ parked | `poller.ts` NEWS_RADAR — dark while the Benzinga token is commented out (2026-07-25) |
 | Persistence (cycles, results, ignition, swing, news, daily_bars) | ✅ | `db/migrations/*.sql` |

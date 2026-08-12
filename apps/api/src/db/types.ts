@@ -392,6 +392,9 @@ export interface Bars2mTable {
   bar_ts: ColumnType<Date, Date | string, Date | string>;
   close: number;
   volume: number;
+  open: number | null;
+  high: number | null;
+  low: number | null;
 }
 
 export interface Database {

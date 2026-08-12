@@ -233,6 +233,31 @@ console.log('S10 trend-EMA marker — null until seeded, stamped on events, fold
     `hi=${hi.above_trend} lo=${lo.above_trend}`);
 }
 
+console.log('S11 provisional crossing is distinct from committed state');
+{
+  const tr = new MacdCurlTracker();
+  const tape = secondLegTape();
+  tape.forEach((c, i) => tr.addClosedBar('TEST', T0 + (i + 1) * IV, c));
+  const committed = tr.snapshot('TEST')!;
+  const folded = tr.snapshot('TEST', committed.last_close * 1.25, T0 + tape.length * IV + 30)!;
+  check('snapshot exposes committed side', typeof folded.committed_above === 'boolean');
+  check('forming-bar fold does not mutate committed side', tr.snapshot('TEST')!.committed_above === committed.committed_above);
+}
+
+console.log('S12 history reseed matches a silent replay');
+{
+  const bars = secondLegTape().map((close, i) => ({ closeTs: T0 + (i + 1) * IV, close }));
+  const replay = new MacdCurlTracker();
+  bars.forEach((b) => replay.addClosedBar('TEST', b.closeTs, b.close, true));
+  const reseed = new MacdCurlTracker();
+  check('reseed accepted', reseed.reseedFromHistory('TEST', bars));
+  const a = replay.snapshot('TEST')!;
+  const b = reseed.snapshot('TEST')!;
+  check('line matches replay', Math.abs(a.line - b.line) < 1e-12);
+  check('signal matches replay', Math.abs(a.signal_val - b.signal_val) < 1e-12);
+  check('committed side matches replay', a.committed_above === b.committed_above);
+}
+
 if (failures > 0) {
   console.error(`\n${failures} check(s) FAILED`);
   process.exit(1);

@@ -28,6 +28,7 @@ const STATE_STYLE: Record<MacdMomoItem['state'], {
   label: string; color: string; border: string; dim: boolean;
 }> = {
   curling: { label: '⤴ curling', color: '#ffc53d', border: '#d48806', dim: false },
+  crossing: { label: '≈ crossing', color: '#b7eb8f', border: '#73d13d', dim: false },
   crossed: { label: '✚ crossed', color: '#95de64', border: '#52c41a', dim: false },
   turning: { label: '↻ turning', color: '#d4b106', border: '#7c6e14', dim: true },
   cooling: { label: 'cooling', color: '#8c8c8c', border: '#3a3a3a', dim: true },
@@ -35,12 +36,19 @@ const STATE_STYLE: Record<MacdMomoItem['state'], {
 };
 
 const STATE_TIP: Record<MacdMomoItem['state'], string> = {
-  curling: 'SETUP live: the MACD line (3/10/8 SMA, 5m) has turned up toward its signal with most of the pullback gap closed — the "close to the crossover" entry moment. Tight stop; the line can still fail back down.',
+  curling: 'SETUP live: the MACD line has turned up toward its signal with most of the pullback gap closed — the "close to the crossover" moment. It can still fail back down.',
+  crossing: 'The live forming bar is provisionally above the signal, but no closed bar has confirmed the crossover yet.',
   crossed: 'The MACD line is above its signal — the crossover happened. Later than the curl entry. State includes the live forming bar (matches the TV panel); ⤴/✚ event stamps stay closed-bar.',
   turning: 'Line rising below the signal but the curl is not announce-worthy yet (gap still wide or turn too young). Rendered on the live forming bar, like TV.',
   cooling: 'Line falling below the signal — mid-pullback / post-fade. The reset that precedes the next curl.',
-  warming: 'Not enough closed 5m bars yet to compute the MACD (needs ~18).',
+  warming: 'Not enough closed bars yet to compute this lane.',
 };
+
+function stateTip(item: MacdMomoItem): string {
+  const params = item.variant === '5m' ? '3/10/8' : '3/15/8';
+  const warmup = item.variant === '5m' ? 17 : 22;
+  return `${item.variant} · ${params} all-SMA. ${STATE_TIP[item.state]}${item.state === 'warming' ? ` Warmup is ${warmup} bars.` : ''}`;
+}
 
 function fmtAgo(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();
@@ -96,7 +104,7 @@ function MomoRow({ item, selected, onSelect, onOpenCatalyst, session }: {
             />
           </span>
         )}
-        <Tooltip mouseEnterDelay={TIP_DELAY} title={STATE_TIP[item.state]}>
+        <Tooltip mouseEnterDelay={TIP_DELAY} title={stateTip(item)}>
           <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 600, color: st.color, cursor: 'help' }}>
             {st.label}
             {item.state === 'curling' && item.gap_pct != null && ` · gap ${item.gap_pct.toFixed(2)}%`}

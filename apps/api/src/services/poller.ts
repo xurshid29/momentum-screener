@@ -454,7 +454,7 @@ export interface MacdMomoItem {
   // 'turning'  — line rising below the signal but not yet announce-worthy.
   // 'cooling'  — line falling below the signal (post-fade / mid-pullback).
   // 'warming'  — MACD not yet computable (fresh symbol, <18 closed 5m bars).
-  state: 'curling' | 'crossed' | 'turning' | 'cooling' | 'warming';
+  state: 'curling' | 'crossing' | 'crossed' | 'turning' | 'cooling' | 'warming';
   // FULL-DAY change vs the prior close in every session (same anchor as the
   // EMA tab, same AH divergence from Momentum/Ignition — extension is what
   // this tab judges). Falls back to the screen row's change when the tick
@@ -482,6 +482,36 @@ export interface MacdMomoItem {
   setup_at: string | null;       // today's latest ⤴ setup (bar-close anchored)
   cross_at: string | null;       // today's latest ✚ cross-up
   qualified_at: string;          // when the name entered the top-gainer set
+  news_title: string | null;
+  news_url: string | null;
+  catalyst: CatalystInfo | null;
+}
+
+export interface MomoSetupItem {
+  ticker: string;
+  state: 'warming' | 'resetting' | 'basing' | 'curling' | 'ready' | 'triggered' | 'failed';
+  state_at: string | null;
+  setup_number: number;
+  setup_at: string | null;
+  trigger_at: string | null;
+  chg_pct: number | null;
+  price: number;
+  pullback_depth_pct: number | null;
+  base_bars: number;
+  volume_dryup_ratio: number | null;
+  volume_reexpansion_ratio: number | null;
+  entry: number | null;
+  trigger: number | null;
+  stop: number | null;
+  stop_distance_pct: number | null;
+  below_zero: boolean | null;
+  above_ema21: boolean | null;
+  context_2m: 'warming' | 'cooling' | 'turning' | 'curling' | 'crossing' | 'crossed';
+  context_5m: 'warming' | 'cooling' | 'turning' | 'curling' | 'crossing' | 'crossed';
+  context_15m: 'warming' | 'cooling' | 'turning' | 'curling' | 'crossing' | 'crossed';
+  feed_age_min: number | null;
+  failure_reason: string | null;
+  qualified_at: string;
   news_title: string | null;
   news_url: string | null;
   catalyst: CatalystInfo | null;
@@ -519,6 +549,7 @@ export interface CyclePayload {
   news_radar: NewsRadarItem[];
   ema_crosses: EmaCrossItem[];
   macd_momo: MacdMomoItem[];
+  momo_setups: MomoSetupItem[];
 }
 
 export interface EnrichedRow extends ScreenerRow {
@@ -765,6 +796,7 @@ class PollerService {
     // below_zero at the event bar — the ORIGIN flag for crossed rows.
     setup_bz: boolean | null; cross_bz: boolean | null;
   }>();
+  private momoSetupLastState = new Map<string, MomoSetupItem['state']>();
   // Tickers that have traded in an Ignition pre-market cycle today. Feeds the
   // runner-score's pre-market-exhaustion penalty (a name that already ran in PM
   // gives back into the close). ET-day concept — cleared at midnight.
@@ -1130,6 +1162,16 @@ class PollerService {
     if (existing && existing.status === 'observing') this.emaCrosses.delete(key);
   }
 
+  private qualifyMacdMomo(ticker: string, via: 'momentum' | 'top10' | 'chg', atIso: string): void {
+    if (this.macdMomoQualified.has(ticker)) return;
+    this.macdMomoQualified.set(ticker, { qualified_at: atIso, via });
+    // Qualification is durable even when the name never emits a setup. This
+    // preserves the sticky control population across an intraday deploy.
+    recordTierEvent('macd', 'qualify', ticker, {
+      via, qualified_at: atIso, observed_at: new Date().toISOString(),
+    });
+  }
+
   // ⤴ MACD curl events from the tick feed's 5m bar stream. The tracker runs
   // over every known runner (warm state is free when a name enters the set
   // mid-session); THIS gate is what makes the layer "top gainers only" —
@@ -1167,12 +1209,44 @@ class PollerService {
       rising: e.rising_bars,
       chg: snap?.chg_pct ?? null,
       via: q.via,
+      bar_ts: barIso,
+      observed_at: new Date().toISOString(),
+      observed_price: snap?.current_price ?? e.price,
+      display_eligible: snap?.chg_pct == null || snap.chg_pct >= 0,
+      episode: e.episode,
+      setup_number: e.setup_number,
     });
     console.log(
       `[macd-momo] ${e.type === 'setup' ? '⤴ setup' : '✚ cross'} ${e.ticker} (${variant}) ` +
       `$${e.price.toFixed(2)} · line ${e.line.toFixed(4)} vs sig ${e.signal_val.toFixed(4)}` +
       `${e.below_zero ? ' · <0' : ''}${snap?.chg_pct != null ? ` · day ${snap.chg_pct >= 0 ? '+' : ''}${snap.chg_pct.toFixed(1)}%` : ''}`,
     );
+  }
+
+  onMomoSetupTransition(e: import('./momo-setup.js').MomoSetupTransition): void {
+    const q = this.macdMomoQualified.get(e.ticker);
+    if (!q) return;
+    const setup = this.momoSetupSnapshotFn?.(e.ticker) ?? null;
+    const macd5 = this.macdSnapshotFn?.(e.ticker, undefined, '5m') ?? null;
+    const barIso = new Date(e.ts_sec * 1000).toISOString();
+    this.momoSetupLastState.set(e.ticker, e.state);
+    recordTierEvent('momo_v2', e.state, e.ticker, {
+      state: e.state, bar_ts: barIso, observed_at: new Date().toISOString(),
+      via: q.via, chg: macd5?.chg_pct ?? null,
+      price: setup?.entry ?? macd5?.current_price ?? null,
+      setup_number: setup?.setup_number ?? 0,
+      setup_at: setup?.setup_at ? new Date(setup.setup_at * 1000).toISOString() : null,
+      trigger_at: setup?.trigger_at ? new Date(setup.trigger_at * 1000).toISOString() : null,
+      pullback_depth_pct: setup?.pullback_depth_pct ?? null,
+      base_bars: setup?.base_bars ?? 0,
+      volume_dryup_ratio: setup?.volume_dryup_ratio ?? null,
+      volume_reexpansion_ratio: setup?.volume_reexpansion_ratio ?? null,
+      entry: setup?.entry ?? null, trigger: setup?.trigger ?? null,
+      stop: setup?.stop ?? null, stop_distance_pct: setup?.stop_distance_pct ?? null,
+      below_zero: setup?.below_zero ?? null, above_ema21: setup?.above_ema21 ?? null,
+      failure_reason: setup?.failure_reason ?? null,
+      display_eligible: macd5?.chg_pct == null || macd5.chg_pct >= 0,
+    });
   }
 
   // Is the ticker in the latest broadcast's Momentum or Ignition lists? Used
@@ -1621,11 +1695,18 @@ class PollerService {
           // re-qualify the name (events only ever record while qualified).
           // Names that qualified without an event re-qualify from the live
           // rows within one cycle — the only reseed residual.
+          if (r.event === 'qualify') {
+            const via = m.via === 'momentum' || m.via === 'top10' || m.via === 'chg' ? m.via : 'reseed';
+            const qualifiedAt = typeof m.qualified_at === 'string' ? m.qualified_at : iso(atMs);
+            this.macdMomoQualified.set(t, { qualified_at: qualifiedAt, via });
+            continue;
+          }
           const mkey = `${m.variant === '2m' || m.variant === '15m' || m.variant === '1h' || m.variant === '4h' ? m.variant : '5m'}|${t}`;
           const mev = this.macdMomoEvents.get(mkey)
             ?? { setup_at: null, cross_at: null, setup_bz: null, cross_bz: null };
-          if (r.event === 'setup') { mev.setup_at = iso(atMs); mev.setup_bz = m.below_zero === true; }
-          else if (r.event === 'cross') { mev.cross_at = iso(atMs); mev.cross_bz = m.below_zero === true; }
+          const eventAt = typeof m.bar_ts === 'string' && Number.isFinite(Date.parse(m.bar_ts)) ? m.bar_ts : iso(atMs);
+          if (r.event === 'setup') { mev.setup_at = eventAt; mev.setup_bz = m.below_zero === true; }
+          else if (r.event === 'cross') { mev.cross_at = eventAt; mev.cross_bz = m.below_zero === true; }
           this.macdMomoEvents.set(mkey, mev);
           if (!this.macdMomoQualified.has(t)) {
             this.macdMomoQualified.set(t, { qualified_at: iso(atMs), via: 'reseed' });
@@ -1741,6 +1822,7 @@ class PollerService {
       this.emaCrosses.clear();
       this.macdMomoQualified.clear();
       this.macdMomoEvents.clear();
+      this.momoSetupLastState.clear();
       this.newsRadar.clear();
       this.radarSeenUrls.clear();
       this.alertedNewsRadar.clear();
@@ -2787,9 +2869,7 @@ class PollerService {
       // screen carries its own change + relvol filters); sticky for the ET
       // day like everything else here.
       for (const r of momentumRows) {
-        if (!this.macdMomoQualified.has(r.ticker)) {
-          this.macdMomoQualified.set(r.ticker, { qualified_at: nowIso, via: 'momentum' });
-        }
+        this.qualifyMacdMomo(r.ticker, 'momentum', nowIso);
       }
       // The union ranking stays for IGNITION-only movers (sub-$1 names the
       // momentum screen's price floor excludes): top-10 by change or ≥30%.
@@ -2800,9 +2880,9 @@ class PollerService {
         if (this.macdMomoQualified.has(r.ticker)) return;
         const chg = r.change_pct ?? 0;
         if (i < MACD_MOMO.top_n && chg >= MACD_MOMO.top_n_min_chg_pct) {
-          this.macdMomoQualified.set(r.ticker, { qualified_at: nowIso, via: 'top10' });
+          this.qualifyMacdMomo(r.ticker, 'top10', nowIso);
         } else if (chg >= MACD_MOMO.min_chg_pct) {
-          this.macdMomoQualified.set(r.ticker, { qualified_at: nowIso, via: 'chg' });
+          this.qualifyMacdMomo(r.ticker, 'chg', nowIso);
         }
       });
     }
@@ -2820,6 +2900,7 @@ class PollerService {
         const ev = this.macdMomoEvents.get(`${variant}|${tk}`);
         const price = livePrice ?? (snap?.last_close ?? 0);
         const state: MacdMomoItem['state'] = !snap ? 'warming'
+          : snap.above && snap.provisional && !snap.committed_above ? 'crossing'
           : snap.above ? 'crossed'
           : snap.setup_active ? 'curling'
           : snap.rising_bars > 0 ? 'turning'
@@ -2870,7 +2951,7 @@ class PollerService {
     // column, and chg-ordering floated stale round-trippers over live
     // movers — the WLDS lesson again). No event yet → qualification time.
     const MOMO_STATE_ORDER: Record<MacdMomoItem['state'], number> = {
-      curling: 0, crossed: 1, turning: 2, cooling: 3, warming: 4,
+      curling: 0, crossing: 1, crossed: 2, turning: 3, cooling: 4, warming: 5,
     };
     const momoTs = (x: MacdMomoItem) => Math.max(
       x.setup_at ? Date.parse(x.setup_at) : 0,
@@ -2894,6 +2975,66 @@ class PollerService {
     const macdMomoDisplay = (['5m', '2m', '15m', '1h', '4h'] as const).flatMap((v) =>
       momoVisible.filter((x) => x.variant === v).slice(0, MACD_MOMO.max_display));
 
+    const contextState = (snap: ReturnType<NonNullable<typeof this.macdSnapshotFn>>): MomoSetupItem['context_5m'] =>
+      !snap ? 'warming'
+        : snap.above && snap.provisional && !snap.committed_above ? 'crossing'
+        : snap.above ? 'crossed'
+        : snap.setup_active ? 'curling'
+        : snap.rising_bars > 0 ? 'turning' : 'cooling';
+    const momoSetupList: MomoSetupItem[] = [];
+    for (const [tk, q] of this.macdMomoQualified) {
+      const setup = this.momoSetupSnapshotFn?.(tk) ?? null;
+      const row = screenRowByTicker.get(tk);
+      const livePrice = (row?.price ?? 0) > 0 ? row!.price! : undefined;
+      const m2 = this.macdSnapshotFn?.(tk, livePrice, '2m') ?? null;
+      const m5 = this.macdSnapshotFn?.(tk, livePrice, '5m') ?? null;
+      const m15 = this.macdSnapshotFn?.(tk, livePrice, '15m') ?? null;
+      const price = livePrice ?? m5?.last_close ?? 0;
+      const state = setup?.state ?? 'warming';
+      const stateAt = setup?.state_at ? new Date(setup.state_at * 1000).toISOString() : null;
+      const item: MomoSetupItem = {
+        ticker: tk, state, state_at: stateAt,
+        setup_number: setup?.setup_number ?? 0,
+        setup_at: setup?.setup_at ? new Date(setup.setup_at * 1000).toISOString() : null,
+        trigger_at: setup?.trigger_at ? new Date(setup.trigger_at * 1000).toISOString() : null,
+        chg_pct: m5?.chg_pct ?? row?.change_pct ?? null, price,
+        pullback_depth_pct: setup?.pullback_depth_pct ?? null,
+        base_bars: setup?.base_bars ?? 0,
+        volume_dryup_ratio: setup?.volume_dryup_ratio ?? null,
+        volume_reexpansion_ratio: setup?.volume_reexpansion_ratio ?? null,
+        entry: setup?.entry ?? null, trigger: setup?.trigger ?? null,
+        stop: setup?.stop ?? null, stop_distance_pct: setup?.stop_distance_pct ?? null,
+        below_zero: setup?.below_zero ?? null, above_ema21: setup?.above_ema21 ?? null,
+        context_2m: contextState(m2), context_5m: contextState(m5), context_15m: contextState(m15),
+        feed_age_min: setup?.last_2m_ts
+          ? Math.max(0, Math.round((nowMsTick / 1000 - setup.last_2m_ts) / 60)) : null,
+        failure_reason: setup?.failure_reason ?? null,
+        qualified_at: q.qualified_at,
+        news_title: row?.news_title ?? null, news_url: row?.news_url ?? null,
+        catalyst: row?.catalyst ?? null,
+      };
+      momoSetupList.push(item);
+      const previous = this.momoSetupLastState.get(tk);
+      if (previous !== state) {
+        this.momoSetupLastState.set(tk, state);
+        if (stateAt && state !== 'warming') {
+          recordTierEvent('momo_v2', state, tk, {
+            ...item, bar_ts: stateAt, observed_at: new Date().toISOString(),
+            display_eligible: item.chg_pct == null || item.chg_pct >= 0,
+          });
+        }
+      }
+    }
+    const SETUP_ORDER: Record<MomoSetupItem['state'], number> = {
+      triggered: 0, ready: 1, curling: 2, basing: 3,
+      resetting: 4, failed: 5, warming: 6,
+    };
+    const momoSetupDisplay = momoSetupList
+      .filter((x) => !(x.chg_pct != null && x.chg_pct < 0))
+      .sort((a, b) => SETUP_ORDER[a.state] - SETUP_ORDER[b.state]
+        || (Date.parse(b.state_at ?? b.qualified_at) - Date.parse(a.state_at ?? a.qualified_at)))
+      .slice(0, MACD_MOMO.max_display);
+
     const payload: CyclePayload = {
       cycle_id: cycleId,
       polled_at: new Date().toISOString(),
@@ -2907,6 +3048,7 @@ class PollerService {
       news_radar: radarDisplay,
       ema_crosses: emaCrossDisplay,
       macd_momo: macdMomoDisplay,
+      momo_setups: momoSetupDisplay,
       banners: { new_with_catalyst: newWithCatalyst, fresh_news: freshList },
       fresh_news: enriched
         .filter((r) => r.is_fresh_news && r.news_title)
@@ -3417,16 +3559,34 @@ class PollerService {
   private macdSnapshotFn:
     | ((ticker: string, livePrice?: number, variant?: '5m' | '2m' | '15m' | '1h' | '4h') => {
         line: number; signal_val: number; gap: number; above: boolean;
+        committed_above: boolean;
         rising_bars: number; below_zero: boolean; setup_active: boolean;
         above_trend: boolean | null;
         provisional: boolean; synth_buckets: number;
         last_close: number; last_close_ts: number;
-        chg_pct: number | null;
+        chg_pct: number | null; current_price: number;
       } | null)
     | null = null;
 
   setMacdSnapshotSource(fn: PollerService['macdSnapshotFn']): void {
     this.macdSnapshotFn = fn;
+  }
+
+  private momoSetupSnapshotFn:
+    | ((ticker: string) => {
+        state: MomoSetupItem['state']; state_at: number; setup_number: number;
+        setup_at: number | null; trigger_at: number | null;
+        entry: number | null; trigger: number | null; stop: number | null;
+        stop_distance_pct: number | null; pullback_depth_pct: number | null;
+        base_bars: number; volume_dryup_ratio: number | null;
+        volume_reexpansion_ratio: number | null; below_zero: boolean | null;
+        above_ema21: boolean | null; last_5m_ts: number | null;
+        last_2m_ts: number | null; failure_reason: string | null;
+      } | null)
+    | null = null;
+
+  setMomoSetupSnapshotSource(fn: PollerService['momoSetupSnapshotFn']): void {
+    this.momoSetupSnapshotFn = fn;
   }
 
   onTickEvent(e: TickEvent): void {

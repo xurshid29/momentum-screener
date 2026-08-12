@@ -12,7 +12,7 @@ import { getDb } from '../db/index.js';
 let lastErrorLogMs = 0;
 
 export function recordTierEvent(
-  tier: 'accum' | 'tick' | 'radar' | 'cross' | 'macd',
+  tier: 'accum' | 'tick' | 'radar' | 'cross' | 'macd' | 'momo_v2',
   event: string,
   ticker: string,
   meta?: Record<string, unknown>,
