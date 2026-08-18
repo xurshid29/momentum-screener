@@ -7,16 +7,33 @@ the "where we are right now + what's open" layer on top of it.
 detection chain** (📰/🤫/📈/👀/🛰️ — how each layer works, knobs, grading SQL).
 Memory files under `…/memory/` also carry the durable facts.
 
-**CURRENT FOCUS (2026-08-18): lean manual-playbook desk.** After testing the
+**CURRENT FOCUS (2026-08-18): lean manual-playbook desk + Edge ready to deploy.** After testing the
 automated experiments, the operator's successful workflow is: watch the
 current session's top movers on 1-minute charts; configure the EMA pair per
 ticker as dynamic support/resistance; wait for a pullback/bounce at an EMA or
 session VWAP (or, from below, a reclaim of both EMAs/VWAP) while MACD 3/15/8
 turns up; enter with “breakout or bailout” risk discipline. The dashboard now
-defaults to the three surfaces that support that workflow: **🛰️ Live Ticks,
-Momentum, and Momentum History**. The next product direction is a separate
-Playbook tab for per-ticker EMA presets and VWAP/MACD confirmation—not another
-global fixed-EMA signal.
+defaults to the four surfaces that support that workflow: **🛰️ Live Ticks,
+Momentum, Edge, and Momentum History**. The separate **⚡ Edge** tab now saves
+the custom EMA pair per user/ticker and evaluates only those saved names on
+closed 1-minute candles: feed-session VWAP + custom EMA bounce/reclaim +
+standard EMA-MACD 3/15/8 (both line and histogram rising). The live state is
+`warming → watching → armed → entry → bailout`; Armed is an intrabar proximity
+heads-up (5m anti-repeat), while Entry/Bailout require a completed 1m candle.
+An Entry holds its exact support/bailout reference until it is lost or the
+operator resets after taking profit. Dashboard sound/browser notifications
+and optional Telegram alerts are independently switchable per preset; every
+transition persists to `edge_events` for later journal attribution.
+
+**Edge architecture:** this does NOT re-enable the parked global technical
+engines. `EdgeService` consumes the already-running Databento 1s stream,
+aggregates/persists `edge_bars_1m` for saved tickers only, and warms each custom
+EMA from a small 7-day Databento history (Yahoo 1m fallback). Presets live in
+`user_edge_presets`; per-user state is served on authenticated `/api/edge`
+polling rather than the shared global SSE. Session VWAP uses feed-visible HLC3
+× volume from the 04:00 ET session; because EQUS.MINI can be thinner than the
+consolidated TradingView tape, the UI remains a decision assistant and the TV
+chart is the exact execution reference.
 
 The previous experiments are **parked, not deleted**. `COMPONENTS_DISABLED`
 defaults to `ignition,momo,setups,ema,swing,outcomes,continuation` (`faders` is

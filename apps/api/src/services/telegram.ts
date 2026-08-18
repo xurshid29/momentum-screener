@@ -28,7 +28,10 @@ export type AlertComponent =
   | 'dual_signal'   // momentum+ignition dual-signal
   | 'swing'         // swing-score breakout
   | 'ema_cross'     // 📈 volume-confirmed EMA cross (any timeframe)
-  | 'ema_reclaim';  // ↗ volume-confirmed price-reclaim of EMA 10+65 (parallel channel)
+  | 'ema_reclaim'   // ↗ volume-confirmed price-reclaim of EMA 10+65 (parallel channel)
+  | 'edge_armed'    // Edge ticker reached a configured EMA/VWAP decision zone
+  | 'edge_entry'    // Edge closed-bar bounce/reclaim + MACD confirmation
+  | 'edge_bailout'; // Edge closed below its configured bailout level
 let disabledAlerts: Set<string> | null = null;
 export function alertDisabled(component: AlertComponent): boolean {
   if (!disabledAlerts) {

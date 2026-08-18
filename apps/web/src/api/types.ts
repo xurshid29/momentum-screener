@@ -469,6 +469,83 @@ export interface CyclePayload {
   momo_setups: MomoSetupItem[];
 }
 
+// ─── Edge playbook ────────────────────────────────────────────────────────
+export type EdgePhase = 'warming' | 'watching' | 'armed' | 'entry' | 'bailout';
+export type EdgeSetup =
+  | 'ema_bounce'
+  | 'vwap_bounce'
+  | 'ema_reclaim'
+  | 'vwap_reclaim'
+  | 'vwap_ema_reclaim';
+
+export interface EdgeEventSummary {
+  id: string;
+  user_id: string;
+  ticker: string;
+  event: 'armed' | 'entry' | 'bailout';
+  setup: EdgeSetup | null;
+  price: number;
+  level: number | null;
+  bailout: number | null;
+  at: string;
+}
+
+export interface EdgeSnapshot {
+  user_id: string;
+  ticker: string;
+  ema_fast: number;
+  ema_slow: number;
+  proximity_pct: number;
+  stop_buffer_pct: number;
+  alert_armed: boolean;
+  alert_entry: boolean;
+  alert_bailout: boolean;
+  telegram_enabled: boolean;
+  active: boolean;
+  state: EdgePhase;
+  setup: EdgeSetup | null;
+  state_at: string | null;
+  price: number | null;
+  ema_fast_value: number | null;
+  ema_slow_value: number | null;
+  vwap: number | null;
+  macd: number | null;
+  macd_signal: number | null;
+  macd_histogram: number | null;
+  macd_rising: boolean;
+  histogram_rising: boolean;
+  macd_cross_up: boolean;
+  support_label: string | null;
+  support_value: number | null;
+  bailout_level: number | null;
+  bars_seen: number;
+  warmup_remaining: number;
+  last_bar_at: string | null;
+  last_event: EdgeEventSummary | null;
+}
+
+export interface EdgeEvent extends EdgeEventSummary {
+  snapshot: EdgeSnapshot;
+}
+
+export interface EdgePresetInput {
+  ema_fast: number;
+  ema_slow: number;
+  proximity_pct: number;
+  stop_buffer_pct: number;
+  alert_armed: boolean;
+  alert_entry: boolean;
+  alert_bailout: boolean;
+  telegram_enabled: boolean;
+  active: boolean;
+}
+
+export interface EdgeResponse {
+  rows: EdgeSnapshot[];
+  events: EdgeEvent[];
+  server_time: string;
+}
+
 export interface ComponentFlags {
   ignition: boolean;
   momo: boolean;

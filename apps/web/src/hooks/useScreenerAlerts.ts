@@ -133,6 +133,23 @@ function crossConfirmPing() {
   beep(1480, 240, 0.18, 0.5);  // F#6
 }
 
+export function edgeAlertPing(kind: 'armed' | 'entry' | 'bailout') {
+  if (kind === 'armed') {
+    // Soft preparation cue: the chart has reached a decision zone.
+    beep(740, 170, 0, 0.32);
+    return;
+  }
+  if (kind === 'entry') {
+    // Bright ascending confirmation — completed 1m candle + MACD turn.
+    beep(988, 160, 0, 0.52);
+    beep(1568, 240, 0.17, 0.52);
+    return;
+  }
+  // Descending loss-of-level cue. It must be unmistakable but brief.
+  beep(784, 170, 0, 0.5);
+  beep(392, 280, 0.16, 0.55);
+}
+
 export function requestNotificationPermission() {
   if ('Notification' in window && Notification.permission === 'default') {
     void Notification.requestPermission();
@@ -148,6 +165,10 @@ function notify(title: string, body: string) {
       // some browsers throw if called outside a user gesture; ignore
     }
   }
+}
+
+export function notifyEdge(title: string, body: string) {
+  notify(title, body);
 }
 
 export function useScreenerAlerts(payload: CyclePayload | null) {

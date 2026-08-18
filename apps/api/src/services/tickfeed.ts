@@ -21,6 +21,7 @@ import { universe } from './universe.js';
 import { poller } from './poller.js';
 import { getDb } from '../db/index.js';
 import { getComponentFlags, technicalTrackersEnabled } from '../config/components.js';
+import { edge } from './edge.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -1328,7 +1329,7 @@ class TickFeedService {
     }
     const priors = universe.getPriorCloses();
     for (const [t, c] of priors) this.detector.setPriorClose(t, c);
-    const syms = Array.from(new Set([...universe.getUniverse(), ...this.extraSubs]));
+    const syms = Array.from(new Set([...universe.getUniverse(), ...this.extraSubs, ...edge.activeTickers()]));
     if (syms.length > 0 && this.child?.stdin.writable) {
       this.subscribe(syms);
       console.log(`[tickfeed] synced ${syms.length} symbols (${this.extraSubs.size} extra), ${priors.size} prior closes`);
@@ -1405,6 +1406,17 @@ class TickFeedService {
     }
   }
 
+  // Edge presets can be added while the 10-minute structural sync is idle.
+  // Subscribe immediately so the new playbook row starts receiving bars; the
+  // historical warmup runs independently inside EdgeService.
+  ensureSubscribed(tickerRaw: string): void {
+    const ticker = tickerRaw.toUpperCase();
+    // Do not retain Edge names in extraSubs: edge.activeTickers() owns their
+    // respawn/midnight subscription lifecycle, so deleting a preset really
+    // removes it from the next sidecar session.
+    this.subscribe([ticker]);
+  }
+
   private onBar(line: string): void {
     let m: { t: number; s: string; o: number; h: number; l: number; c: number; v: number };
     try {
@@ -1441,6 +1453,11 @@ class TickFeedService {
       else this.fades++;
       poller.onTickEvent(ev);
     }
+    // The lean 1m Edge path is independent of the parked global technical
+    // trackers. EdgeService drops all unsaved tickers in O(1).
+    edge.onTick(m.s, {
+      ts_sec: m.t, open: m.o, high: m.h, low: m.l, close: m.c, volume: m.v,
+    });
     // 📈 EMA-cross layers (5m + HTF) — known runners only (the operator's
     // spec: "check our momentum tickers of our database"), everything else
     // skips the trackers.

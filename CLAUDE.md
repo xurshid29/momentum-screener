@@ -26,7 +26,7 @@ TELEGRAM_USER_ID=...                                     # optional — dashboar
 DATABENTO_API_KEY=db-...                                 # optional — Databento live (EQUS.MINI) for the tick-feed early-ignition detector
 TICKFEED_ENABLED=true                                    # optional — turn on the live tick feed (needs DATABENTO_API_KEY + a Standard/US-Equities subscription); off unless exactly 'true'
 TICKFEED_PYTHON=python3                                  # optional — python interpreter for the sidecar (default python3)
-ALERTS_DISABLED=tick_watch,accum                         # optional — mute these components' TELEGRAM pushes only; detection, tier_events grading, and the dashboard keep running (slugs: momentum, ignition, new_ignition, fresh_burst, accum, tick_watch, tick_catch, radar, dual_signal, swing, ema_cross, ema_reclaim)
+ALERTS_DISABLED=tick_watch,accum                         # optional — mute these components' TELEGRAM pushes only; detection, grading, and the dashboard keep running (also: edge_armed, edge_entry, edge_bailout)
 COMPONENTS_DISABLED=ignition,momo,setups,ema,swing,outcomes,continuation # optional product gates; this lean set is the default. Empty = enable all; "faders" aliases "continuation"
 ```
 
@@ -44,6 +44,9 @@ Postgres, migrations via `dbmate` in `db/migrations/`.
 | `user_filter_presets` | Per-user saved filters: `user_id`, `name`, `filter` (jsonb), `is_default` |
 | `user_panel_layout` | Per-user panel sizing/visibility: `user_id`, `layout` (jsonb) |
 | `user_chart_prefs` | Per-user chart slots: `user_id`, `slot` (1..4), `ticker`, `interval` |
+| `user_edge_presets` | Per-user/per-ticker Edge rules: custom EMA pair, proximity and bailout buffers, alert switches |
+| `edge_bars_1m` | Small shared 1-minute warmup store for saved Edge tickers only (not the parked global technical universe) |
+| `edge_events` | Durable Armed/Entry/Bailout transitions with indicator snapshot for review and later journal attribution |
 | `broker_imports` | Per-user uploaded broker statement (IBKR `.tlg`): `account`, `file_hash`, period, fill counts |
 | `trade_executions` | Per-user broker fills: `exec_id` (UNIQUE per user — idempotent re-import), `symbol`, `side`, signed `quantity`/`amount`, `commission`, `executed_at` (ET wall clock), `et_date`. Round-trip *trades* (flat-to-flat, P&L by exit date) are derived in `services/ibkr-tlg.ts`, not stored. Powers the `/journal` P&L calendar |
 

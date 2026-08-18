@@ -3,7 +3,7 @@
 A real-time low-float momentum scanner with a multi-panel web dashboard. Polls Finviz Elite every 20s, enriches with Yahoo Finance RSS, Benzinga, SEC EDGAR filings, and Nasdaq trade halts, scores each catalyst, and pushes live updates to a browser dashboard with embedded TradingView charts.
 
 The default 2026-08-18 operating profile is intentionally lean: **Live Ticks,
-Momentum, and Momentum History**. The earlier Ignition/MOMO/SETUPS/EMA/Swing/
+Momentum, Edge, and Momentum History**. The earlier Ignition/MOMO/SETUPS/EMA/Swing/
 Outcomes/Faders experiments remain available behind `COMPONENTS_DISABLED`, but
 their backend compute and writes are parked by default—not merely hidden.
 
@@ -12,6 +12,7 @@ This project began as a single bash script (`screener-poll_breakout.sh`) and is 
 ## Features
 
 - **Live screener** — top low-float momentum runners (filter customizable in UI), updated every 20s via Server-Sent Events; screens the pre-market, regular, and after-hours sessions
+- **Edge playbook** — save a custom fast/slow EMA pair for each top mover; a lightweight 1-minute tracker evaluates session VWAP + standard EMA-MACD 3/15/8 and moves through Watching → Armed → Entry → Bailout. Entry/bailout are closed-candle decisions; dashboard sound/browser notifications and optional Telegram alerts fire once per transition
 - **Ignition screener (optional/parked by default)** — a second, volume-led screen that catches low-float names in the *first minutes* of a move; ranked by a composite runner-score and preserved for selective re-enabling
 - **Multi-source catalysts** — Finviz + Yahoo RSS + Benzinga news, plus **SEC EDGAR filings** (offerings/dilution, 8-Ks, M&A, 13D/G stakes) and **Nasdaq trade halts** — deduped & merged, primary sources outranking aggregators
 - **Catalyst scoring** — every headline is classified by a rule-based engine (and optionally refined by an LLM): impact score, direction, urgency, and risk flags drive the 🔥 badges; click a badge for a modal with the verdict + that ticker's news

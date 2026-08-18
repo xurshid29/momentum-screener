@@ -168,6 +168,45 @@ export interface UserFlaggedTickersTable {
   created_at: Generated<Date>;
 }
 
+export interface UserEdgePresetsTable {
+  user_id: string;
+  ticker: string;
+  ema_fast: number;
+  ema_slow: number;
+  proximity_pct: number;
+  stop_buffer_pct: number;
+  alert_armed: boolean;
+  alert_entry: boolean;
+  alert_bailout: boolean;
+  telegram_enabled: boolean;
+  active: boolean;
+  created_at: Generated<Date>;
+  updated_at: Generated<Date>;
+}
+
+export interface EdgeBars1mTable {
+  ticker: string;
+  bar_ts: ColumnType<Date, Date | string, Date | string>;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export interface EdgeEventsTable {
+  id: Generated<string>;
+  user_id: string;
+  ticker: string;
+  event: 'armed' | 'entry' | 'bailout';
+  setup: string | null;
+  price: number;
+  level: number | null;
+  bailout: number | null;
+  at: Generated<Date>;
+  snapshot: JSONColumnType<Record<string, unknown>>;
+}
+
 // Per-ticker daily OHLCV bars. Powers the Swing screener's daily-timeframe
 // signals (SMAs, 52w high, ATR, base/breakout detection). Loaded from Finviz
 // quote_export and refreshed nightly. See docs/swing-screener-spec.md §4.1.
@@ -415,6 +454,9 @@ export interface Database {
   user_hidden_tickers: UserHiddenTickersTable;
   user_watchlist: UserWatchlistTable;
   user_flagged_tickers: UserFlaggedTickersTable;
+  user_edge_presets: UserEdgePresetsTable;
+  edge_bars_1m: EdgeBars1mTable;
+  edge_events: EdgeEventsTable;
   broker_imports: BrokerImportsTable;
   trade_executions: TradeExecutionsTable;
   tier_events: TierEventsTable;

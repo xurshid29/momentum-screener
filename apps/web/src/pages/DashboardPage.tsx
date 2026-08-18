@@ -3,6 +3,8 @@ import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { useScreenerStream } from '../hooks/useScreenerStream';
 import { useScreenerAlerts } from '../hooks/useScreenerAlerts';
 import { useTabTitleFlash } from '../hooks/useTabTitleFlash';
+import { useEdge } from '../hooks/useEdge';
+import { useEdgeAlerts } from '../hooks/useEdgeAlerts';
 import { ScreenerPanel } from '../components/screener/ScreenerPanel';
 import { SelectedStockPanel } from '../components/screener/SelectedStockPanel';
 import { NewsRoomPanel } from '../components/news/NewsRoomPanel';
@@ -20,6 +22,8 @@ import type { CyclePayload } from '../api/types';
 export function DashboardPage() {
   const { payload, connected } = useScreenerStream();
   useScreenerAlerts(payload);
+  const { events: edgeEvents, isLoading: edgeLoading } = useEdge();
+  useEdgeAlerts(edgeEvents, !edgeLoading);
   useTabTitleFlash(payload);
   const { chartCount } = useLayout();
   const chartsVisible = chartCount > 0;

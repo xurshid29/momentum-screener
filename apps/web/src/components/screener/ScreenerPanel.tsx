@@ -22,6 +22,7 @@ import { OutcomesPanel } from './OutcomesPanel';
 import { EmaReclaimPanel } from './EmaReclaimPanel';
 import { MacdMomoPanel } from './MacdMomoPanel';
 import { MomoSetupsPanel } from './MomoSetupsPanel';
+import { EdgePanel } from './EdgePanel';
 
 const { Text } = Typography;
 
@@ -51,7 +52,7 @@ const SESSION_COLOR: Record<TradingSession, string> = {
   closed: '#8c8c8c',
 };
 
-type ScreenerTab = 'momo' | 'setups' | 'ema' | 'momentum' | 'swing' | 'outcomes' | 'continuation' | 'history';
+type ScreenerTab = 'momo' | 'setups' | 'ema' | 'momentum' | 'edge' | 'swing' | 'outcomes' | 'continuation' | 'history';
 
 // First-appeared time in the operator's TZ (UTC+5), HH:MM, plus how long ago.
 // The "ago" is the staleness cue: a top-of-list +600% name first seen 9h ago is
@@ -478,6 +479,11 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
                 />
               </div>
             ),
+          },
+          {
+            key: 'edge',
+            label: '⚡ Edge',
+            children: <EdgePanel />,
           },
           {
             key: 'swing',

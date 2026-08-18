@@ -3,7 +3,7 @@
 Status as of 2026-08-18. The bash scanner (`screener-poll_breakout.sh`) and the web dashboard are both functional; the bash version remains the reference implementation. The web port lives in `apps/api` + `apps/web` and runs in parallel without sharing state with it.
 
 **Current operating profile — lean manual-playbook desk.** The active UI is
-Live Ticks + Momentum + Momentum History. Ignition, MOMO, SETUPS, EMA, Swing,
+Live Ticks + Momentum + Edge + Momentum History. Ignition, MOMO, SETUPS, EMA, Swing,
 Outcomes, and Faders/Continuation are preserved but parked by the default
 `COMPONENTS_DISABLED=ignition,momo,setups,ema,swing,outcomes,continuation`.
 This is an end-to-end gate, not a cosmetic one: disabled screens stop their
@@ -18,8 +18,14 @@ effective component flags.
 This pivot follows the operator's current 1-minute top-mover workflow: tune an
 EMA pair per ticker, treat those EMAs and session VWAP as dynamic levels, and
 enter only when price bounces/reclaims a level while MACD 3/15/8 turns upward,
-using “breakout or bailout” for risk. The intended next feature is a separate
-Playbook surface for those per-ticker settings and confirmations.
+using “breakout or bailout” for risk. The separate **⚡ Edge** surface is now
+implemented: saved per-user ticker presets; feed-session VWAP; custom EMA
+bounce/reclaim; standard EMA-MACD 3/15/8 line + histogram rise; and a
+Warming/Watching/Armed/Entry/Bailout state machine. Armed is an intrabar early
+warning; Entry and Bailout are completed-1m-bar transitions. Per-preset browser,
+sound and Telegram switches ride a durable `edge_events` log. The service uses
+the existing Databento stream and stores only saved tickers in `edge_bars_1m`,
+so the parked global EMA/MACD machinery remains off.
 
 **Pre-pivot snapshot (retained for restoration context)** — the screener had five tabs (`[Momentum] [Swing] [History] [Outcomes] [Faders]` — Momentum default-sorts by **Heat**; "Faders" is the demoted-and-reframed former Continuation tab, see 2026-06-11 note below), the Ignition sidebar stayed always-visible on the left, three Telegram alert paths fired (Momentum / Ignition / Swing / Continuation-dual-signal 🎯), and one cached view (Continuation) refreshed every ~10 min, seeding from **both** screens (`screener_results ∪ ignition_results`) and forward-tracking each name via `daily_bars`. Every Swing-spec step (1–6) and the Continuation/History/dual-signal additions remain in the repository.
 
