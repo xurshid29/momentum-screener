@@ -20,6 +20,7 @@ import { MomoSetupTracker, type MomoSetupBar } from './momo-setup.js';
 import { universe } from './universe.js';
 import { poller } from './poller.js';
 import { getDb } from '../db/index.js';
+import { getComponentFlags, technicalTrackersEnabled } from '../config/components.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -438,20 +439,25 @@ class TickFeedService {
       ticker, bar_ts: new Date(closeTs * 1000), close, volume,
       open: ohl?.o ?? null, high: ohl?.h ?? null, low: ohl?.l ?? null,
     });
-    this.momoSetup.add5mBar(ticker, {
-      closeTs, open: ohl?.o ?? close, high: ohl?.h ?? close,
-      low: ohl?.l ?? close, close, volume,
-    });
+    const components = getComponentFlags();
+    if (components.setups) {
+      this.momoSetup.add5mBar(ticker, {
+        closeTs, open: ohl?.o ?? close, high: ohl?.h ?? close,
+        low: ohl?.l ?? close, close, volume,
+      });
+    }
     // ⤴ MACD momentum-curl layer (2026-08-06): rides the exact same closed
     // 5m bars — the callback only fires for known runners, and the poller
     // gates events to the day's top-gainer set. Closed-bar only by design
     // (the operator's TV MACD has "Wait for timeframe closes" checked).
-    const mev = this.macdCurl.addClosedBar(ticker, closeTs, close);
-    if (mev) {
-      this.momoSetup.onMacdEvent(mev);
-      poller.onMacdCurlEvent(mev);
+    if (components.momo || components.setups) {
+      const mev = this.macdCurl.addClosedBar(ticker, closeTs, close);
+      if (mev) {
+        if (components.setups) this.momoSetup.onMacdEvent(mev);
+        if (components.momo) poller.onMacdCurlEvent(mev);
+      }
     }
-    this.flushMomoSetupTransitions();
+    if (components.setups) this.flushMomoSetupTransitions();
   });
   // ⤴ MACD 3/10/8 (all-SMA) state per known runner — the second-leg
   // detector behind the top-gainers MOMO tab. See services/macd-curl.ts.
@@ -493,22 +499,28 @@ class TickFeedService {
       // ⤴ 15m MACD variant rides this layer's closed bars (lazy `this` —
       // evaluated per bar, long after construction).
       alsoOnBar: (t, ts, c) => {
+        const components = getComponentFlags();
+        if (!components.momo && !components.setups) return;
         const mev = this.macdCurl15m.addClosedBar(t, ts, c);
-        if (mev) poller.onMacdCurlEvent(mev);
+        if (mev && components.momo) poller.onMacdCurlEvent(mev);
       },
     }),
     makeHtfLayer(EMA_CROSS_1H, 'bars_1h', {
       spanDays: 30, retentionDays: 35, deepDays: 25, offset: () => 0, schema: 'ohlcv-1h', yahooInterval: '1h', yahooRange: '60d',
       alsoOnBar: (t, ts, c) => {
+        const components = getComponentFlags();
+        if (!components.momo && !components.setups) return;
         const mev = this.macdCurl1h.addClosedBar(t, ts, c);
-        if (mev) poller.onMacdCurlEvent(mev);
+        if (mev && components.momo) poller.onMacdCurlEvent(mev);
       },
     }),
     makeHtfLayer(EMA_CROSS_4H, 'bars_4h', {
       spanDays: 120, retentionDays: 130, deepDays: 100, offset: etBucketOffsetSec, schema: 'ohlcv-1h', yahooInterval: '1h', yahooRange: '60d',
       alsoOnBar: (t, ts, c) => {
+        const components = getComponentFlags();
+        if (!components.momo && !components.setups) return;
         const mev = this.macdCurl4h.addClosedBar(t, ts, c);
-        if (mev) poller.onMacdCurlEvent(mev);
+        if (mev && components.momo) poller.onMacdCurlEvent(mev);
       },
     }),
     // 1d (2026-07-26): the swing layer. 240d of ohlcv-1h re-bucketed to the
@@ -543,6 +555,7 @@ class TickFeedService {
   private syncTimer: NodeJS.Timeout | null = null;
   private screenSyncTimer: NodeJS.Timeout | null = null;
   private running = false;
+  private technicalEnabled = false;
   private etDate = etDate();
   private lastBarAt = 0;
   private barsSeen = 0;
@@ -563,6 +576,8 @@ class TickFeedService {
     return {
       enabled: TICKFEED.enabled,
       running: this.running,
+      technical_trackers_enabled: this.technicalEnabled,
+      components: getComponentFlags(),
       symbols_tracked: this.detector.symbolsTracked(),
       ema_cross_tracked: this.emaCross.symbolsTracked(),
       macd_curl_tracked: this.macdCurl.symbolsTracked(),
@@ -591,21 +606,25 @@ class TickFeedService {
     }
     if (this.running) return;
     this.running = true;
+    this.technicalEnabled = technicalTrackersEnabled();
     // Let the poller refresh in-flight observation rows from tracker state
     // (live price / % since the reclaim / the 'building' promotion). Passed
     // as a callback because tickfeed imports poller, not the reverse.
-    poller.setReclaimProgressSource((ticker, tf, xp) => this.reclaimProgress(ticker, tf, xp));
-    poller.setMacdSnapshotSource((ticker, livePrice, variant) => this.macdSnapshot(ticker, livePrice, variant));
-    poller.setMomoSetupSnapshotSource((ticker) => this.momoSetup.snapshot(ticker));
-    console.log('[tickfeed] starting');
+    if (this.technicalEnabled) {
+      poller.setReclaimProgressSource((ticker, tf, xp) => this.reclaimProgress(ticker, tf, xp));
+      poller.setMacdSnapshotSource((ticker, livePrice, variant) => this.macdSnapshot(ticker, livePrice, variant));
+      poller.setMomoSetupSnapshotSource((ticker) => this.momoSetup.snapshot(ticker));
+    }
+    console.log(`[tickfeed] starting${this.technicalEnabled ? '' : ' in lean detector-only mode'}`);
     // Seed the EMA-cross tracker from persisted bars BEFORE the sidecar
     // starts streaming, so live ticks can't interleave with the replay.
-    void this.seedEmaBars().finally(() => {
+    const startStream = () => {
       if (!this.running) return;
       this.spawnSidecar();
       setTimeout(() => this.sync(), TICKFEED.initial_delay_ms);
       this.syncTimer = setInterval(() => this.sync(), TICKFEED.sync_interval_ms);
       this.screenSyncTimer = setInterval(() => this.syncScreenRows(), TICKFEED.screen_sync_interval_ms);
+      if (!this.technicalEnabled) return;
       this.barFlushTimer = setInterval(() => this.flushBars(), 5_000);
       // Backfill under-warmed known runners from Yahoo shortly after boot
       // (the DB seed above has already run, so the scan sees what's missing),
@@ -617,7 +636,11 @@ class TickFeedService {
       // their consolidated bars into the tracker the same day, not tomorrow.
       // Per-symbol retry windows (ATTEMPT_RETRY_MS) bound the fetch volume.
       this.backfillTimer = setInterval(() => void this.scanBackfill(), 3600_000);
-    });
+    };
+    // In lean mode the sidecar starts immediately: no multi-million-row EMA
+    // replay, backfill scan, bar buffers, or bar-table writes.
+    if (this.technicalEnabled) void this.seedEmaBars().finally(startStream);
+    else startStream();
   }
 
   stop(): void {
@@ -630,7 +653,7 @@ class TickFeedService {
     this.barFlushTimer = null;
     if (this.backfillTimer) clearInterval(this.backfillTimer);
     this.backfillTimer = null;
-    this.flushBars();
+    if (this.technicalEnabled) this.flushBars();
     this.rl?.close();
     this.child?.kill();
     this.child = null;
@@ -642,6 +665,7 @@ class TickFeedService {
   // closes that; the 4h layer can NEVER warm up live (~2-3 weeks of bars),
   // so its replay + the Databento backfill are load-bearing, not resilience.
   private async seedEmaBars(): Promise<void> {
+    const components = getComponentFlags();
     // The gap-decay's session clock must be right BEFORE the replay — the
     // sync() push only happens after the sidecar starts.
     const etOff = etUtcOffsetHours();
@@ -656,35 +680,41 @@ class TickFeedService {
     // (17-bar warmup — trivial next to the EMA65's).
     await this.seedTrackerFromTable('bars_5m', 5 * 86_400_000, this.emaCross, '5m',
       (ticker, closeTs, close, volume) => {
-        this.macdCurl.addClosedBar(ticker, closeTs, close, true);
-        this.momoSetup.add5mBar(ticker, { closeTs, open: close, high: close, low: close, close, volume }, true);
+        if (components.momo || components.setups) this.macdCurl.addClosedBar(ticker, closeTs, close, true);
+        if (components.setups) {
+          this.momoSetup.add5mBar(ticker, { closeTs, open: close, high: close, low: close, close, volume }, true);
+        }
       });
     // 2m variant: replay bars_2m (2d — the 23-bar warmup needs far less; no
     // split adjustment on a horizon this short, splits land at day seams).
-    try {
-      const rows = await getDb()
-        .selectFrom('bars_2m')
-        .select(['ticker', 'bar_ts', 'open', 'high', 'low', 'close', 'volume'])
-        .where('bar_ts', '>', new Date(Date.now() - 2 * 86_400_000))
-        .orderBy('ticker', 'asc')
-        .orderBy('bar_ts', 'asc')
-        .execute();
-      for (const r of rows) {
-        const closeTs = Math.floor(new Date(r.bar_ts).getTime() / 1000);
-        const close = Number(r.close);
-        this.macdCurl2m.addClosedBar(r.ticker, closeTs, close, true);
-        this.momoSetup.add2mBar(r.ticker, {
-          closeTs, open: Number(r.open ?? close), high: Number(r.high ?? close),
-          low: Number(r.low ?? close), close, volume: Number(r.volume),
-        }, true);
+    if (components.momo || components.setups) {
+      try {
+        const rows = await getDb()
+          .selectFrom('bars_2m')
+          .select(['ticker', 'bar_ts', 'open', 'high', 'low', 'close', 'volume'])
+          .where('bar_ts', '>', new Date(Date.now() - 2 * 86_400_000))
+          .orderBy('ticker', 'asc')
+          .orderBy('bar_ts', 'asc')
+          .execute();
+        for (const r of rows) {
+          const closeTs = Math.floor(new Date(r.bar_ts).getTime() / 1000);
+          const close = Number(r.close);
+          this.macdCurl2m.addClosedBar(r.ticker, closeTs, close, true);
+          if (components.setups) {
+            this.momoSetup.add2mBar(r.ticker, {
+              closeTs, open: Number(r.open ?? close), high: Number(r.high ?? close),
+              low: Number(r.low ?? close), close, volume: Number(r.volume),
+            }, true);
+          }
+        }
+        console.log(`[macd-momo] seeded ${rows.length} closed 2m bars — 3/15/8 warmup carried over`);
+      } catch (err) {
+        console.error('[macd-momo] 2m bar seed failed (continuing unseeded):', err instanceof Error ? err.message : err);
       }
-      console.log(`[macd-momo] seeded ${rows.length} closed 2m bars — 3/15/8 warmup carried over`);
-    } catch (err) {
-      console.error('[macd-momo] 2m bar seed failed (continuing unseeded):', err instanceof Error ? err.message : err);
     }
     for (const l of this.htfLayers) {
       // The 15m/1h/4h MACD variants warm from the same split-adjusted replay.
-      const mt = this.macdForTf(l.cfg.tf);
+      const mt = components.momo || components.setups ? this.macdForTf(l.cfg.tf) : null;
       await this.seedTrackerFromTable(l.table, l.retentionDays * 86_400_000, l.tracker, l.cfg.tf,
         mt ? (ticker, closeTs, close) => mt.addClosedBar(ticker, closeTs, close, true) : undefined);
     }
@@ -1231,23 +1261,25 @@ class TickFeedService {
     if (today !== this.etDate) {
       this.etDate = today;
       this.detector.reset();
-      this.emaCross.resetDaily();
-      this.macdCurl.resetDaily();
-      this.macdCurl2m.resetDaily();
-      this.macdCurl15m.resetDaily();
-      this.macdCurl1h.resetDaily();
-      this.macdCurl4h.resetDaily();
-      this.momoSetup.resetDaily();
-      void getDb()
-        .deleteFrom('bars_2m')
-        .where('bar_ts', '<', new Date(Date.now() - 3 * 86_400_000))
-        .execute()
-        .catch(() => { /* retried next midnight */ });
+      if (this.technicalEnabled) {
+        this.emaCross.resetDaily();
+        this.macdCurl.resetDaily();
+        this.macdCurl2m.resetDaily();
+        this.macdCurl15m.resetDaily();
+        this.macdCurl1h.resetDaily();
+        this.macdCurl4h.resetDaily();
+        this.momoSetup.resetDaily();
+        void getDb()
+          .deleteFrom('bars_2m')
+          .where('bar_ts', '<', new Date(Date.now() - 3 * 86_400_000))
+          .execute()
+          .catch(() => { /* retried next midnight */ });
+      }
       this.extraSubs.clear();
       this.backfillAttempted.clear();
       this.sparseAttempted.clear();
       // Prune persisted bars beyond their seed windows (fire-and-forget).
-      void getDb()
+      if (this.technicalEnabled) void getDb()
         .deleteFrom('bars_5m')
         // 45 days, raised from 6 (2026-07-30). The reclaim review needs ~10
         // sessions of post-confirm bars and 6-day retention pruned the early
@@ -1261,15 +1293,17 @@ class TickFeedService {
         .where('bar_ts', '<', new Date(Date.now() - 45 * 86_400_000))
         .execute()
         .catch(() => { /* retried next midnight */ });
-      for (const l of this.htfLayers) {
-        l.tracker.resetDaily();
-        l.tracker.setBucketOffset(l.offset()); // DST roll-over safe
-        l.attempted.clear();
-        void getDb()
-          .deleteFrom(l.table)
-          .where('bar_ts', '<', new Date(Date.now() - l.retentionDays * 86_400_000))
-          .execute()
-          .catch(() => { /* retried next midnight */ });
+      if (this.technicalEnabled) {
+        for (const l of this.htfLayers) {
+          l.tracker.resetDaily();
+          l.tracker.setBucketOffset(l.offset()); // DST roll-over safe
+          l.attempted.clear();
+          void getDb()
+            .deleteFrom(l.table)
+            .where('bar_ts', '<', new Date(Date.now() - l.retentionDays * 86_400_000))
+            .execute()
+            .catch(() => { /* retried next midnight */ });
+        }
       }
       // Fresh Databento session for the new day.
       this.child?.kill();
@@ -1279,16 +1313,18 @@ class TickFeedService {
     // and the gap-decay's session clock (EDT/EST offset).
     const sessionOpen = lastSessionOpenSec();
     const etOff = etUtcOffsetHours();
-    this.emaCross.setSessionOpen(sessionOpen);
-    this.emaCross.setEtOffset(etOff);
-    this.macdCurl.setEtOffset(etOff);
-    this.macdCurl2m.setEtOffset(etOff);
-    this.macdCurl15m.setEtOffset(etOff);
-    this.macdCurl1h.setEtOffset(etOff);
-    this.macdCurl4h.setEtOffset(etOff);
-    for (const l of this.htfLayers) {
-      l.tracker.setSessionOpen(sessionOpen);
-      l.tracker.setEtOffset(etOff);
+    if (this.technicalEnabled) {
+      this.emaCross.setSessionOpen(sessionOpen);
+      this.emaCross.setEtOffset(etOff);
+      this.macdCurl.setEtOffset(etOff);
+      this.macdCurl2m.setEtOffset(etOff);
+      this.macdCurl15m.setEtOffset(etOff);
+      this.macdCurl1h.setEtOffset(etOff);
+      this.macdCurl4h.setEtOffset(etOff);
+      for (const l of this.htfLayers) {
+        l.tracker.setSessionOpen(sessionOpen);
+        l.tracker.setEtOffset(etOff);
+      }
     }
     const priors = universe.getPriorCloses();
     for (const [t, c] of priors) this.detector.setPriorClose(t, c);
@@ -1408,7 +1444,7 @@ class TickFeedService {
     // 📈 EMA-cross layers (5m + HTF) — known runners only (the operator's
     // spec: "check our momentum tickers of our database"), everything else
     // skips the trackers.
-    if (poller.isKnownRunner(m.s)) {
+    if (this.technicalEnabled && poller.isKnownRunner(m.s)) {
       const xev = this.emaCross.addBar(m.s, m.t, m.c, m.v);
       if (xev) poller.onEmaCrossEvent(xev);
       // The reclaim channel's events arrive via the queue (never the return
@@ -1423,36 +1459,41 @@ class TickFeedService {
       // per-second stream here (causal, like everywhere: a bucket closes
       // when a trade lands in a later one). Closed bars feed the 3/15/8
       // tracker and persist to bars_2m for warmup continuity.
-      const b2 = Math.floor(m.t / MACD_CURL_2M.interval_sec) * MACD_CURL_2M.interval_sec;
-      const cur2 = this.bucket2m.get(m.s);
-      if (!cur2) {
-        this.bucket2m.set(m.s, { bucket: b2, open: m.o, high: m.h, low: m.l, close: m.c, vol: m.v });
-      } else if (b2 === cur2.bucket) {
-        if (m.h > cur2.high) cur2.high = m.h;
-        if (m.l < cur2.low) cur2.low = m.l;
-        cur2.close = m.c;
-        cur2.vol += m.v;
-      } else if (b2 > cur2.bucket) {
-        const closeTs = cur2.bucket + MACD_CURL_2M.interval_sec;
-        const setupBar: MomoSetupBar = {
-          closeTs, open: cur2.open, high: cur2.high, low: cur2.low,
-          close: cur2.close, volume: cur2.vol,
-        };
-        this.momoSetup.add2mBar(m.s, setupBar);
-        this.flushMomoSetupTransitions();
-        const mev2 = this.macdCurl2m.addClosedBar(m.s, closeTs, cur2.close);
-        if (mev2) poller.onMacdCurlEvent(mev2);
-        this.bar2Buffer.push({
-          ticker: m.s, bar_ts: new Date(closeTs * 1000), close: cur2.close, volume: cur2.vol,
-          open: cur2.open, high: cur2.high, low: cur2.low,
-        });
-        this.bucket2m.set(m.s, { bucket: b2, open: m.o, high: m.h, low: m.l, close: m.c, vol: m.v });
+      const components = getComponentFlags();
+      if (components.momo || components.setups) {
+        const b2 = Math.floor(m.t / MACD_CURL_2M.interval_sec) * MACD_CURL_2M.interval_sec;
+        const cur2 = this.bucket2m.get(m.s);
+        if (!cur2) {
+          this.bucket2m.set(m.s, { bucket: b2, open: m.o, high: m.h, low: m.l, close: m.c, vol: m.v });
+        } else if (b2 === cur2.bucket) {
+          if (m.h > cur2.high) cur2.high = m.h;
+          if (m.l < cur2.low) cur2.low = m.l;
+          cur2.close = m.c;
+          cur2.vol += m.v;
+        } else if (b2 > cur2.bucket) {
+          const closeTs = cur2.bucket + MACD_CURL_2M.interval_sec;
+          const setupBar: MomoSetupBar = {
+            closeTs, open: cur2.open, high: cur2.high, low: cur2.low,
+            close: cur2.close, volume: cur2.vol,
+          };
+          if (components.setups) {
+            this.momoSetup.add2mBar(m.s, setupBar);
+            this.flushMomoSetupTransitions();
+          }
+          const mev2 = this.macdCurl2m.addClosedBar(m.s, closeTs, cur2.close);
+          if (mev2 && components.momo) poller.onMacdCurlEvent(mev2);
+          this.bar2Buffer.push({
+            ticker: m.s, bar_ts: new Date(closeTs * 1000), close: cur2.close, volume: cur2.vol,
+            open: cur2.open, high: cur2.high, low: cur2.low,
+          });
+          this.bucket2m.set(m.s, { bucket: b2, open: m.o, high: m.h, low: m.l, close: m.c, vol: m.v });
+        }
+        // b2 < cur2.bucket = stale/out-of-order tick — ignore, like addBar.
       }
-      // b2 < cur2.bucket = stale/out-of-order tick — ignore, like addBar.
     }
     // Fold this tick into its 5m bucket extremes — AFTER the trackers, so a
     // bar-close callback above still sees the bucket it is closing.
-    if (poller.isKnownRunner(m.s)) {
+    if (this.technicalEnabled && poller.isKnownRunner(m.s)) {
       const bucket = Math.floor(m.t / EMA_CROSS.interval_sec) * EMA_CROSS.interval_sec;
       const acc = this.bucketOhl.get(m.s);
       if (!acc || acc.bucket !== bucket) {

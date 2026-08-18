@@ -453,6 +453,9 @@ export interface CyclePayload {
   polled_at: string | null;
   session: TradingSession;
   config: ScreenerFilterSnapshot;
+  // Optional for rolling-deploy compatibility with an older API. The web
+  // defaults to the lean surface when this field is absent.
+  components?: ComponentFlags;
   rows: EnrichedRow[];
   ignition: IgnitionRow[];
   swing: SwingRow[];
@@ -465,6 +468,26 @@ export interface CyclePayload {
   macd_momo: MacdMomoItem[];
   momo_setups: MomoSetupItem[];
 }
+
+export interface ComponentFlags {
+  ignition: boolean;
+  momo: boolean;
+  setups: boolean;
+  ema: boolean;
+  swing: boolean;
+  outcomes: boolean;
+  continuation: boolean;
+}
+
+export const LEAN_COMPONENT_FLAGS: ComponentFlags = {
+  ignition: false,
+  momo: false,
+  setups: false,
+  ema: false,
+  swing: false,
+  outcomes: false,
+  continuation: false,
+};
 
 export interface HistoryRow {
   id: string;

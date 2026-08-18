@@ -20,6 +20,7 @@ import { dailyBars } from './services/daily-bars.js';
 import { tickfeed } from './services/tickfeed.js';
 import { outcomes } from './services/outcomes.js';
 import { telegramBot } from './services/telegram-bot.js';
+import { componentEnabled, dailyBarsEnabled, getComponentFlags } from './config/components.js';
 
 // Safety net: an unhandled promise rejection in any async route (e.g. a bad
 // query) would otherwise crash the whole process — taking down the poller and
@@ -47,6 +48,7 @@ app.get('/health', async (_req, res) => {
   res.json({
     status: dbOk ? 'ok' : 'degraded',
     database: dbOk ? 'connected' : 'disconnected',
+    components: getComponentFlags(),
     poller: poller.status(),
     universe: universe.status(),
     shelf: shelf.status(),
@@ -79,12 +81,15 @@ app.listen(port, () => {
   void poller.start();
   universe.start();
   shelf.start();
-  dailyBars.start();
+  if (dailyBarsEnabled()) dailyBars.start();
+  else console.log('[daily-bars] parked — swing, outcomes and continuation are disabled');
   tickfeed.start();
   telegramBot.start();
   // One-time catch-up: backfill outcomes for the existing detection history on
   // boot (the post-close trigger only covers go-forward days). Delayed so the
   // schema/connection are warm and the daily-bars service has begun populating
   // bars. Best-effort — the service swallows its own errors.
-  setTimeout(() => void outcomes.computeOutcomes(), 60_000);
+  if (componentEnabled('outcomes')) {
+    setTimeout(() => void outcomes.computeOutcomes(), 60_000);
+  }
 });

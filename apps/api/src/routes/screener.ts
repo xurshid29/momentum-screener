@@ -9,6 +9,7 @@ import { dailyBars, getRecentBars } from '../services/daily-bars.js';
 import { addClient } from '../services/sse.js';
 import { nasdaqTickerSet } from '../services/edgar.js';
 import { getDb } from '../db/index.js';
+import { getComponentFlags } from '../config/components.js';
 
 const router = Router();
 
@@ -33,11 +34,14 @@ router.get('/latest', authMiddleware, async (_req, res) => {
   const p = poller.getLastPayload();
   if (p) return res.json({ data: p });
 
+  const components = getComponentFlags();
   const empty = {
     cycle_id: '', polled_at: null, session: 'closed' as const, config: poller.getConfig(),
+    components,
     rows: [], ignition: [], swing: [], continuation: [],
     banners: { new_with_catalyst: [], fresh_news: [] },
     fresh_news: [], tick_catches: [], news_radar: [], ema_crosses: [],
+    macd_momo: [], momo_setups: [],
   };
   try {
     const db = getDb();
@@ -51,8 +55,10 @@ router.get('/latest', authMiddleware, async (_req, res) => {
 
     const [rows, ignition] = await Promise.all([
       db.selectFrom('screener_results').selectAll().where('cycle_id', '=', cycle.id).execute(),
-      db.selectFrom('ignition_results').selectAll().where('cycle_id', '=', cycle.id)
-        .orderBy('runner_score', 'desc').execute(),
+      components.ignition
+        ? db.selectFrom('ignition_results').selectAll().where('cycle_id', '=', cycle.id)
+            .orderBy('runner_score', 'desc').execute()
+        : Promise.resolve([]),
     ]);
     res.json({
       data: {

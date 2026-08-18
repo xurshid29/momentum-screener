@@ -112,6 +112,7 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
   // (default) screener tab on 2026-07-28 — see EmaReclaimPanel. Five
   // timeframes never fit here, and it is the operator's primary instrument.
   const hiddenList = [...hidden].sort();
+  const ignitionEnabled = payload?.components?.ignition ?? false;
 
   const renderRow = (r: IgnitionRow) => (
     <IgnitionItem
@@ -124,6 +125,56 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
       warned={isWarned(r.ticker)}
     />
   );
+
+  // Lean trading desk: the experimental Ignition list and radar are parked,
+  // while the Databento detector remains live. Ignore the old per-section hide
+  // preference here so a previously hidden LIVE TICKS section cannot produce
+  // a mysteriously blank primary panel after switching modes.
+  if (!ignitionEnabled) {
+    return (
+      <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <div
+          style={{
+            padding: '6px 8px', borderBottom: '2px solid #1765ad',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            background: '#0d1b26',
+          }}
+        >
+          <span>
+            <Text strong style={{ color: '#69c0ff', letterSpacing: 0.5, fontSize: 15 }}>🛰️ Live Ticks</Text>
+            <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>
+              {tickCatches.filter((t) => t.status !== 'faded').length}
+            </Text>
+          </span>
+          {hiddenList.length > 0 && (
+            <Popover
+              trigger="click"
+              placement="bottomRight"
+              content={<HiddenList tickers={hiddenList} onUnhide={unhide} />}
+            >
+              <Button type="text" size="small" icon={<EyeInvisibleOutlined />} style={{ fontSize: 11, color: '#8c8c8c' }}>
+                {hiddenList.length}
+              </Button>
+            </Popover>
+          )}
+        </div>
+        {tickCatches.length > 0 ? (
+          <div style={{ flex: '1 1 auto', minHeight: 0, overflow: 'auto', background: '#0d1b26' }}>
+            {tickCatches.map((tc) => (
+              <TickItem key={tc.ticker} tc={tc} selected={tc.ticker === selected} onSelect={setSelected} />
+            ))}
+          </div>
+        ) : (
+          <div style={{ flex: '1 1 auto', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={<Text type="secondary" style={{ fontSize: 12 }}>Waiting for live tick signals</Text>}
+            />
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>

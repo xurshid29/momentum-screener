@@ -85,9 +85,12 @@ export function SelectedStockPanel({ payload }: SelectedStockPanelProps) {
   // History — also gives us a fallback metadata source if the ticker dropped
   // out of the live screener (the most recent recorded row has the company info).
   const { data: history } = useQuery({
-    queryKey: ['history', selected, payload?.cycle_id],
+    // History is not live state. Keying it by cycle_id forced a full database
+    // query every 20-second SSE update for the same ticker.
+    queryKey: ['history', selected],
     queryFn: () => (selected ? screenerApi.history(selected, 100) : Promise.resolve([] as HistoryRow[])),
     enabled: !!selected,
+    staleTime: 60_000,
   });
 
   // Pick the freshest source of metadata: live row first, then most recent history.

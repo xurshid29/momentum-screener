@@ -37,6 +37,12 @@ import { classifyByRules, type Classification, type ClassifierInput } from './ca
 import { recordTierEvent } from './tier-events.js';
 import { classifyByClaude, llmEnabled } from './catalyst-claude.js';
 import { fetchAndStoreTickerNews } from './ticker-news.js';
+import {
+  componentEnabled,
+  dailyBarsEnabled,
+  getComponentFlags,
+  type ComponentFlags,
+} from '../config/components.js';
 
 const DEFAULTS: ScreenerFilterSnapshot = {
   // Note: no `sh_float_u50` here. Finviz drops rows with null Float when that
@@ -536,6 +542,7 @@ export interface CyclePayload {
   polled_at: string;
   session: TradingSession;
   config: ScreenerFilterSnapshot;
+  components: ComponentFlags;
   rows: EnrichedRow[];
   banners: {
     new_with_catalyst: string[];
@@ -850,6 +857,7 @@ class PollerService {
           ? new Date(this.lastContinuationComputedAt).toISOString()
           : null,
       },
+      components: getComponentFlags(),
       telegram_enabled: telegramEnabled(),
       config: this.config,
     };
@@ -1068,6 +1076,7 @@ class PollerService {
   }
 
   onEmaCrossEvent(e: import('./ema-cross.js').EmaCrossEvent): void {
+    if (!componentEnabled('ema')) return;
     const nowMs = Date.now();
     const tf = emaCrossTfOf(e.tf);
     const signal: 'cross' | 'reclaim' = e.signal === 'reclaim' ? 'reclaim' : 'cross';
@@ -1163,6 +1172,8 @@ class PollerService {
   }
 
   private qualifyMacdMomo(ticker: string, via: 'momentum' | 'top10' | 'chg', atIso: string): void {
+    const components = getComponentFlags();
+    if (!components.momo && !components.setups) return;
     if (this.macdMomoQualified.has(ticker)) return;
     this.macdMomoQualified.set(ticker, { qualified_at: atIso, via });
     // Qualification is durable even when the name never emits a setup. This
@@ -1180,6 +1191,7 @@ class PollerService {
   // here (the live snapshot carries the cooling geometry) and stay out of
   // tier_events (episode ends are derivable from the next cross-down).
   onMacdCurlEvent(e: import('./macd-curl.js').MacdCurlEvent): void {
+    if (!componentEnabled('momo')) return;
     const q = this.macdMomoQualified.get(e.ticker);
     if (!q || e.type === 'fade') return;
     const variant: MacdMomoItem['variant'] =
@@ -1224,6 +1236,7 @@ class PollerService {
   }
 
   onMomoSetupTransition(e: import('./momo-setup.js').MomoSetupTransition): void {
+    if (!componentEnabled('setups')) return;
     const q = this.macdMomoQualified.get(e.ticker);
     if (!q) return;
     const setup = this.momoSetupSnapshotFn?.(e.ticker) ?? null;
@@ -1542,9 +1555,14 @@ class PollerService {
   // confirmed crosses survive.
   private async seedTierState() {
     try {
+      const components = getComponentFlags();
+      const tiers = ['accum', 'tick', 'radar'];
+      if (components.ema) tiers.push('cross');
+      if (components.momo || components.setups) tiers.push('macd');
       const rows = await getDb()
         .selectFrom('tier_events')
         .select(['tier', 'event', 'ticker', 'at', 'meta'])
+        .where('tier', 'in', tiers)
         .where(sql<boolean>`(at AT TIME ZONE 'America/New_York')::date = (now() AT TIME ZONE 'America/New_York')::date`)
         .orderBy('at', 'asc')
         .execute();
@@ -1653,7 +1671,7 @@ class PollerService {
           } else if (r.event === 'expired' || r.event === 'dropped') {
             this.newsRadar.delete(t);
           }
-        } else if (r.tier === 'cross') {
+        } else if (r.tier === 'cross' && components.ema) {
           const xtf = emaCrossTfOf(m.tf);
           const xsig: 'cross' | 'reclaim' = m.signal === 'reclaim' ? 'reclaim' : 'cross';
           const xkey = xsig === 'reclaim' ? `${xtf}|R|${t}` : `${xtf}|${t}`;
@@ -1690,7 +1708,7 @@ class PollerService {
           } else if (r.event === 'expire') {
             this.emaCrosses.delete(xkey);
           }
-        } else if (r.tier === 'macd') {
+        } else if (r.tier === 'macd' && (components.momo || components.setups)) {
           // ⤴ MOMO events reseed the per-ticker setup/cross timestamps and
           // re-qualify the name (events only ever record while qualified).
           // Names that qualified without an event re-qualify from the live
@@ -1735,7 +1753,9 @@ class PollerService {
         }
       }
       // News enrichment for the reseeded cross rows (DB/cache-first, cheap).
-      for (const xc of this.emaCrosses.values()) void this.enrichCrossNews(xc.ticker);
+      if (components.ema) {
+        for (const xc of this.emaCrosses.values()) void this.enrichCrossNews(xc.ticker);
+      }
       console.log(
         `[poller] seeded tier state from today's tier_events (${rows.length} events) — ` +
         `ladder ${this.tickCatches.size}, radar ${this.newsRadar.size}, crosses ${this.emaCrosses.size}; ` +
@@ -1759,7 +1779,7 @@ class PollerService {
     this.lastEtDate = etDateString(new Date());
     await this.seedFirstSeen();
     await this.seedVwapState();
-    await this.seedIgnitionState();
+    if (componentEnabled('ignition')) await this.seedIgnitionState();
     await this.seedRadarHistory();
     await this.seedTierState();
     console.log(`[poller] starting (every ${this.config.interval_sec}s)`);
@@ -1789,6 +1809,7 @@ class PollerService {
     const now = new Date();
     const todayEt = etDateString(now);
     const session = currentEtSession(now);
+    const components = getComponentFlags();
     // The NEWS day rolls at 04:00 ET (premarket start), not midnight. The
     // closed session (00:00–04:00 ET) belongs to the trading day that just
     // finished — the board still shows that day's change%, so stripping its
@@ -1843,7 +1864,7 @@ class PollerService {
       // Mark every cached daily-bar ticker stale so yesterday's just-closed
       // bar gets fetched today. The actual fetches happen on the daily-bars
       // service's own drain loop — this is just an invalidation signal.
-      dailyBars.invalidateAll();
+      if (dailyBarsEnabled()) dailyBars.invalidateAll();
       this.lastEtDate = todayEt;
     }
     // A session boundary (notably the 4pm regular→after-hours flip) swaps the
@@ -1866,9 +1887,9 @@ class PollerService {
     // (~20 min), and once after the 16:30 ET close. On non-trigger cycles
     // we re-broadcast the cached lastSwingRows so the SSE payload still
     // carries the most-recent computed swing list.
-    this.swingCounter += 1;
+    if (components.swing) this.swingCounter += 1;
     const etMin = etMinuteOfDay(now);
-    const isPostCloseTrigger =
+    const isPostCloseTrigger = components.swing &&
       etMin >= SWING.post_close_minute_et &&
       session !== 'closed' &&
       this.lastForcedSwingPostCloseDate !== todayEt;
@@ -1876,15 +1897,15 @@ class PollerService {
     // the process-local lastSwingRows, or a fetch failed), retry — but BOUNDED
     // to once per empty_retry_ms, not every cycle. Retrying the up-to-9-call
     // AH burst every 20s would sustain a Finviz 429 and never recover.
-    const emptyRetry =
+    const emptyRetry = components.swing &&
       this.lastSwingRows.length === 0 &&
       session !== 'closed' &&
       now.getTime() - this.lastSwingAttemptMs >= SWING.empty_retry_ms;
-    const shouldRefreshSwing =
+    const shouldRefreshSwing = components.swing && (
       this.swingCounter === 1 ||
       this.swingCounter % SWING.cadence_cycles === 0 ||
       isPostCloseTrigger ||
-      emptyRetry;
+      emptyRetry);
 
     // Forward outcome tracking — once per ET day, in the same post-close window
     // as the Swing refresh. Fire-and-forget so it never blocks the cycle; the
@@ -1892,6 +1913,7 @@ class PollerService {
     // exact timing vs the daily-bars refresh doesn't matter. Skipped while
     // 'closed' (weekends/holidays) — nothing new to score.
     if (
+      components.outcomes &&
       etMin >= SWING.post_close_minute_et &&
       session !== 'closed' &&
       this.lastOutcomesDate !== todayEt
@@ -1904,10 +1926,10 @@ class PollerService {
     // (5-day window over ignition_results) costs ~1.5 s, so we cache and
     // refresh on a slow drumbeat. Errors keep the previous list rather than
     // emptying the tab on a transient DB blip.
-    this.continuationCounter += 1;
-    const shouldRefreshContinuation =
+    if (components.continuation) this.continuationCounter += 1;
+    const shouldRefreshContinuation = components.continuation && (
       this.continuationCounter === 1 ||
-      this.continuationCounter % CONTINUATION_REFRESH_CYCLES === 0;
+      this.continuationCounter % CONTINUATION_REFRESH_CYCLES === 0);
     if (shouldRefreshContinuation) {
       try {
         this.lastContinuation = await getContinuationCandidates(todayEt);
@@ -1934,12 +1956,14 @@ class PollerService {
         topN: this.config.top_n,
         session,
       }),
-      fetchScreener({
-        filter: ignitionFilter,
-        floatMaxM: IGNITION.float_max_m,
-        topN: IGNITION.top_n,
-        session,
-      }).catch(() => [] as ScreenerRow[]),
+      components.ignition
+        ? fetchScreener({
+            filter: ignitionFilter,
+            floatMaxM: IGNITION.float_max_m,
+            topN: IGNITION.top_n,
+            session,
+          }).catch(() => [] as ScreenerRow[])
+        : Promise.resolve([] as ScreenerRow[]),
     ]);
     let swingFetchErr = '';
     const swingRaw = shouldRefreshSwing
@@ -2402,7 +2426,7 @@ class PollerService {
     // recent good list, treat it as a transient hiccup: reuse the last list
     // and leave firstSeen untouched. Bounded by reuse_max_ms so a genuine
     // clear (market close / quiet overnight) still empties the sidebar.
-    const ignitionHiccup =
+    const ignitionHiccup = components.ignition &&
       ignitionRows.length === 0 &&
       this.lastIgnition.length > 0 &&
       nowMs - this.lastIgnitionAt < IGNITION.reuse_max_ms;
@@ -2859,7 +2883,7 @@ class PollerService {
     // pre-seeding Monday's sticky set with them — the tab opened premarket
     // with ~15 deep-red leftovers. Same 04:00-ET-day philosophy as the news
     // roll; weekends are 'closed' throughout, so they stop qualifying too.
-    if (session !== 'closed') {
+    if ((components.momo || components.setups) && session !== 'closed') {
       const nowIso = new Date(nowMsTick).toISOString();
       // EVERY Momentum-screen name qualifies (2026-08-12, the RMCF case: it
       // ran +40% and printed a textbook 2m curl-and-cross at its pullback,
@@ -3040,15 +3064,16 @@ class PollerService {
       polled_at: new Date().toISOString(),
       session,
       config: this.config,
+      components,
       rows: momentumRows,
-      ignition,
-      swing: scoredSwing,
-      continuation: this.lastContinuation,
+      ignition: components.ignition ? ignition : [],
+      swing: components.swing ? scoredSwing : [],
+      continuation: components.continuation ? this.lastContinuation : [],
       tick_catches: tickCatchList,
       news_radar: radarDisplay,
-      ema_crosses: emaCrossDisplay,
-      macd_momo: macdMomoDisplay,
-      momo_setups: momoSetupDisplay,
+      ema_crosses: components.ema ? emaCrossDisplay : [],
+      macd_momo: components.momo ? macdMomoDisplay : [],
+      momo_setups: components.setups ? momoSetupDisplay : [],
       banners: { new_with_catalyst: newWithCatalyst, fresh_news: freshList },
       fresh_news: enriched
         .filter((r) => r.is_fresh_news && r.news_title)

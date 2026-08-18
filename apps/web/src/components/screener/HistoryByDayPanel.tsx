@@ -87,7 +87,8 @@ function fmtEtTime(iso: string | null): string {
 export function HistoryByDayPanel({ payload, onOpenCatalyst }: Props) {
   const { selected, setSelected } = useSelection();
   const [date, setDate] = useState<string>(todayEtDate());
-  const [screen, setScreen] = useState<HistoryByDayScreen>('ignition');
+  const [screen, setScreen] = useState<HistoryByDayScreen>('momentum');
+  const ignitionEnabled = payload?.components?.ignition ?? false;
 
   const { data, isFetching } = useQuery({
     queryKey: ['history-by-day', date, screen],
@@ -292,10 +293,12 @@ export function HistoryByDayPanel({ payload, onOpenCatalyst }: Props) {
         />
         <Segmented
           size="small"
-          options={[
-            { label: 'Ignition', value: 'ignition' },
-            { label: 'Momentum', value: 'momentum' },
-          ]}
+          options={ignitionEnabled
+            ? [
+                { label: 'Ignition', value: 'ignition' },
+                { label: 'Momentum', value: 'momentum' },
+              ]
+            : [{ label: 'Momentum', value: 'momentum' }]}
           value={screen}
           onChange={(v) => setScreen(v as HistoryByDayScreen)}
         />

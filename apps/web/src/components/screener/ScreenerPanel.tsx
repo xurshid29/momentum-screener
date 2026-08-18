@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Table, Tabs, Tag, Typography, Tooltip, Badge, Button, Space, Popover, List, Checkbox } from 'antd';
 import { FilterOutlined, CloseOutlined, EyeInvisibleOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import type { CatalystInfo, CyclePayload, EnrichedRow, RowStatus, TradingSession } from '../../api/types';
+import { LEAN_COMPONENT_FLAGS, type CatalystInfo, type CyclePayload, type EnrichedRow, type RowStatus, type TradingSession } from '../../api/types';
 import { useSelection } from '../../context/SelectionContext';
 import { useLayout } from '../../context/LayoutContext';
 import { useHiddenTickers } from '../../hooks/useHiddenTickers';
@@ -51,7 +51,7 @@ const SESSION_COLOR: Record<TradingSession, string> = {
   closed: '#8c8c8c',
 };
 
-type ScreenerTab = 'momo' | 'setups' | 'ema' | 'momentum' | 'swing' | 'continuation' | 'history';
+type ScreenerTab = 'momo' | 'setups' | 'ema' | 'momentum' | 'swing' | 'outcomes' | 'continuation' | 'history';
 
 // First-appeared time in the operator's TZ (UTC+5), HH:MM, plus how long ago.
 // The "ago" is the staleness cue: a top-of-list +600% name first seen 9h ago is
@@ -97,11 +97,8 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
   const { selected, setSelected } = useSelection();
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [catalystModal, setCatalystModal] = useState<{ ticker: string; catalyst: CatalystInfo | null } | null>(null);
-  // The ↗ reclaim layer is the operator's primary instrument, so it opens
-  // here (2026-07-28) — it used to be squeezed into the left sidebar.
-  // ⤴ MOMO is the default view (2026-08-06, operator's call): it is their
-  // live trading strategy — second-leg entries on the session's top gainers.
-  const [activeTab, setActiveTab] = useState<ScreenerTab>('momo');
+  const [activeTab, setActiveTab] = useState<ScreenerTab>('momentum');
+  const components = payload?.components ?? LEAN_COMPONENT_FLAGS;
   const { hidden, hide, unhide } = useHiddenTickers();
   const { momentumNewsOnly, setMomentumNewsOnly } = useLayout();
   const isWarned = useIsWarned();
@@ -523,7 +520,15 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
               />
             ),
           },
-        ]}
+        ].filter((item) => {
+          if (item.key === 'momo') return components.momo;
+          if (item.key === 'setups') return components.setups;
+          if (item.key === 'ema') return components.ema;
+          if (item.key === 'swing') return components.swing;
+          if (item.key === 'outcomes') return components.outcomes;
+          if (item.key === 'continuation') return components.continuation;
+          return true;
+        })}
       />
     </div>
   );

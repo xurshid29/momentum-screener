@@ -27,6 +27,7 @@ DATABENTO_API_KEY=db-...                                 # optional — Databent
 TICKFEED_ENABLED=true                                    # optional — turn on the live tick feed (needs DATABENTO_API_KEY + a Standard/US-Equities subscription); off unless exactly 'true'
 TICKFEED_PYTHON=python3                                  # optional — python interpreter for the sidecar (default python3)
 ALERTS_DISABLED=tick_watch,accum                         # optional — mute these components' TELEGRAM pushes only; detection, tier_events grading, and the dashboard keep running (slugs: momentum, ignition, new_ignition, fresh_burst, accum, tick_watch, tick_catch, radar, dual_signal, swing, ema_cross, ema_reclaim)
+COMPONENTS_DISABLED=ignition,momo,setups,ema,swing,outcomes,continuation # optional product gates; this lean set is the default. Empty = enable all; "faders" aliases "continuation"
 ```
 
 ## Database Schema
@@ -74,7 +75,7 @@ Postgres, migrations via `dbmate` in `db/migrations/`.
 7. Broadcast a delta payload to all connected SSE clients on `/api/screener/stream`.
 8. Push a Telegram alert (if `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` are set) for any row with fresh news and a strong/major catalyst — once per article URL, so it never spams. Server-side, so alerts arrive even with no browser open.
 
-Each cycle also runs a second **Ignition screen** (volume-led: sub-$1, float < 15M, `rel_volume` > 2) alongside the Momentum one. The union of both screens is enriched once; ignition rows get a composite `runner_score`, persist to `ignition_results`, feed the Ignition sidebar, and trigger a Telegram alert at score ≥ 58. See `docs/ignition-screener-spec.md`.
+When enabled, each cycle also runs a second **Ignition screen** alongside the Momentum one. In the default lean profile it is parked by `COMPONENTS_DISABLED`, so its fetch, score, writes, payload and UI list do not run. The same gate parks MOMO/SETUPS/EMA, Swing, Outcomes and Continuation; the shared daily-bar and technical-bar engines start only when one of their consumers is enabled. Databento Live Ticks remains active in detector-only mode. See `docs/HANDOVER.md` for the current operating profile and `docs/ignition-screener-spec.md` for the preserved experiment.
 
 A standalone `ShelfService` (`services/shelf.ts`) runs alongside the poller: for every screener ticker it does a rate-limited 12-month SEC submissions lookback (`data.sec.gov/submissions`) and grades dilution risk `shelf` / `effective` / `active` — an effective shelf is the runner's kill-switch. The flag rides on each enriched row, penalises the `runner_score`, and shows in Telegram alerts.
 

@@ -1,4 +1,4 @@
-# Session Handover — updated 2026-08-12
+# Session Handover — updated 2026-08-18
 
 A running handover so a fresh session can continue without re-deriving context.
 **Read `docs/web-dashboard.md` first** (the canonical status doc); this file is
@@ -7,7 +7,37 @@ the "where we are right now + what's open" layer on top of it.
 detection chain** (📰/🤫/📈/👀/🛰️ — how each layer works, knobs, grading SQL).
 Memory files under `…/memory/` also carry the durable facts.
 
-**CURRENT FOCUS (refreshed 2026-08-12): THREE instruments. (1) The ↗
+**CURRENT FOCUS (2026-08-18): lean manual-playbook desk.** After testing the
+automated experiments, the operator's successful workflow is: watch the
+current session's top movers on 1-minute charts; configure the EMA pair per
+ticker as dynamic support/resistance; wait for a pullback/bounce at an EMA or
+session VWAP (or, from below, a reclaim of both EMAs/VWAP) while MACD 3/15/8
+turns up; enter with “breakout or bailout” risk discipline. The dashboard now
+defaults to the three surfaces that support that workflow: **🛰️ Live Ticks,
+Momentum, and Momentum History**. The next product direction is a separate
+Playbook tab for per-ticker EMA presets and VWAP/MACD confirmation—not another
+global fixed-EMA signal.
+
+The previous experiments are **parked, not deleted**. `COMPONENTS_DISABLED`
+defaults to `ignition,momo,setups,ema,swing,outcomes,continuation` (`faders` is
+an alias for `continuation`). This hides their tabs/lists and, critically,
+stops their backend work: no Ignition/Swing Finviz calls or result writes; no
+Outcome/Continuation jobs; no EMA/MACD bar replay, backfill, or bar-table
+writes. When Swing/Outcomes/Continuation are all parked, `DailyBarsService`
+does not start. Databento remains on in detector-only mode, so Live Ticks keeps
+working. Set `COMPONENTS_DISABLED=` to restore everything, or remove selected
+slugs to restore only those components. Feature state is visible in `/health`
+and each cycle payload.
+
+**Why the parking matters:** production profiling found the 4 GB droplet at
+~2.8–3.1 GB Node RSS plus ~1.95 GB swap. Every ~10 minutes the Continuation
+path read roughly 1.31M `daily_bars` rows for ~888 tickers before reducing them
+in JavaScript, creating 39–65s poll gaps (occasionally ~101s). `daily_bars` had
+grown to ~4.3M rows / 866 MB inside an ~8.2 GB database. A second repeated
+client query was removed too: Quote Details history is no longer keyed by the
+20-second `cycle_id`; it now caches per ticker for 60s.
+
+**PRE-PIVOT FOCUS (2026-08-12, retained as experiment history): THREE instruments. (1) The ↗
 price-reclaim layer — reclaim-ONLY on FIVE timeframes — remains the only
 Telegram-alerting component, with A+/A/B attention tiers on the ↗ EMA tab.
 (2) The ⤴ MACD MOMO tab (DEFAULT view since 08-06; built out over rounds
