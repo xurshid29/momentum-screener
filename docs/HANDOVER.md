@@ -16,6 +16,19 @@ Tables + code stay intact; re-enable by removing `edge` from the env var.
 Default desk is now **🛰️ Live Ticks, Momentum, Momentum History**. The Edge
 narrative below is retained as history.
 
+**2026-08-22 — ↑ VWAP RECLAIM RETIRED + 🤫 ACCUM ROWS HIDDEN (noise
+reduction, operator's call).** One graded session said the VWAP layer was
+noise: 48 reclaims → 41 "confirms" (85%) → 31 lost, median hold 10 min,
+median peak +1.2% above VWAP, 9/31 lost within 5 min of confirming, every
+anchor partial (two deploys). Parked via a new `vwap` slug in the
+`COMPONENTS_DISABLED` default: the tracker does not run, no rows, no
+tier_events, dashboard flags off; code + regression kept (see
+detection-layers ↑ section for the revisit recipe). Separately the 🤫 accum
+rows are no longer listed in LIVE TICKS (`TICK_LIST_HIDE_ACCUM` in
+poller.ts) — pending 👀 and confirmed 🛰️ only; accum detection, its
+👀-promotion path and `tier='accum'` grading are unchanged. Alert posture
+stays: Telegram + dashboard = 🛰️ LIVE TICK CONFIRMED only.
+
 **ALERTS REVIEW + ↑ VWAP RECLAIM LAYER (2026-08-21, same session — see XVWAP
 below).** Finding: NOTHING alerted because every slug with a live producer
 was muted in the prod `.env` (`ALERTS_DISABLED=momentum,ignition,
@@ -281,7 +294,8 @@ Journal; **attribution join still the open payoff**) · 06-17 tick feed go-live.
 
 ## What shipped this session (newest first, all on prod unless noted)
 
-XVWAP. **↑ VWAP reclaim layer + Live Ticks alerts un-muted (2026-08-21).**
+XVWAP. **↑ VWAP reclaim layer + Live Ticks alerts un-muted (2026-08-21).
+RETIRED 2026-08-22 — see the top note; retained as history.**
 Operator: "too often, when a ticker crosses the VWAP it rallies up" — list
 them under Live Ticks, think about when to fade them. Built
 `services/vwap-reclaim.ts` (pure tracker: session VWAP Σ(HLC3×vol)/Σvol

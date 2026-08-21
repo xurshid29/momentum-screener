@@ -17,7 +17,7 @@ This project began as a single bash script (`screener-poll_breakout.sh`) and is 
 - **Multi-source catalysts** — Finviz + Yahoo RSS + Benzinga news, plus **SEC EDGAR filings** (offerings/dilution, 8-Ks, M&A, 13D/G stakes) and **Nasdaq trade halts** — deduped & merged, primary sources outranking aggregators
 - **Catalyst scoring** — every headline is classified by a rule-based engine (and optionally refined by an LLM): impact score, direction, urgency, and risk flags drive the 🔥 badges; click a badge for a modal with the verdict + that ticker's news
 - **Dilution kill-switch** — a 12-month per-ticker SEC submissions lookback flags each screener name's effective-shelf risk (`shelf` / `effective` / `active`); the flag rides on rows, Telegram alerts, and the runner-score — a loaded shelf is how a low-float runner gets diluted into the ground
-- **↑ VWAP reclaims** — a Live Ticks sub-list: session movers that close a 1-minute candle back over session VWAP after a real stay below it, promoted to *confirmed* when a later close holds/extends, greyed when they close back under; graded in `tier_events` (`tier='vwap'`) before any phone alert
+- **↑ VWAP reclaims (parked by default)** — a Live Ticks sub-list of session movers closing a 1-minute candle back over session VWAP; graded for one session (2026-08-21) as noise (85% "confirm", median hold 10 min, median peak +1.2%) and parked behind `COMPONENTS_DISABLED=…,vwap`
 - **Visual + audio alerts** — 🔥 (today catalyst), 🚨 (fresh news this cycle), `NEW` / `ACC` / `UP` row markers; browser notification + sound on actionable events; optional **Telegram push alerts** — server-side, so they reach you 24/5 even with no browser open
 - **TradingView charts** — embedded Advanced Real-Time widgets, an adjustable `0–4` grid (charts can be hidden entirely), intervals `1m / 5m / 15m / 1h` (per-chart, persisted per user); click "Open in TradingView" to use seconds intervals (`1S / 10S / 30S`) on tradingview.com with your Premium account
 - **Persistence** — every poll cycle, every news article, and every user pref written to Postgres. Enables retrospective analysis: *which news sources/types preceded the biggest moves?*
@@ -155,7 +155,7 @@ pnldash/
 See `.env.example`.
 
 `COMPONENTS_DISABLED` defaults to
-`ignition,momo,setups,ema,swing,outcomes,continuation,edge`. Set it to an empty value
+`ignition,momo,setups,ema,swing,outcomes,continuation,edge,vwap`. Set it to an empty value
 to restore the full experimental dashboard, or remove individual slugs to
 restore selected components. `faders` is accepted as an alias for
 `continuation`.

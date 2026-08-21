@@ -31,8 +31,8 @@ const DASHBOARD_ALERTS: Record<
   tick_confirmed: true,     // 🛰️ radar ping + notification (2026-08-21)
   tick_watch: false,        // 👀 off again (2026-08-21 pm) — confirmed-only, operator's call
   accum: false,
-  vwap_reclaimed: true,     // ↑ soft tone — closed back over VWAP, hold pending
-  vwap_confirmed: true,     // ↑✅ bright pair + notification — held/extended
+  vwap_reclaimed: false,    // ↑ layer parked 2026-08-22 (COMPONENTS_DISABLED vwap) — graded as noise
+  vwap_confirmed: false,
   new_with_catalyst: false,
   fresh_news: false,
 };

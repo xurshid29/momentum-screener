@@ -27,7 +27,7 @@ DATABENTO_API_KEY=db-...                                 # optional — Databent
 TICKFEED_ENABLED=true                                    # optional — turn on the live tick feed (needs DATABENTO_API_KEY + a Standard/US-Equities subscription); off unless exactly 'true'
 TICKFEED_PYTHON=python3                                  # optional — python interpreter for the sidecar (default python3)
 ALERTS_DISABLED=tick_watch,accum                         # optional — mute these components' TELEGRAM pushes only; detection, grading, and the dashboard keep running (also: edge_armed, edge_entry, edge_bailout, vwap_reclaim)
-COMPONENTS_DISABLED=ignition,momo,setups,ema,swing,outcomes,continuation,edge # optional product gates; this lean set is the default. Empty = enable all; "faders" aliases "continuation"
+COMPONENTS_DISABLED=ignition,momo,setups,ema,swing,outcomes,continuation,edge,vwap # optional product gates; this lean set is the default. Empty = enable all; "faders" aliases "continuation"
 ```
 
 ## Database Schema
@@ -78,7 +78,7 @@ Postgres, migrations via `dbmate` in `db/migrations/`.
 7. Broadcast a delta payload to all connected SSE clients on `/api/screener/stream`.
 8. Push a Telegram alert (if `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` are set) for any row with fresh news and a strong/major catalyst — once per article URL, so it never spams. Server-side, so alerts arrive even with no browser open.
 
-When enabled, each cycle also runs a second **Ignition screen** alongside the Momentum one. In the default lean profile it is parked by `COMPONENTS_DISABLED`, so its fetch, score, writes, payload and UI list do not run. The same gate parks MOMO/SETUPS/EMA, Swing, Outcomes, Continuation and Edge (parked 2026-08-21 — `EdgeService` does not start and `/api/edge` answers 503); the shared daily-bar and technical-bar engines start only when one of their consumers is enabled. Databento Live Ticks remains active in detector-only mode. See `docs/HANDOVER.md` for the current operating profile and `docs/ignition-screener-spec.md` for the preserved experiment.
+When enabled, each cycle also runs a second **Ignition screen** alongside the Momentum one. In the default lean profile it is parked by `COMPONENTS_DISABLED`, so its fetch, score, writes, payload and UI list do not run. The same gate parks MOMO/SETUPS/EMA, Swing, Outcomes, Continuation, Edge (parked 2026-08-21 — `EdgeService` does not start and `/api/edge` answers 503) and the ↑ VWAP reclaim tick layer (parked 2026-08-22 after grading as noise); the shared daily-bar and technical-bar engines start only when one of their consumers is enabled. Databento Live Ticks remains active in detector-only mode. See `docs/HANDOVER.md` for the current operating profile and `docs/ignition-screener-spec.md` for the preserved experiment.
 
 A standalone `ShelfService` (`services/shelf.ts`) runs alongside the poller: for every screener ticker it does a rate-limited 12-month SEC submissions lookback (`data.sec.gov/submissions`) and grades dilution risk `shelf` / `effective` / `active` — an effective shelf is the runner's kill-switch. The flag rides on each enriched row, penalises the `runner_score`, and shows in Telegram alerts.
 

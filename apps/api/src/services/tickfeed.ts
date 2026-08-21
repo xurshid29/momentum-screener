@@ -564,6 +564,7 @@ class TickFeedService {
   private screenSyncTimer: NodeJS.Timeout | null = null;
   private running = false;
   private technicalEnabled = false;
+  private vwapEnabled = false;
   private etDate = etDate();
   private lastBarAt = 0;
   private barsSeen = 0;
@@ -585,6 +586,7 @@ class TickFeedService {
       enabled: TICKFEED.enabled,
       running: this.running,
       technical_trackers_enabled: this.technicalEnabled,
+      vwap_enabled: this.vwapEnabled,
       components: getComponentFlags(),
       symbols_tracked: this.detector.symbolsTracked(),
       ema_cross_tracked: this.emaCross.symbolsTracked(),
@@ -618,6 +620,8 @@ class TickFeedService {
     if (this.running) return;
     this.running = true;
     this.technicalEnabled = technicalTrackersEnabled();
+    this.vwapEnabled = getComponentFlags().vwap;
+    if (!this.vwapEnabled) console.log('[tickfeed] ↑ VWAP reclaim layer parked — COMPONENTS_DISABLED includes vwap');
     // Let the poller refresh in-flight observation rows from tracker state
     // (live price / % since the reclaim / the 'building' promotion). Passed
     // as a callback because tickfeed imports poller, not the reverse.
@@ -1476,15 +1480,18 @@ class TickFeedService {
     // ↑ VWAP reclaim — every symbol, closed 1m candles; events go to the
     // poller, which gates them on the screens/ladder. Live price-vs-VWAP for
     // names that already have a row refreshes each bar (cheap: a Map lookup).
-    const vevs = this.vwapReclaim.addBar(m.s, { ts_sec: m.t, open: m.o, high: m.h, low: m.l, close: m.c, volume: m.v });
-    for (const vev of vevs) {
-      if (vev.type === 'reclaim') this.vwapReclaims++;
-      else if (vev.type === 'confirm') this.vwapConfirms++;
-      poller.onVwapEvent(vev);
-    }
-    if (poller.hasVwapRow(m.s)) {
-      const snap = this.vwapReclaim.snapshot(m.s);
-      if (snap) poller.updateVwapLive(m.s, snap);
+    // Parked by default since 2026-08-22 (COMPONENTS_DISABLED `vwap`).
+    if (this.vwapEnabled) {
+      const vevs = this.vwapReclaim.addBar(m.s, { ts_sec: m.t, open: m.o, high: m.h, low: m.l, close: m.c, volume: m.v });
+      for (const vev of vevs) {
+        if (vev.type === 'reclaim') this.vwapReclaims++;
+        else if (vev.type === 'confirm') this.vwapConfirms++;
+        poller.onVwapEvent(vev);
+      }
+      if (poller.hasVwapRow(m.s)) {
+        const snap = this.vwapReclaim.snapshot(m.s);
+        if (snap) poller.updateVwapLive(m.s, snap);
+      }
     }
     // The lean 1m Edge path is independent of the parked global technical
     // trackers. EdgeService drops all unsaved tickers in O(1).

@@ -268,6 +268,10 @@ export interface VwapReclaimItem {
   change_pct: number | null;     // day change% from the screen row when the name is on one
   source: 'screen' | 'ladder';   // why it qualified for a row
 }
+// Display-only switch: keep 🤫 accum entries out of payload.tick_catches
+// (detection, promotion and grading unchanged). Operator's call 2026-08-22.
+const TICK_LIST_HIDE_ACCUM = true;
+
 const VWAP_LIST = {
   lost_linger_ms: 5 * 60_000,       // grey linger after a loss
   reclaimed_ttl_ms: 15 * 60_000,    // safety net — the tracker expires unconfirmed reclaims at 10 min
@@ -1600,7 +1604,8 @@ class PollerService {
   private async seedTierState() {
     try {
       const components = getComponentFlags();
-      const tiers = ['accum', 'tick', 'radar', 'vwap'];
+      const tiers = ['accum', 'tick', 'radar'];
+      if (components.vwap) tiers.push('vwap');
       if (components.ema) tiers.push('cross');
       if (components.momo || components.setups) tiers.push('macd');
       const rows = await getDb()
@@ -2764,6 +2769,10 @@ class PollerService {
         this.tickCatches.delete(t);
         continue;
       }
+      // 🤫 accum rows are ladder STATE (they vet the 👀 promotion path and are
+      // graded as tier='accum'), but the operator retired them from the LIVE
+      // TICKS list on 2026-08-22 — pending (👀) and confirmed (🛰️) only.
+      if (TICK_LIST_HIDE_ACCUM && tc.status === 'accum') continue;
       tickCatchList.push({
         ticker: tc.ticker, price: tc.price, change_pct: tc.change_pct,
         rel_vol: tc.rel_vol, mom_pct: tc.mom_pct, status: tc.status,
@@ -3181,7 +3190,7 @@ class PollerService {
       swing: components.swing ? scoredSwing : [],
       continuation: components.continuation ? this.lastContinuation : [],
       tick_catches: tickCatchList,
-      vwap_reclaims: vwapList,
+      vwap_reclaims: components.vwap ? vwapList : [],
       news_radar: radarDisplay,
       ema_crosses: components.ema ? emaCrossDisplay : [],
       macd_momo: components.momo ? macdMomoDisplay : [],

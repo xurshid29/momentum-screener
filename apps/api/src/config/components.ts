@@ -3,6 +3,9 @@
 // and their historical tables stay intact, but their fetch/compute/write paths
 // do not run unless explicitly re-enabled. Edge (the per-ticker 1m EMA/VWAP
 // playbook) joined the parked set on 2026-08-21 — operator stopped using it.
+// The ↑ VWAP reclaim detection layer (tick feed) joined on 2026-08-22 after
+// one graded session: 85% confirm rate, median hold 10 min, median peak
+// +1.2% above VWAP — noise. Machinery + regression kept for a revisit.
 
 export type ComponentSlug =
   | 'ignition'
@@ -12,7 +15,8 @@ export type ComponentSlug =
   | 'swing'
   | 'outcomes'
   | 'continuation'
-  | 'edge';
+  | 'edge'
+  | 'vwap';
 
 export interface ComponentFlags {
   ignition: boolean;
@@ -23,6 +27,7 @@ export interface ComponentFlags {
   outcomes: boolean;
   continuation: boolean;
   edge: boolean;
+  vwap: boolean;
 }
 
 export const DEFAULT_DISABLED_COMPONENTS: ComponentSlug[] = [
@@ -34,6 +39,7 @@ export const DEFAULT_DISABLED_COMPONENTS: ComponentSlug[] = [
   'outcomes',
   'continuation',
   'edge',
+  'vwap',
 ];
 
 const KNOWN = new Set<ComponentSlug>(DEFAULT_DISABLED_COMPONENTS);
@@ -68,6 +74,7 @@ export function getComponentFlags(): ComponentFlags {
     outcomes: !disabled.has('outcomes'),
     continuation: !disabled.has('continuation'),
     edge: !disabled.has('edge'),
+    vwap: !disabled.has('vwap'),
   };
   return cachedFlags;
 }

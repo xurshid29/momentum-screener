@@ -583,6 +583,7 @@ export interface ComponentFlags {
   // Optional for rolling-deploy compatibility: an API built before the edge
   // slug existed omits it, and a missing flag must read as parked.
   edge?: boolean;
+  vwap?: boolean;
 }
 
 export const LEAN_COMPONENT_FLAGS: ComponentFlags = {
@@ -594,6 +595,7 @@ export const LEAN_COMPONENT_FLAGS: ComponentFlags = {
   outcomes: false,
   continuation: false,
   edge: false,
+  vwap: false,
 };
 
 export interface HistoryRow {

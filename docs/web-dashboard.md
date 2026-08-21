@@ -4,9 +4,9 @@ Status as of 2026-08-21. The bash scanner (`screener-poll_breakout.sh`) and the 
 
 **Current operating profile — lean manual-playbook desk.** The active UI is
 Live Ticks + Momentum + Momentum History. Ignition, MOMO, SETUPS, EMA, Swing,
-Outcomes, Faders/Continuation, and (since 2026-08-21) Edge are preserved but
-parked by the default
-`COMPONENTS_DISABLED=ignition,momo,setups,ema,swing,outcomes,continuation,edge`.
+Outcomes, Faders/Continuation, Edge (since 2026-08-21) and the ↑ VWAP reclaim
+tick layer (since 2026-08-22) are preserved but parked by the default
+`COMPONENTS_DISABLED=ignition,momo,setups,ema,swing,outcomes,continuation,edge,vwap`.
 When `edge` is parked, `EdgeService` never starts (no preset load, no 1m bar
 persistence, no `edge_events`), `/api/edge` answers 503, and the web hides the
 ⚡ Edge tab and stops its 3s poll.

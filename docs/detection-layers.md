@@ -336,7 +336,19 @@ low_evidence|stale_*) / confirm (via) / fade / watch_expired. Knobs:
 
 ---
 
-## ↑ VWAP reclaim (`vwap-reclaim.ts` + poller `onVwapEvent`; shipped 2026-08-21, **UNGRADED**)
+## ↑ VWAP reclaim (`vwap-reclaim.ts` + poller `onVwapEvent`; shipped 2026-08-21, **RETIRED 2026-08-22** — parked via `COMPONENTS_DISABLED` `vwap`)
+
+**Verdict (one graded session, 2026-08-21, all partial anchors):** 48
+reclaims → 41 confirms (85% — the hold/extend confirm gate is too easy) →
+31 lost; median hold 10 min, median peak +1.16% above VWAP (p75 +2.14%),
+9/31 lost within 5 min of confirming. JUNS alone fired 4 episodes. The
+operator's read ("not accurate, didn't work well") matches the data: the
+layer tracked chop around VWAP, not the rallies that start from it. Parked
+(no compute, no rows, no tier_events); tracker + `verify-vwap-reclaim.ts`
+kept. If revisited: require a session anchor (Databento 1m warmup), a much
+stiffer confirm (e.g. ≥2 closes above + ≥2% extension or a volume gate),
+one episode per name, and grade against +5% reach rather than "confirmed".
+The spec below is retained as written.
 
 **What/why.** The operator's observation: "too often, when a ticker crosses
 the VWAP it rallies up." A session-VWAP version of that on the 1s feed,
