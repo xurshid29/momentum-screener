@@ -5,8 +5,16 @@ import { authMiddleware } from '../middleware/auth.js';
 import { getDb } from '../db/index.js';
 import { edge } from '../services/edge.js';
 import { tickfeed } from '../services/tickfeed.js';
+import { componentEnabled } from '../config/components.js';
 
 const router = Router();
+
+// Parked by default (COMPONENTS_DISABLED). EdgeService never starts, so a
+// saved preset would silently never be evaluated — refuse clearly instead.
+router.use((_req, res, next) => {
+  if (componentEnabled('edge')) return next();
+  res.status(503).json({ error: 'Edge component is disabled (COMPONENTS_DISABLED)' });
+});
 
 const tickerSchema = z.string().trim().toUpperCase().regex(/^[A-Z0-9.-]{1,12}$/);
 const presetSchema = z.object({

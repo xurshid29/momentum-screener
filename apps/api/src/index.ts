@@ -89,7 +89,12 @@ app.listen(port, () => {
   else console.log('[daily-bars] parked — swing, outcomes and continuation are disabled');
   // Edge loads its small saved-ticker warmup before the shared sidecar starts,
   // so every configured symbol is present in the first subscription batch.
-  void edge.start().finally(() => tickfeed.start());
+  // When parked, nothing is loaded: no presets, no 1m bars, no edge_events.
+  if (componentEnabled('edge')) void edge.start().finally(() => tickfeed.start());
+  else {
+    console.log('[edge] parked — COMPONENTS_DISABLED includes edge');
+    tickfeed.start();
+  }
   telegramBot.start();
   // One-time catch-up: backfill outcomes for the existing detection history on
   // boot (the post-close trigger only covers go-forward days). Delayed so the

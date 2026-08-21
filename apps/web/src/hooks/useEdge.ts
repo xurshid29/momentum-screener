@@ -4,13 +4,16 @@ import type { EdgePresetInput } from '../api/types';
 
 const QUERY_KEY = ['edge'] as const;
 
-export function useEdge() {
+// `enabled=false` stops the 3s poll entirely — used by the dashboard shell
+// while the Edge component is parked server-side (the route answers 503).
+export function useEdge(enabled = true) {
   const qc = useQueryClient();
   const query = useQuery({
     queryKey: QUERY_KEY,
     queryFn: () => edgeApi.get(),
-    refetchInterval: 3_000,
+    refetchInterval: enabled ? 3_000 : false,
     staleTime: 1_000,
+    enabled,
   });
   const invalidate = () => qc.invalidateQueries({ queryKey: QUERY_KEY });
   const save = useMutation({

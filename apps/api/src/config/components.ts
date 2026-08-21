@@ -1,7 +1,8 @@
 // Product-surface feature gates. The current default is the lean trading desk:
 // Live Ticks + Momentum + History. Experimental screens stay in the codebase
 // and their historical tables stay intact, but their fetch/compute/write paths
-// do not run unless explicitly re-enabled.
+// do not run unless explicitly re-enabled. Edge (the per-ticker 1m EMA/VWAP
+// playbook) joined the parked set on 2026-08-21 — operator stopped using it.
 
 export type ComponentSlug =
   | 'ignition'
@@ -10,7 +11,8 @@ export type ComponentSlug =
   | 'ema'
   | 'swing'
   | 'outcomes'
-  | 'continuation';
+  | 'continuation'
+  | 'edge';
 
 export interface ComponentFlags {
   ignition: boolean;
@@ -20,6 +22,7 @@ export interface ComponentFlags {
   swing: boolean;
   outcomes: boolean;
   continuation: boolean;
+  edge: boolean;
 }
 
 export const DEFAULT_DISABLED_COMPONENTS: ComponentSlug[] = [
@@ -30,6 +33,7 @@ export const DEFAULT_DISABLED_COMPONENTS: ComponentSlug[] = [
   'swing',
   'outcomes',
   'continuation',
+  'edge',
 ];
 
 const KNOWN = new Set<ComponentSlug>(DEFAULT_DISABLED_COMPONENTS);
@@ -63,6 +67,7 @@ export function getComponentFlags(): ComponentFlags {
     swing: !disabled.has('swing'),
     outcomes: !disabled.has('outcomes'),
     continuation: !disabled.has('continuation'),
+    edge: !disabled.has('edge'),
   };
   return cachedFlags;
 }

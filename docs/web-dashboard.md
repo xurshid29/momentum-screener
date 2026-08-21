@@ -1,11 +1,15 @@
 # Momentum Screener — Web Dashboard
 
-Status as of 2026-08-18. The bash scanner (`screener-poll_breakout.sh`) and the web dashboard are both functional; the bash version remains the reference implementation. The web port lives in `apps/api` + `apps/web` and runs in parallel without sharing state with it.
+Status as of 2026-08-21. The bash scanner (`screener-poll_breakout.sh`) and the web dashboard are both functional; the bash version remains the reference implementation. The web port lives in `apps/api` + `apps/web` and runs in parallel without sharing state with it.
 
 **Current operating profile — lean manual-playbook desk.** The active UI is
-Live Ticks + Momentum + Edge + Momentum History. Ignition, MOMO, SETUPS, EMA, Swing,
-Outcomes, and Faders/Continuation are preserved but parked by the default
-`COMPONENTS_DISABLED=ignition,momo,setups,ema,swing,outcomes,continuation`.
+Live Ticks + Momentum + Momentum History. Ignition, MOMO, SETUPS, EMA, Swing,
+Outcomes, Faders/Continuation, and (since 2026-08-21) Edge are preserved but
+parked by the default
+`COMPONENTS_DISABLED=ignition,momo,setups,ema,swing,outcomes,continuation,edge`.
+When `edge` is parked, `EdgeService` never starts (no preset load, no 1m bar
+persistence, no `edge_events`), `/api/edge` answers 503, and the web hides the
+⚡ Edge tab and stops its 3s poll.
 This is an end-to-end gate, not a cosmetic one: disabled screens stop their
 Finviz calls, background jobs, technical-bar replay/backfills, persistence and
 payload construction. With all three daily-bar consumers parked,

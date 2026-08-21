@@ -1,4 +1,4 @@
-# Session Handover — updated 2026-08-18
+# Session Handover — updated 2026-08-21
 
 A running handover so a fresh session can continue without re-deriving context.
 **Read `docs/web-dashboard.md` first** (the canonical status doc); this file is
@@ -7,7 +7,16 @@ the "where we are right now + what's open" layer on top of it.
 detection chain** (📰/🤫/📈/👀/🛰️ — how each layer works, knobs, grading SQL).
 Memory files under `…/memory/` also carry the durable facts.
 
-**CURRENT FOCUS (2026-08-18): lean manual-playbook desk + Edge ready to deploy.** After testing the
+**UPDATE 2026-08-21 (later the same day): Edge PARKED.** The operator stopped
+using the ⚡ Edge playbook, so it joined the `COMPONENTS_DISABLED` set (new
+`edge` slug, in the default). Effect: `EdgeService` does not start (no preset
+load, no `edge_bars_1m` writes, no `edge_events`, no Telegram `edge_*`
+pushes), `/api/edge` answers 503, the web hides the tab and stops polling.
+Tables + code stay intact; re-enable by removing `edge` from the env var.
+Default desk is now **🛰️ Live Ticks, Momentum, Momentum History**. The Edge
+narrative below is retained as history.
+
+**CURRENT FOCUS (2026-08-21, superseded above for Edge): lean manual-playbook desk + Edge live in production.** After testing the
 automated experiments, the operator's successful workflow is: watch the
 current session's top movers on 1-minute charts; configure the EMA pair per
 ticker as dynamic support/resistance; wait for a pullback/bounce at an EMA or
@@ -35,8 +44,29 @@ polling rather than the shared global SSE. Session VWAP uses feed-visible HLC3
 consolidated TradingView tape, the UI remains a decision assistant and the TV
 chart is the exact execution reference.
 
+**Production status (checked 2026-08-21):** Edge shipped in `db2ad0d`
+(`feat(edge): add per-ticker execution playbook`) with migration
+`20260818190000_edge_playbook.sql`. `/health` is `ok`, `edge.running=true`,
+`edge.last_error=null`, and the Databento stream is healthy (3.3M+ bars seen
+since the current API start). The feature has processed live 1m bars,
+historical backfill, and seven Edge transitions in production. There were zero
+active saved presets at the time of this check—the previously exercised preset
+had been removed—so an empty Edge table currently means “nothing configured,”
+not a failed service.
+
+**Deploy-order gotcha (still open):** the CI workflow currently recreates the
+API/web containers *before* running `dbmate up`. On Edge's first rollout, the
+new API started before `user_edge_presets` existed, logged
+`[edge] startup failed: relation "user_edge_presets" does not exist`, and did
+not retry after the migration landed. The migration applied successfully and
+the API was manually restarted; that is the healthy state above. The Edge
+tables now exist, so ordinary deploys are unaffected, but the general ordering
+remains unsafe for a future service that requires a brand-new table at startup.
+Next infrastructure change should run migrations before starting the new API,
+or add an explicit post-migration API restart/retry path.
+
 The previous experiments are **parked, not deleted**. `COMPONENTS_DISABLED`
-defaults to `ignition,momo,setups,ema,swing,outcomes,continuation` (`faders` is
+defaults to `ignition,momo,setups,ema,swing,outcomes,continuation,edge` (`faders` is
 an alias for `continuation`). This hides their tabs/lists and, critically,
 stops their backend work: no Ignition/Swing Finviz calls or result writes; no
 Outcome/Continuation jobs; no EMA/MACD bar replay, backfill, or bar-table

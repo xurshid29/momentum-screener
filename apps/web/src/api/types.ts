@@ -554,6 +554,9 @@ export interface ComponentFlags {
   swing: boolean;
   outcomes: boolean;
   continuation: boolean;
+  // Optional for rolling-deploy compatibility: an API built before the edge
+  // slug existed omits it, and a missing flag must read as parked.
+  edge?: boolean;
 }
 
 export const LEAN_COMPONENT_FLAGS: ComponentFlags = {
@@ -564,6 +567,7 @@ export const LEAN_COMPONENT_FLAGS: ComponentFlags = {
   swing: false,
   outcomes: false,
   continuation: false,
+  edge: false,
 };
 
 export interface HistoryRow {

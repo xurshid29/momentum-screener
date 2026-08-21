@@ -13,7 +13,7 @@ import { IgnitionSidebar } from '../components/screener/IgnitionSidebar';
 import { WatchlistPanel } from '../components/screener/WatchlistPanel';
 import { SelectionProvider, useSelection } from '../context/SelectionContext';
 import { useLayout } from '../context/LayoutContext';
-import type { CyclePayload } from '../api/types';
+import { LEAN_COMPONENT_FLAGS, type CyclePayload } from '../api/types';
 
 // All panel sizes are persisted to localStorage by react-resizable-panels using
 // the autoSaveId. Per-user persistence to /api/prefs/layout is a future bonus —
@@ -22,8 +22,11 @@ import type { CyclePayload } from '../api/types';
 export function DashboardPage() {
   const { payload, connected } = useScreenerStream();
   useScreenerAlerts(payload);
-  const { events: edgeEvents, isLoading: edgeLoading } = useEdge();
-  useEdgeAlerts(edgeEvents, !edgeLoading);
+  // Edge is parked by default (COMPONENTS_DISABLED); only poll + alert when
+  // the API reports it enabled. Before the first cycle arrives we assume lean.
+  const edgeEnabled = (payload?.components ?? LEAN_COMPONENT_FLAGS).edge === true;
+  const { events: edgeEvents, isLoading: edgeLoading } = useEdge(edgeEnabled);
+  useEdgeAlerts(edgeEvents, edgeEnabled && !edgeLoading);
   useTabTitleFlash(payload);
   const { chartCount } = useLayout();
   const chartsVisible = chartCount > 0;

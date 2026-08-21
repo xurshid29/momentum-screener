@@ -533,6 +533,7 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
           if (item.key === 'swing') return components.swing;
           if (item.key === 'outcomes') return components.outcomes;
           if (item.key === 'continuation') return components.continuation;
+          if (item.key === 'edge') return components.edge === true;
           return true;
         })}
       />
