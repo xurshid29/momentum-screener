@@ -31,7 +31,8 @@ export type AlertComponent =
   | 'ema_reclaim'   // ↗ volume-confirmed price-reclaim of EMA 10+65 (parallel channel)
   | 'edge_armed'    // Edge ticker reached a configured EMA/VWAP decision zone
   | 'edge_entry'    // Edge closed-bar bounce/reclaim + MACD confirmation
-  | 'edge_bailout'; // Edge closed below its configured bailout level
+  | 'edge_bailout'  // Edge closed below its configured bailout level
+  | 'vwap_reclaim'; // ↑ session-VWAP reclaim CONFIRMED on a closed 1m candle (Live Ticks list)
 let disabledAlerts: Set<string> | null = null;
 export function alertDisabled(component: AlertComponent): boolean {
   if (!disabledAlerts) {

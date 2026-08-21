@@ -14,6 +14,7 @@ import { createInterface, type Interface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { TickDetector, type TickBar } from './tick-detect.js';
+import { VwapReclaimTracker } from './vwap-reclaim.js';
 import { EmaCrossTracker, EMA_CROSS, EMA_CROSS_15M, EMA_CROSS_1H, EMA_CROSS_4H, EMA_CROSS_1D, adjustSplitHistory, type SeedHistoryBar } from './ema-cross.js';
 import { MacdCurlTracker, MACD_CURL_2M, MACD_CURL_15M, MACD_CURL_1H, MACD_CURL_4H } from './macd-curl.js';
 import { MomoSetupTracker, type MomoSetupBar } from './momo-setup.js';
@@ -423,6 +424,12 @@ function makeHtfLayer(
 
 class TickFeedService {
   private detector = new TickDetector();
+  // ↑ session-VWAP reclaim layer (2026-08-21) — runs on EVERY subscribed
+  // symbol (three floats + one 1m bucket each); the poller decides which
+  // reclaims are worth a row (on-screen names + the Live Ticks ladder).
+  private vwapReclaim = new VwapReclaimTracker();
+  private vwapReclaims = 0;
+  private vwapConfirms = 0;
   // 📈 EMA cross layer (10/65) on 5m bars, known runners only — see
   // ema-cross.ts. Every LIVE closed bar is buffered for persistence
   // (bars_5m) so the warmup survives deploys; boot replays the last 5 days
@@ -594,6 +601,9 @@ class TickFeedService {
       watches: this.watches,
       candidates: this.candidates,
       fades: this.fades,
+      vwap_tracked: this.vwapReclaim.symbolsTracked(),
+      vwap_reclaims: this.vwapReclaims,
+      vwap_confirms: this.vwapConfirms,
       extra_subs: this.extraSubs.size,
       last_bar_age_s: this.lastBarAt ? Math.round((Date.now() - this.lastBarAt) / 1000) : null,
       last_error: this.lastError,
@@ -1262,6 +1272,7 @@ class TickFeedService {
     if (today !== this.etDate) {
       this.etDate = today;
       this.detector.reset();
+      this.vwapReclaim.reset();
       if (this.technicalEnabled) {
         this.emaCross.resetDaily();
         this.macdCurl.resetDaily();
@@ -1357,6 +1368,7 @@ class TickFeedService {
         if (r.price == null || r.change_pct == null || r.price <= 0 || r.change_pct <= -100) continue;
         this.detector.setPriorClose(tk, r.price / (1 + r.change_pct / 100));
         this.extraSubs.add(tk);
+        this.vwapReclaim.markLate(tk);
         fresh.push(tk);
       }
     } else {
@@ -1376,6 +1388,7 @@ class TickFeedService {
           if (this.detector.hasPriorClose(tk) || this.extraSubs.has(tk)) return;
           this.detector.setPriorClose(tk, pc);
           this.extraSubs.add(tk);
+          this.vwapReclaim.markLate(tk);
           this.subscribe([tk]);
           console.log(`[tickfeed] screen-sync (AH) — subscribed ${tk} (daily close $${pc})`);
         });
@@ -1387,6 +1400,7 @@ class TickFeedService {
       if (n.prior_close == null || n.prior_close <= 0) continue;
       this.detector.setPriorClose(tk, n.prior_close);
       this.extraSubs.add(tk);
+      this.vwapReclaim.markLate(tk);
       fresh.push(tk);
     }
     if (fresh.length > 0 && this.child?.stdin.writable) {
@@ -1414,6 +1428,7 @@ class TickFeedService {
     // Do not retain Edge names in extraSubs: edge.activeTickers() owns their
     // respawn/midnight subscription lifecycle, so deleting a preset really
     // removes it from the next sidecar session.
+    this.vwapReclaim.markLate(ticker);
     this.subscribe([ticker]);
   }
 
@@ -1452,6 +1467,19 @@ class TickFeedService {
       else if (ev.type === 'confirm') this.candidates++;
       else this.fades++;
       poller.onTickEvent(ev);
+    }
+    // ↑ VWAP reclaim — every symbol, closed 1m candles; events go to the
+    // poller, which gates them on the screens/ladder. Live price-vs-VWAP for
+    // names that already have a row refreshes each bar (cheap: a Map lookup).
+    const vevs = this.vwapReclaim.addBar(m.s, { ts_sec: m.t, open: m.o, high: m.h, low: m.l, close: m.c, volume: m.v });
+    for (const vev of vevs) {
+      if (vev.type === 'reclaim') this.vwapReclaims++;
+      else if (vev.type === 'confirm') this.vwapConfirms++;
+      poller.onVwapEvent(vev);
+    }
+    if (poller.hasVwapRow(m.s)) {
+      const snap = this.vwapReclaim.snapshot(m.s);
+      if (snap) poller.updateVwapLive(m.s, snap);
     }
     // The lean 1m Edge path is independent of the parked global technical
     // trackers. EdgeService drops all unsaved tickers in O(1).

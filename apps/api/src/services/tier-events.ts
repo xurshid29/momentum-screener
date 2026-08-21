@@ -1,5 +1,5 @@
 // Durable tier-transition recorder — mirrors the poller's graded console.log
-// lines (🤫 accum / 👀🛰️ tick / 📰 radar) into the tier_events table so
+// lines (🤫 accum / 👀🛰️ tick / 📰 radar / ↑ vwap) into the tier_events table so
 // precision grading is a SQL query over any date range instead of a grep over
 // docker logs that reset on every deploy (2026-07-07: four deploys erased the
 // day's evidence four times).
@@ -12,7 +12,7 @@ import { getDb } from '../db/index.js';
 let lastErrorLogMs = 0;
 
 export function recordTierEvent(
-  tier: 'accum' | 'tick' | 'radar' | 'cross' | 'macd' | 'momo_v2',
+  tier: 'accum' | 'tick' | 'radar' | 'cross' | 'macd' | 'momo_v2' | 'vwap',
   event: string,
   ticker: string,
   meta?: Record<string, unknown>,

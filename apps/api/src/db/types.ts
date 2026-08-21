@@ -367,7 +367,7 @@ export interface TradeExecutionsTable {
 // logs reset on every container recreation). See services/tier-events.ts.
 export interface TierEventsTable {
   id: Generated<string>;
-  tier: string;    // 'accum' | 'tick' | 'radar'
+  tier: string;    // 'accum' | 'tick' | 'radar' | 'cross' | 'macd' | 'momo_v2' | 'vwap'
   event: string;   // per-tier transition name — see the migration header
   ticker: string;
   at: Generated<Date>;

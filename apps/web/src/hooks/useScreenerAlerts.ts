@@ -11,21 +11,26 @@ import type { CyclePayload } from '../api/types';
 // already-seen (ticker, tier) pairs so a catch (which persists ~15 min) pings
 // once per tier — a real runner gives exactly two pings: flag, then confirm.
 
-// Dashboard alert kill switches (2026-07-22, operator's call) — mirrors the
-// server-side ALERTS_DISABLED: everything muted except EMA-cross
-// confirmations. Disabled, not deleted: the sections/data are untouched and
-// the seen-set bookkeeping below keeps marking events while muted, so
-// flipping a flag back on never back-blasts the day's backlog.
+// Dashboard alert kill switches — mirrors the server-side ALERTS_DISABLED.
+// 2026-07-22: everything muted except EMA-cross confirmations (operator's
+// call). 2026-08-21: EMA is parked and the operator asked for alerts when a
+// new Live Tick appears, so 👀/🛰️ are back on, plus the new ↑ VWAP reclaim
+// list (soft tone on reclaim, bright pair on confirm). Disabled, not
+// deleted: the seen-set bookkeeping below keeps marking events while muted,
+// so flipping a flag back on never back-blasts the day's backlog.
 const DASHBOARD_ALERTS: Record<
-  'ema_cross_confirm' | 'ema_cross_observe' | 'news_radar' | 'tick_confirmed' | 'tick_watch' | 'accum' | 'new_with_catalyst' | 'fresh_news',
+  'ema_cross_confirm' | 'ema_cross_observe' | 'news_radar' | 'tick_confirmed' | 'tick_watch' | 'accum' | 'new_with_catalyst' | 'fresh_news'
+  | 'vwap_reclaimed' | 'vwap_confirmed',
   boolean
 > = {
   ema_cross_confirm: true,  // ✅ volume confirmed — bright two-tone + notification
   ema_cross_observe: true,  // 📈 new cross appeared — soft single tone
   news_radar: false,
-  tick_confirmed: false,
-  tick_watch: false,
+  tick_confirmed: true,     // 🛰️ radar ping + notification (2026-08-21)
+  tick_watch: true,         // 👀 soft ping + notification (2026-08-21)
   accum: false,
+  vwap_reclaimed: true,     // ↑ soft tone — closed back over VWAP, hold pending
+  vwap_confirmed: true,     // ↑✅ bright pair + notification — held/extended
   new_with_catalyst: false,
   fresh_news: false,
 };
@@ -219,6 +224,7 @@ export function useScreenerAlerts(payload: CyclePayload | null) {
       radarKeys.forEach((n) => seenRadar.current.add(n.key));
       crossConfirmKeys.forEach((x) => seenTicks.current.add(x.key));
       crossObserveKeys.forEach((x) => seenTicks.current.add(x.key));
+      (payload.vwap_reclaims ?? []).forEach((v) => seenTicks.current.add(`${v.ticker}:vwap:${v.reclaim_at}:${v.status}`));
       return;
     }
 
@@ -279,6 +285,26 @@ export function useScreenerAlerts(payload: CyclePayload | null) {
         '🤫 Quiet accumulation — volume before price',
         newAccums.length <= 3 ? newAccums.join(', ') : `${newAccums.length} names accumulating`,
       );
+    }
+
+    // ↑ VWAP reclaims — one key per (ticker, episode, status): a reclaim tones
+    // softly, its confirm pings brightly; a lost row is silent (the list greys
+    // it). Seeded on the first payload like everything else.
+    const vwapKeys = (payload.vwap_reclaims ?? [])
+      .filter((v) => v.status !== 'lost')
+      .map((v) => ({ key: `${v.ticker}:vwap:${v.reclaim_at}:${v.status}`, ticker: v.ticker, status: v.status }));
+    const newVwap = vwapKeys.filter((v) => !seenTicks.current.has(v.key));
+    newVwap.forEach((v) => seenTicks.current.add(v.key));
+    const newVwapConfirmed = newVwap.filter((v) => v.status === 'confirmed').map((v) => v.ticker);
+    const newVwapReclaimed = newVwap.filter((v) => v.status === 'reclaimed').map((v) => v.ticker);
+    if (DASHBOARD_ALERTS.vwap_confirmed && newVwapConfirmed.length > 0) {
+      try { crossConfirmPing(); } catch { /* audio context not unlocked */ }
+      notify(
+        '↑✅ VWAP reclaim confirmed — holding above session VWAP',
+        newVwapConfirmed.length <= 3 ? newVwapConfirmed.join(', ') : `${newVwapConfirmed.length} confirmed VWAP reclaims`,
+      );
+    } else if (DASHBOARD_ALERTS.vwap_reclaimed && newVwapReclaimed.length > 0) {
+      try { crossObservePing(); } catch { /* audio context not unlocked */ }
     }
 
     const { new_with_catalyst, fresh_news } = payload.banners;

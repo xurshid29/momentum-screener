@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Typography, Tooltip, Empty, Button, Popover, List } from 'antd';
 import { CloseOutlined, EyeInvisibleOutlined } from '@ant-design/icons';
-import type { CatalystInfo, CyclePayload, IgnitionRow, NewsRadarItem, TickCatch } from '../../api/types';
+import type { CatalystInfo, CyclePayload, IgnitionRow, NewsRadarItem, TickCatch, VwapReclaimItem } from '../../api/types';
 import { useSelection } from '../../context/SelectionContext';
 import { useLayout } from '../../context/LayoutContext';
 import { useHiddenTickers } from '../../hooks/useHiddenTickers';
@@ -106,6 +106,10 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
   // Live tick-feed catches — surged on the per-second feed before the screens
   // returned them. Pinned at the very top; drop out once a screen catches up.
   const tickCatches = (payload?.tick_catches ?? []).filter((t) => !hidden.has(t.ticker));
+  // ↑ VWAP reclaims — session movers closing back over session VWAP on the
+  // 1s feed; rides under LIVE TICKS as its own sub-list.
+  const vwapReclaims = (payload?.vwap_reclaims ?? []).filter((v) => !hidden.has(v.ticker));
+  const liveCount = tickCatches.filter((t) => t.status !== 'faded').length + vwapReclaims.filter((v) => v.status !== 'lost').length;
   // News radar — fresh catalysts on known runners that aren't moving yet.
   const newsRadar = (payload?.news_radar ?? []).filter((n) => !hidden.has(n.ticker));
   // The ↗ EMA reclaim layers moved OUT of this sidebar and into their own
@@ -142,9 +146,7 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
         >
           <span>
             <Text strong style={{ color: '#69c0ff', letterSpacing: 0.5, fontSize: 15 }}>🛰️ Live Ticks</Text>
-            <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>
-              {tickCatches.filter((t) => t.status !== 'faded').length}
-            </Text>
+            <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>{liveCount}</Text>
           </span>
           {hiddenList.length > 0 && (
             <Popover
@@ -158,11 +160,19 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
             </Popover>
           )}
         </div>
-        {tickCatches.length > 0 ? (
+        {tickCatches.length > 0 || vwapReclaims.length > 0 ? (
           <div style={{ flex: '1 1 auto', minHeight: 0, overflow: 'auto', background: '#0d1b26' }}>
             {tickCatches.map((tc) => (
               <TickItem key={tc.ticker} tc={tc} selected={tc.ticker === selected} onSelect={setSelected} />
             ))}
+            {vwapReclaims.length > 0 && (
+              <>
+                <SectionHeader label="↑ VWAP RECLAIMS" count={vwapReclaims.filter((v) => v.status !== 'lost').length} color="#36cfc9" />
+                {vwapReclaims.map((v) => (
+                  <VwapItem key={v.ticker} item={v} selected={v.ticker === selected} onSelect={setSelected} />
+                ))}
+              </>
+            )}
           </div>
         ) : (
           <div style={{ flex: '1 1 auto', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -277,7 +287,7 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
       </div>
 
       {/* Live ticks — caught before the screens; pinned above everything */}
-      {!hideLiveTicks && tickCatches.length > 0 && (
+      {!hideLiveTicks && (tickCatches.length > 0 || vwapReclaims.length > 0) && (
         <div
           style={{
             flex: '0 0 auto',
@@ -287,10 +297,22 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
             borderBottom: '2px solid #1765ad',
           }}
         >
-          <SectionHeader label="🛰️ LIVE TICKS" count={tickCatches.filter((t) => t.status !== 'faded').length} color="#40a9ff" />
-          {tickCatches.map((tc) => (
-            <TickItem key={tc.ticker} tc={tc} selected={tc.ticker === selected} onSelect={setSelected} />
-          ))}
+          {tickCatches.length > 0 && (
+            <>
+              <SectionHeader label="🛰️ LIVE TICKS" count={tickCatches.filter((t) => t.status !== 'faded').length} color="#40a9ff" />
+              {tickCatches.map((tc) => (
+                <TickItem key={tc.ticker} tc={tc} selected={tc.ticker === selected} onSelect={setSelected} />
+              ))}
+            </>
+          )}
+          {vwapReclaims.length > 0 && (
+            <>
+              <SectionHeader label="↑ VWAP RECLAIMS" count={vwapReclaims.filter((v) => v.status !== 'lost').length} color="#36cfc9" />
+              {vwapReclaims.map((v) => (
+                <VwapItem key={v.ticker} item={v} selected={v.ticker === selected} onSelect={setSelected} />
+              ))}
+            </>
+          )}
         </div>
       )}
 
@@ -320,7 +342,7 @@ export function IgnitionSidebar({ payload }: { payload: CyclePayload | null }) {
 
       {hideIgnitionList ? (
         <div style={{ flex: '1 1 auto' }} />
-      ) : all.length === 0 && (hideLiveTicks || tickCatches.length === 0) && (hideNewsRadar || newsRadar.length === 0) ? (
+      ) : all.length === 0 && (hideLiveTicks || (tickCatches.length === 0 && vwapReclaims.length === 0)) && (hideNewsRadar || newsRadar.length === 0) ? (
         <div style={{ flex: '1 1 auto', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}
@@ -422,6 +444,77 @@ function TickItem({ tc, selected, onSelect }: { tc: TickCatch; selected: boolean
         <Text style={{ color: (num(tc.change_pct) ?? 0) >= 0 ? '#52c41a' : '#ff4d4f', fontWeight: 600 }}>
           {fmtPct(tc.change_pct)}
         </Text>
+      </span>
+    </div>
+  );
+}
+
+// A ↑ VWAP reclaim row — a session mover back over session VWAP on a closed
+// 1m candle. reclaimed = teal outline (hold?), confirmed = bright teal (held /
+// extended on a later close), lost = grey linger. Right side = live price and
+// live % vs VWAP (the thing that decides the hold); day chg% small beneath.
+const VWAP_STYLES = {
+  reclaimed: { border: '#13a8a8', ticker: '#5cdbd3', row: '#112b2b' },
+  confirmed: { border: '#36cfc9', ticker: '#87e8de', row: '#0f3a36' },
+  lost:      { border: '#595959', ticker: '#8c8c8c', row: '#262626' },
+} as const;
+
+function VwapItem({ item, selected, onSelect }: { item: VwapReclaimItem; selected: boolean; onSelect: (t: string) => void }) {
+  const s = VWAP_STYLES[item.status];
+  const anchorIso = item.status === 'confirmed' && item.confirmed_at ? item.confirmed_at
+    : item.status === 'lost' && item.lost_at ? item.lost_at
+      : item.reclaim_at;
+  const agoMs = Date.now() - new Date(anchorIso).getTime();
+  const ago = agoMs < 60_000 ? `${Math.round(agoMs / 1000)}s` : `${Math.round(agoMs / 60_000)}m`;
+  const meta: string[] = [];
+  if (item.status === 'reclaimed') meta.push('↑ reclaimed · hold?');
+  if (item.status === 'confirmed') meta.push(item.confirmed_via === 'extend' ? '✅ extended' : '✅ held');
+  if (item.status === 'lost') meta.push('lost VWAP');
+  meta.push(`VWAP ${fmtPrice(item.vwap)}`);
+  if (item.vol_ratio != null && item.vol_ratio >= 1.5) meta.push(`${item.vol_ratio.toFixed(1)}× vol`);
+  if (item.anchor === 'partial') meta.push('partial');
+  if (item.episode > 1) meta.push(`#${item.episode}`);
+  meta.push(`${ago} ago`);
+  const pct = item.pct_vs_vwap;
+  const title = `Reclaimed $${item.reclaim_price.toFixed(2)} after ${item.below_bars} closed 1m candles under VWAP` +
+    ` · peak +${item.peak_pct.toFixed(1)}% above` +
+    (item.anchor === 'partial' ? ' · VWAP anchored after 04:00 ET (late subscription / mid-session boot)' : ' · session VWAP from 04:00 ET') +
+    ` · via ${item.source}`;
+  return (
+    <div
+      onClick={() => onSelect(item.ticker)}
+      title={title}
+      style={{
+        display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
+        padding: '5px 8px', borderBottom: `1px solid ${s.row}`, cursor: 'pointer',
+        borderLeft: `3px solid ${s.border}`,
+        background: selected ? '#15395b' : undefined,
+        opacity: item.status === 'lost' ? 0.55 : 1,
+      }}
+    >
+      <span style={{ minWidth: 0 }}>
+        <span style={{ marginRight: 6, display: 'inline-flex', verticalAlign: 'middle' }}>
+          <TickerLinks ticker={item.ticker} />
+        </span>
+        <TickerLink
+          ticker={item.ticker}
+          onSelect={onSelect}
+          stopPropagation
+          style={{ color: s.ticker, fontWeight: 600, fontSize: 13 }}
+        />
+        <span style={{ marginLeft: 6, fontSize: 10, color: '#8c8c8c' }}>
+          {meta.join(' · ')}
+        </span>
+      </span>
+      <span style={{ flex: '0 0 auto', textAlign: 'right' }}>
+        <Text type="secondary" style={{ fontSize: 11, marginRight: 6 }}>{fmtPrice(item.price)}</Text>
+        <Text style={{ color: pct >= 0 ? '#52c41a' : '#ff4d4f', fontWeight: 600 }}>
+          {`${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`}
+        </Text>
+        <Text type="secondary" style={{ fontSize: 10, marginLeft: 4 }}>vs VWAP</Text>
+        {item.change_pct != null && (
+          <Text type="secondary" style={{ fontSize: 10, marginLeft: 6 }}>{fmtPct(item.change_pct)} day</Text>
+        )}
       </span>
     </div>
   );

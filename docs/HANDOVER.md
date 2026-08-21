@@ -16,6 +16,20 @@ Tables + code stay intact; re-enable by removing `edge` from the env var.
 Default desk is now **🛰️ Live Ticks, Momentum, Momentum History**. The Edge
 narrative below is retained as history.
 
+**ALERTS REVIEW + ↑ VWAP RECLAIM LAYER (2026-08-21, same session — see XVWAP
+below).** Finding: NOTHING alerted because every slug with a live producer
+was muted in the prod `.env` (`ALERTS_DISABLED=momentum,ignition,
+new_ignition,fresh_burst,accum,tick_watch,tick_catch,radar,dual_signal,
+swing`) and the only unmuted slugs (`ema_*`, `edge_*`) belong to parked
+components. Operator's call: alert when a new Live Tick appears → prod
+`.env` now UNMUTES `tick_watch` + `tick_catch` (Telegram 👀/🛰️, once per
+ticker per day) and the dashboard's 👀/🛰️ sounds are back on. New ↑ VWAP
+reclaim layer: session-VWAP cross-and-hold on closed 1m candles, listed
+under LIVE TICKS, graded as `tier='vwap'`, Telegram slug `vwap_reclaim`
+added to ALERTS_DISABLED until graded. `momentum` (fresh-news catalyst
+pushes) stays muted — operator didn't ask; it is the one-line unmute if
+they want news pings back.
+
 **CURRENT FOCUS (2026-08-21, superseded above for Edge): lean manual-playbook desk + Edge live in production.** After testing the
 automated experiments, the operator's successful workflow is: watch the
 current session's top movers on 1-minute charts; configure the EMA pair per
@@ -264,6 +278,30 @@ Journal; **attribution join still the open payoff**) · 06-17 tick feed go-live.
 ---
 
 ## What shipped this session (newest first, all on prod unless noted)
+
+XVWAP. **↑ VWAP reclaim layer + Live Ticks alerts un-muted (2026-08-21).**
+Operator: "too often, when a ticker crosses the VWAP it rallies up" — list
+them under Live Ticks, think about when to fade them. Built
+`services/vwap-reclaim.ts` (pure tracker: session VWAP Σ(HLC3×vol)/Σvol
+from 04:00 ET on the 1s bars, EVERY subscribed symbol; reclaim = 1m close
+≥ VWAP×1.002 after ≥5 closed candles strictly below + ≥20 min tape + junk
+floor; confirm = later close holds ≥ reclaim close or any close ≥ VWAP×1.01;
+lost = close ≤ VWAP×0.997 with minutes-held + peak_pct telemetry — the
+fade data; expire 10 min unconfirmed; ≤4 episodes/session; `anchor`
+session|partial honesty for late subs / mid-session boots). Poller gate:
+row only when the name is on a screen or in the ladder at reclaim time;
+accepted episodes graded as `tier='vwap'` reclaim/confirm/lost/expire;
+rows live-refresh price-vs-VWAP per 1s bar; display TTLs lost 5m /
+reclaimed 15m / confirmed 60m; reseed rows on boot. Web: "↑ VWAP RECLAIMS"
+sub-list in the Live Ticks sidebar (both lean + full layouts), soft tone on
+reclaim, bright pair + notification on confirm. Telegram: slug
+`vwap_reclaim` (confirm only, once/ticker/day) — MUTED in prod until
+graded. Regression `scripts/verify-vwap-reclaim.ts` S1–S11. Known
+limitation: a mid-session deploy resets every VWAP (partial anchors for
+the rest of that session) — Databento 1m warmup is the upgrade path.
+**Next:** after ~5 sessions, grade (see detection-layers ↑ section) →
+decide phone promotion + the fade rule (lost-after-confirm peak/minutes
+distribution).
 
 XFEED402. **Databento feed DOWN 00:00–11:45 ET 2026-08-12 — unpaid
 invoice (billing renewal); ⚠️ 08-12 is a PARTIAL-BLIND day for ALL

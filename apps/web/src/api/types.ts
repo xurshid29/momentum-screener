@@ -316,6 +316,30 @@ export interface TickCatch {
   watch_change_pct: number | null;
 }
 
+// ↑ VWAP reclaim — a LIVE TICKS sub-list (2026-08-21): a session mover that
+// closed a 1m candle back over session VWAP (reclaimed), then held/extended on
+// a later close (confirmed), or closed back under (lost — lingers grey).
+export type VwapReclaimStatus = 'reclaimed' | 'confirmed' | 'lost';
+export interface VwapReclaimItem {
+  ticker: string;
+  status: VwapReclaimStatus;
+  price: number;
+  vwap: number;
+  pct_vs_vwap: number;
+  reclaim_price: number;
+  reclaim_at: string;
+  confirmed_at: string | null;
+  confirmed_via: 'hold' | 'extend' | null;
+  lost_at: string | null;
+  anchor: 'session' | 'partial';
+  below_bars: number;
+  vol_ratio: number | null;
+  episode: number;
+  peak_pct: number;
+  change_pct: number | null;
+  source: 'screen' | 'ladder';
+}
+
 // A news-radar hit — a fresh catalyst on a known runner (momentum/ignition
 // history) that is NOT on any screen yet. Moves typically start minutes after
 // the wire; 'moving' = the tick feed or a screen has since picked the name up.
@@ -463,6 +487,8 @@ export interface CyclePayload {
   banners: { new_with_catalyst: string[]; fresh_news: string[] };
   fresh_news: NewsHeadline[];
   tick_catches: TickCatch[];
+  // Optional for rolling-deploy compatibility with an older API.
+  vwap_reclaims?: VwapReclaimItem[];
   news_radar: NewsRadarItem[];
   ema_crosses: EmaCrossItem[];
   macd_momo: MacdMomoItem[];

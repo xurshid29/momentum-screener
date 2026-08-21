@@ -1,4 +1,4 @@
-# The Early-Detection Layers — reference (current as of 2026-08-12)
+# The Early-Detection Layers — reference (current as of 2026-08-21)
 
 The dashboard detects runners through a chain of layers, ordered by how early
 they can speak. Each was measured before (or while) shipping, each is graded
@@ -333,6 +333,59 @@ anchored — the UPC display fix).
 **Grading.** `tier='tick'`: watch / watch_suppressed (reason
 low_evidence|stale_*) / confirm (via) / fade / watch_expired. Knobs:
 `TICK_DETECT`, `TICK_WATCH_EVIDENCE` (poller).
+
+---
+
+## ↑ VWAP reclaim (`vwap-reclaim.ts` + poller `onVwapEvent`; shipped 2026-08-21, **UNGRADED**)
+
+**What/why.** The operator's observation: "too often, when a ticker crosses
+the VWAP it rallies up." A session-VWAP version of that on the 1s feed,
+decided on CLOSED 1m candles (TV parity with the 1m workflow). Listed under
+🛰️ LIVE TICKS as its own sub-list; dashboard sounds on; **Telegram slug
+`vwap_reclaim` muted in prod until graded** (operating norm: no phone until
+tier_events shows the fire rate is worth it).
+
+**VWAP.** Σ(HLC3 × vol)/Σ vol since the 04:00 ET session open on the raw 1s
+bars, every subscribed symbol (3 floats + one 1m bucket each). Feed-visible
+EQUS.MINI volume → thin names can sit a little off the consolidated chart;
+the chart is the execution reference. **Anchor honesty:** a name subscribed
+mid-session (screen-sync / radar / Edge `ensureSubscribed` → `markLate`) or
+a service booted >15 min after 04:00 has no bars back to the open — its VWAP
+is anchored at the first bar seen and every event carries
+`anchor='partial'` (vs `'session'`). Grade the two apart; the Databento 1m
+warmup (Edge's approach) is the upgrade if partial reclaims grade worse.
+**Every mid-session deploy makes that day partial for everyone.**
+
+**Reclaim.** A 1m close ≥ VWAP × 1.002 after ≥5 closed candles strictly
+BELOW VWAP (a real stay under, not a flicker — a close exactly at VWAP or
+inside the 0.2% band neither counts as below nor resets the count), ≥20 min
+of tape behind the VWAP, junk floor on the reclaim bar (≥3 prints, ≥$2k
+feed-visible), ≤4 episodes/name/session. **Poller gate:** a reclaim earns a
+row only if the name is on the Momentum screen (or Ignition when enabled) or
+in the Live Ticks ladder (non-faded) at that moment — the session's movers;
+universe noise is neither listed nor graded. `source` = screen | ladder.
+
+**Confirm ("started moving up").** A later close that HOLDS above VWAP with
+close ≥ the reclaim close (`via='hold'`), or any close ≥ VWAP × 1.01
+(`via='extend'` — allowed on the reclaim candle itself for a vertical
+cross). Unconfirmed reclaims EXPIRE after 10 min.
+
+**Lost (the fade tell).** A close ≤ VWAP × 0.997 ends the episode; the event
+carries `minutes` held and `peak_pct` (max close % above VWAP) — that is the
+data for "when to fade them": what a typical hold is worth, how long it
+lasts, and whether confirmed episodes outlive unconfirmed ones. Rows linger
+grey 5 min; confirmed rows age off the list after 60 min of silence (display
+only — the tracker still grades the eventual loss via `vwapEpisodeOpen`).
+
+**Grading.** `tier='vwap'`: reclaim (meta: price, vwap, pct, anchor,
+episode, below_bars, vol_ratio, notional, source, chg, on_screen,
+in_ladder) / confirm (via, minutes) / lost (minutes, peak_pct, confirmed) /
+expire (minutes, peak_pct). First cuts: confirm rate; median `peak_pct` and
+`minutes` for lost-after-confirm vs lost-before-confirm; session vs partial
+anchor; screen vs ladder source; episode #1 vs later; `vol_ratio` ≥1.5 vs
+below; time-of-day. Knobs: `VWAP_RECLAIM` (tracker), `VWAP_LIST` (poller
+display TTLs). Regression: `npx tsx scripts/verify-vwap-reclaim.ts` (S1–S11).
+Reseed on boot: rows only (display), no episodes re-opened, no re-pings.
 
 ---
 

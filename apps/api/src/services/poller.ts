@@ -35,6 +35,7 @@ import { outcomes } from './outcomes.js';
 import { getContinuationCandidates, type ContinuationCandidate } from './continuation.js';
 import { classifyByRules, type Classification, type ClassifierInput } from './catalyst-rules.js';
 import { recordTierEvent } from './tier-events.js';
+import type { VwapEvent, VwapSnapshot, VwapAnchor } from './vwap-reclaim.js';
 import { classifyByClaude, llmEnabled } from './catalyst-claude.js';
 import { fetchAndStoreTickerNews } from './ticker-news.js';
 import {
@@ -238,6 +239,41 @@ export interface TickCatch {
   confirmed_at: string | null;     // ISO of promotion to confirmed
   watch_change_pct: number | null; // chg% at the watch flag — shows the lead on confirm
 }
+
+// ↑ VWAP reclaim (2026-08-21) — a LIVE TICKS sub-list. The tracker
+// (vwap-reclaim.ts) watches every subscribed symbol on closed 1m candles; the
+// poller keeps a row only for names that are on a screen or in the ladder
+// when they reclaim (the operator's "top movers of the session"), so the list
+// is the session's leaders coming back over session VWAP — the spot the
+// operator observed rallies start from. reclaimed = crossed on a close,
+// confirmed = held/extended on a later close ("started moving up"), lost =
+// closed back under (the fade tell; lingers grey).
+export type VwapReclaimStatus = 'reclaimed' | 'confirmed' | 'lost';
+export interface VwapReclaimItem {
+  ticker: string;
+  status: VwapReclaimStatus;
+  price: number;                 // live — refreshed from each 1s bar
+  vwap: number;                  // live session VWAP (feed-visible volume)
+  pct_vs_vwap: number;           // live (price / vwap − 1) × 100
+  reclaim_price: number;
+  reclaim_at: string;
+  confirmed_at: string | null;
+  confirmed_via: 'hold' | 'extend' | null;
+  lost_at: string | null;
+  anchor: VwapAnchor;            // 'partial' = VWAP anchored after 04:00 ET (late sub / mid-session boot)
+  below_bars: number;            // closed 1m candles under VWAP before the reclaim
+  vol_ratio: number | null;      // reclaim-bar volume vs the prior candles' median
+  episode: number;               // nth reclaim for this name this session
+  peak_pct: number;              // max % above VWAP this episode (live)
+  change_pct: number | null;     // day change% from the screen row when the name is on one
+  source: 'screen' | 'ladder';   // why it qualified for a row
+}
+const VWAP_LIST = {
+  lost_linger_ms: 5 * 60_000,       // grey linger after a loss
+  reclaimed_ttl_ms: 15 * 60_000,    // safety net — the tracker expires unconfirmed reclaims at 10 min
+  confirmed_ttl_ms: 60 * 60_000,    // a confirmed hold stays listed an hour, then ages out (display only)
+  max_display: 12,
+};
 
 // News radar — a fresh catalyst landing on a KNOWN runner (a ticker from our
 // momentum/ignition history) that is NOT currently on any screen. Measured on
@@ -553,6 +589,7 @@ export interface CyclePayload {
   swing: SwingRow[];
   continuation: ContinuationCandidate[];
   tick_catches: TickCatch[];
+  vwap_reclaims: VwapReclaimItem[];
   news_radar: NewsRadarItem[];
   ema_crosses: EmaCrossItem[];
   macd_momo: MacdMomoItem[];
@@ -767,6 +804,13 @@ class PollerService {
     accum_entry_chg?: number;
     accum_peak?: number;
   }>();
+  // ↑ VWAP reclaim rows (see VwapReclaimItem), keyed by ticker. Episodes the
+  // poller ACCEPTED (screen/ladder gate) are tracked so a later lost/expire
+  // from the tracker is graded only when its reclaim was — universe noise
+  // never touches tier_events. Telegram once per ticker per ET day.
+  private vwapReclaims = new Map<string, VwapReclaimItem & { last_event_ms: number }>();
+  private vwapEpisodeOpen = new Set<string>();
+  private alertedVwap = new Set<string>();
   // Quiet-accumulation dedup — once per ticker per ET day (see ACCUM), plus
   // the Telegram-side dedup for the tight-gate 🤫 push, plus the persistence
   // counter (cycles observed hot within the first-sight window).
@@ -1556,7 +1600,7 @@ class PollerService {
   private async seedTierState() {
     try {
       const components = getComponentFlags();
-      const tiers = ['accum', 'tick', 'radar'];
+      const tiers = ['accum', 'tick', 'radar', 'vwap'];
       if (components.ema) tiers.push('cross');
       if (components.momo || components.setups) tiers.push('macd');
       const rows = await getDb()
@@ -1637,6 +1681,47 @@ class PollerService {
             });
           } else if (r.event === 'fade' || r.event === 'watch_expired') {
             this.tickCatches.delete(t);
+          }
+        } else if (r.tier === 'vwap') {
+          // Display rows only — the tracker's VWAP sums died with the old
+          // process (partial anchors from here on), so no episode is re-opened
+          // and nothing re-pings; rows age out by their display TTLs.
+          if (r.event === 'reclaim') {
+            this.vwapReclaims.set(t, {
+              ticker: t, status: 'reclaimed',
+              price: num(m.price) ?? 0, vwap: num(m.vwap) ?? 0, pct_vs_vwap: num(m.pct) ?? 0,
+              reclaim_price: num(m.price) ?? 0, reclaim_at: iso(atMs),
+              confirmed_at: null, confirmed_via: null, lost_at: null,
+              anchor: m.anchor === 'partial' ? 'partial' : 'session',
+              below_bars: num(m.below_bars) ?? 0, vol_ratio: num(m.vol_ratio),
+              episode: num(m.episode) ?? 1, peak_pct: num(m.pct) ?? 0,
+              change_pct: num(m.chg), source: m.source === 'ladder' ? 'ladder' : 'screen',
+              last_event_ms: atMs,
+            });
+          } else if (r.event === 'confirm') {
+            this.alertedVwap.add(t);
+            const v = this.vwapReclaims.get(t);
+            if (v) {
+              v.status = 'confirmed';
+              v.confirmed_at = iso(atMs);
+              v.confirmed_via = m.via === 'extend' ? 'extend' : 'hold';
+              v.price = num(m.price) ?? v.price;
+              v.vwap = num(m.vwap) ?? v.vwap;
+              v.pct_vs_vwap = num(m.pct) ?? v.pct_vs_vwap;
+              v.peak_pct = Math.max(v.peak_pct, num(m.pct) ?? 0);
+              v.last_event_ms = atMs;
+            }
+          } else if (r.event === 'lost') {
+            const v = this.vwapReclaims.get(t);
+            if (v) {
+              v.status = 'lost';
+              v.lost_at = iso(atMs);
+              v.price = num(m.price) ?? v.price;
+              v.pct_vs_vwap = num(m.pct) ?? v.pct_vs_vwap;
+              v.last_event_ms = atMs;
+            }
+          } else if (r.event === 'expire') {
+            this.vwapReclaims.delete(t);
           }
         } else if (r.tier === 'radar') {
           if (r.event === 'hit') {
@@ -1837,6 +1922,9 @@ class PollerService {
       this.alertedCross.clear();
       this.alertedTickWatch.clear();
       this.tickCatches.clear();
+      this.vwapReclaims.clear();
+      this.vwapEpisodeOpen.clear();
+      this.alertedVwap.clear();
       this.accumSeen.clear();
       this.alertedAccum.clear();
       this.accumHotCycles.clear();
@@ -2690,6 +2778,29 @@ class PollerService {
       tickStatusRank[a.status] - tickStatusRank[b.status]
       || (b.confirmed_at ?? b.caught_at).localeCompare(a.confirmed_at ?? a.caught_at));
 
+    // ↑ VWAP reclaims — refresh day change% from the screen row, age rows out
+    // by status (display TTLs only; the tracker's lost/expire events are the
+    // graded episode ends), confirmed on top, newest first.
+    const vwapList: VwapReclaimItem[] = [];
+    for (const [t, v] of this.vwapReclaims) {
+      const row = screenRowByTicker.get(t);
+      if (row?.change_pct != null && session !== 'afterhours') v.change_pct = row.change_pct;
+      const ttl = v.status === 'lost' ? VWAP_LIST.lost_linger_ms
+        : v.status === 'reclaimed' ? VWAP_LIST.reclaimed_ttl_ms
+        : VWAP_LIST.confirmed_ttl_ms;
+      if (nowMsTick - v.last_event_ms > ttl) {
+        this.vwapReclaims.delete(t);
+        continue;
+      }
+      const { last_event_ms: _omit, ...item } = v;
+      vwapList.push(item);
+    }
+    const vwapRank: Record<VwapReclaimStatus, number> = { confirmed: 0, reclaimed: 1, lost: 2 };
+    vwapList.sort((a, b) =>
+      vwapRank[a.status] - vwapRank[b.status]
+      || (b.confirmed_at ?? b.reclaim_at).localeCompare(a.confirmed_at ?? a.reclaim_at));
+    vwapList.splice(VWAP_LIST.max_display);
+
     // News radar — escalate entries whose ticker started moving (tick catch or
     // a screen returned it), refresh scores from the classification cache (the
     // async LLM pass may have upgraded the rule verdict), prune expired ones.
@@ -3070,6 +3181,7 @@ class PollerService {
       swing: components.swing ? scoredSwing : [],
       continuation: components.continuation ? this.lastContinuation : [],
       tick_catches: tickCatchList,
+      vwap_reclaims: vwapList,
       news_radar: radarDisplay,
       ema_crosses: components.ema ? emaCrossDisplay : [],
       macd_momo: components.momo ? macdMomoDisplay : [],
@@ -3614,6 +3726,105 @@ class PollerService {
     this.momoSetupSnapshotFn = fn;
   }
 
+  // ↑ VWAP reclaim events from the tick feed (closed 1m candles, every
+  // subscribed symbol). Gate: a RECLAIM earns a row only when the name is on
+  // a screen or in the Live Ticks ladder right now — the session's movers —
+  // and only accepted episodes are graded; their later confirm/lost/expire
+  // follow through vwapEpisodeOpen even after the row aged off the display.
+  onVwapEvent(e: VwapEvent): void {
+    const nowMs = Date.now();
+    const t = e.ticker;
+    const at = new Date(e.ts_sec * 1000).toISOString();
+    const metaBase = {
+      price: e.price, vwap: e.vwap, pct: e.pct_vs_vwap, anchor: e.anchor, episode: e.episode,
+      below_bars: e.below_bars, vol_ratio: e.vol_ratio, notional: Math.round(e.notional),
+      reclaim_price: e.reclaim_price, bar_ts: at,
+    };
+    if (e.type === 'reclaim') {
+      const onScreen = this.isCurrentlyScreened(t);
+      const tc = this.tickCatches.get(t);
+      const inLadder = !!tc && tc.status !== 'faded';
+      if (!onScreen && !inLadder) return; // universe noise — not listed, not graded
+      const row = this.lastPayload?.rows.find((r) => r.ticker === t) ?? null;
+      const source: VwapReclaimItem['source'] = onScreen ? 'screen' : 'ladder';
+      this.vwapReclaims.set(t, {
+        ticker: t, status: 'reclaimed',
+        price: e.price, vwap: e.vwap, pct_vs_vwap: e.pct_vs_vwap,
+        reclaim_price: e.price, reclaim_at: at,
+        confirmed_at: null, confirmed_via: null, lost_at: null,
+        anchor: e.anchor, below_bars: e.below_bars, vol_ratio: e.vol_ratio, episode: e.episode,
+        peak_pct: e.pct_vs_vwap, change_pct: row?.change_pct ?? null, source,
+        last_event_ms: nowMs,
+      });
+      this.vwapEpisodeOpen.add(t);
+      console.log(
+        `[vwap] ↑ reclaim ${t} $${e.price.toFixed(2)} vs VWAP $${e.vwap.toFixed(2)} (+${e.pct_vs_vwap.toFixed(2)}%) · ` +
+        `${e.below_bars} bars below · ${e.vol_ratio != null ? `${e.vol_ratio}× bar vol · ` : ''}` +
+        `$${Math.round(e.notional / 1000)}k bar · ep${e.episode} · ${e.anchor} anchor · via ${source}`,
+      );
+      recordTierEvent('vwap', 'reclaim', t, { ...metaBase, source, chg: row?.change_pct ?? null, on_screen: onScreen, in_ladder: inLadder });
+      return;
+    }
+    if (!this.vwapEpisodeOpen.has(t)) return;
+    const v = this.vwapReclaims.get(t);
+    if (e.type === 'confirm') {
+      if (v) {
+        v.status = 'confirmed';
+        v.confirmed_at = at;
+        v.confirmed_via = e.via ?? 'hold';
+        v.price = e.price;
+        v.vwap = e.vwap;
+        v.pct_vs_vwap = e.pct_vs_vwap;
+        v.peak_pct = Math.max(v.peak_pct, e.pct_vs_vwap);
+        v.last_event_ms = nowMs;
+      }
+      console.log(
+        `[vwap] ✅ confirm(${e.via ?? 'hold'}) ${t} $${e.price.toFixed(2)} +${e.pct_vs_vwap.toFixed(2)}% above VWAP · ` +
+        `${Math.round((e.ts_sec - e.reclaim_ts) / 60)}min after the reclaim`,
+      );
+      recordTierEvent('vwap', 'confirm', t, { ...metaBase, via: e.via ?? 'hold', minutes: Math.round((e.ts_sec - e.reclaim_ts) / 60) });
+      if (telegramEnabled() && !this.alertsMuted && !this.alertedVwap.has(t)) {
+        this.alertedVwap.add(t);
+        if (!alertDisabled('vwap_reclaim')) void sendTelegram(formatVwapReclaimAlert(t, e, v?.change_pct ?? null));
+      }
+      return;
+    }
+    // lost / expire — the episode ends; grade it with hold time + peak.
+    this.vwapEpisodeOpen.delete(t);
+    const minutes = e.minutes ?? Math.round((e.ts_sec - e.reclaim_ts) / 60);
+    const peak = e.peak_pct ?? v?.peak_pct ?? 0;
+    if (e.type === 'lost') {
+      if (v) {
+        v.status = 'lost';
+        v.lost_at = at;
+        v.price = e.price;
+        v.vwap = e.vwap;
+        v.pct_vs_vwap = e.pct_vs_vwap;
+        v.last_event_ms = nowMs;
+      }
+      console.log(`[vwap] 💤 lost ${t} $${e.price.toFixed(2)} ${e.pct_vs_vwap.toFixed(2)}% vs VWAP · held ${minutes}min · peak +${peak.toFixed(2)}%`);
+      recordTierEvent('vwap', 'lost', t, { ...metaBase, minutes, peak_pct: peak, confirmed: v?.status === 'confirmed' || v?.confirmed_at != null });
+    } else {
+      this.vwapReclaims.delete(t);
+      console.log(`[vwap] ⌛ expired ${t} — no confirm within ${minutes}min (peak +${peak.toFixed(2)}%)`);
+      recordTierEvent('vwap', 'expire', t, { ...metaBase, minutes, peak_pct: peak });
+    }
+  }
+
+  hasVwapRow(ticker: string): boolean {
+    return this.vwapReclaims.has(ticker);
+  }
+
+  // Live price-vs-VWAP for a listed name (called per 1s bar by the tick feed).
+  updateVwapLive(ticker: string, s: VwapSnapshot): void {
+    const v = this.vwapReclaims.get(ticker);
+    if (!v || v.status === 'lost') return;
+    v.price = s.price;
+    v.vwap = +s.vwap.toFixed(4);
+    v.pct_vs_vwap = +s.pct_vs_vwap.toFixed(2);
+    if (s.pct_vs_vwap > v.peak_pct) v.peak_pct = +s.pct_vs_vwap.toFixed(2);
+  }
+
   onTickEvent(e: TickEvent): void {
     const nowMs = Date.now();
     const existing = this.tickCatches.get(e.ticker);
@@ -4001,6 +4212,29 @@ function formatAccumAlert(r: EnrichedRow, fastRv: number, bullishNews: boolean):
 // crossed the watch line on the per-second tape, volume confirmation pending.
 // Deliberately minimal: the value is getting eyes on the chart 20–40 chg-points
 // before the volume-confirmed ping.
+// ↑ VWAP reclaim CONFIRMED — a session leader closed back over session VWAP
+// and then held/extended on a later 1m close. Muted by default until graded
+// (ALERTS_DISABLED slug vwap_reclaim); the dashboard list is the surface.
+function formatVwapReclaimAlert(ticker: string, e: VwapEvent, dayChg: number | null): string {
+  const finviz = `https://finviz.com/quote.ashx?t=${encodeURIComponent(ticker)}`;
+  const tv = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSymbol(ticker))}`;
+  const chg = dayChg == null ? '' : `  ${dayChg >= 0 ? '+' : ''}${dayChg.toFixed(1)}%`;
+  const evidence = [
+    `VWAP $${e.vwap.toFixed(2)} · +${e.pct_vs_vwap.toFixed(1)}% above`,
+    `${e.below_bars} bars below first`,
+    e.via === 'extend' ? 'extended' : 'held on the next close',
+  ];
+  if (e.vol_ratio != null && e.vol_ratio >= 1.5) evidence.push(`${e.vol_ratio.toFixed(1)}× bar vol`);
+  if (e.anchor === 'partial') evidence.push('partial-session VWAP');
+  const lines = [
+    `↑ <b>${escapeHtml(ticker)}</b>  $${e.price.toFixed(2)}${chg}`,
+    `<b>VWAP RECLAIMED</b> — closed 1m candle back over session VWAP, moving up`,
+    evidence.join(' · '),
+    `<a href="${finviz}">Finviz</a> · <a href="${tv}">TradingView</a>`,
+  ];
+  return lines.join('\n');
+}
+
 function formatTickWatchAlert(e: TickEvent): string {
   const price = `$${e.price.toFixed(2)}`;
   const chg = `${e.change_pct >= 0 ? '+' : ''}${e.change_pct.toFixed(1)}%`;
