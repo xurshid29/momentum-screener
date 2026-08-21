@@ -14,8 +14,10 @@ import type { CyclePayload } from '../api/types';
 // Dashboard alert kill switches — mirrors the server-side ALERTS_DISABLED.
 // 2026-07-22: everything muted except EMA-cross confirmations (operator's
 // call). 2026-08-21: EMA is parked and the operator asked for alerts when a
-// new Live Tick appears, so 👀/🛰️ are back on, plus the new ↑ VWAP reclaim
-// list (soft tone on reclaim, bright pair on confirm). Disabled, not
+// new Live Tick appears — 🛰️ CONFIRMED only (the 👀 watch heads-up was
+// switched back off the same morning: too early a tier to act on), plus the
+// new ↑ VWAP reclaim list (soft tone on reclaim, bright pair on confirm).
+// Disabled, not
 // deleted: the seen-set bookkeeping below keeps marking events while muted,
 // so flipping a flag back on never back-blasts the day's backlog.
 const DASHBOARD_ALERTS: Record<
@@ -27,7 +29,7 @@ const DASHBOARD_ALERTS: Record<
   ema_cross_observe: true,  // 📈 new cross appeared — soft single tone
   news_radar: false,
   tick_confirmed: true,     // 🛰️ radar ping + notification (2026-08-21)
-  tick_watch: true,         // 👀 soft ping + notification (2026-08-21)
+  tick_watch: false,        // 👀 off again (2026-08-21 pm) — confirmed-only, operator's call
   accum: false,
   vwap_reclaimed: true,     // ↑ soft tone — closed back over VWAP, hold pending
   vwap_confirmed: true,     // ↑✅ bright pair + notification — held/extended

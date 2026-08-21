@@ -22,8 +22,10 @@ was muted in the prod `.env` (`ALERTS_DISABLED=momentum,ignition,
 new_ignition,fresh_burst,accum,tick_watch,tick_catch,radar,dual_signal,
 swing`) and the only unmuted slugs (`ema_*`, `edge_*`) belong to parked
 components. Operator's call: alert when a new Live Tick appears → prod
-`.env` now UNMUTES `tick_watch` + `tick_catch` (Telegram 👀/🛰️, once per
-ticker per day) and the dashboard's 👀/🛰️ sounds are back on. New ↑ VWAP
+`.env` UNMUTES `tick_catch` (Telegram 🛰️ LIVE TICK CONFIRMED, once per
+ticker per day) and the dashboard's 🛰️ sound is back on. `tick_watch` (👀)
+was un-muted for ~2 hours then re-muted the same morning — operator wants
+the CONFIRMED tier only, both phone and dashboard. New ↑ VWAP
 reclaim layer: session-VWAP cross-and-hold on closed 1m candles, listed
 under LIVE TICKS, graded as `tier='vwap'`, Telegram slug `vwap_reclaim`
 added to ALERTS_DISABLED until graded. `momentum` (fresh-news catalyst
