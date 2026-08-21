@@ -1420,6 +1420,11 @@ class TickFeedService {
     }
   }
 
+  // ↑ VWAP tracker introspection for /api/screener/vwap-debug.
+  vwapDebug(ticker?: string): Record<string, unknown> {
+    return this.vwapReclaim.debug(ticker);
+  }
+
   // Edge presets can be added while the 10-minute structural sync is idle.
   // Subscribe immediately so the new playbook row starts receiving bars; the
   // historical warmup runs independently inside EdgeService.

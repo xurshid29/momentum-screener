@@ -187,6 +187,61 @@ export class VwapReclaimTracker {
     return { price: st.lastClose, vwap, pct_vs_vwap: (st.lastClose / vwap - 1) * 100, ts_sec: st.lastTs };
   }
 
+  // Operator-facing introspection (GET /api/screener/vwap-debug). With a
+  // ticker: that symbol's full state. Without: a summary — phase counts plus
+  // the names currently "loaded" (≥ below_bars_min candles under VWAP, i.e.
+  // one close over the line away from a reclaim) and the open episodes.
+  debug(ticker?: string, nowSec = Math.floor(Date.now() / 1000)): Record<string, unknown> {
+    const describe = (t: string, st: SymbolState) => {
+      const vwap = st.vol > 0 ? st.pxVol / st.vol : null;
+      return {
+        ticker: t,
+        phase: st.phase,
+        anchor: st.anchor,
+        anchor_ts: st.anchorTs,
+        tape_min: Math.round((st.lastTs - st.anchorTs) / 60),
+        history_ok: st.lastTs - st.anchorTs >= VWAP_RECLAIM.min_history_sec,
+        vwap: vwap != null ? +vwap.toFixed(4) : null,
+        last_close: st.lastClose,
+        pct_vs_vwap: vwap ? +((st.lastClose / vwap - 1) * 100).toFixed(2) : null,
+        last_bar_age_s: nowSec - st.lastTs,
+        candles_closed: st.recentVols.length >= VWAP_RECLAIM.vol_ratio_lookback ? `${VWAP_RECLAIM.vol_ratio_lookback}+` : st.recentVols.length,
+        below_count: st.belowCount,
+        loaded: st.phase === 'idle' && st.belowCount >= VWAP_RECLAIM.below_bars_min,
+        episodes: st.episodes,
+        reclaim: st.reclaim ? { ts: st.reclaim.ts, price: st.reclaim.price, vwap: +st.reclaim.vwap.toFixed(4), below_bars: st.reclaim.belowBars } : null,
+        peak_pct: +st.peakPct.toFixed(2),
+        forming: st.cur ? { bucket: st.cur.bucket, close: st.cur.close, prints: st.cur.prints, notional: Math.round(st.cur.notional) } : null,
+        session_volume: st.vol,
+      };
+    };
+    if (ticker) {
+      const st = this.state.get(ticker.toUpperCase());
+      return st ? describe(ticker.toUpperCase(), st) : { ticker: ticker.toUpperCase(), tracked: false };
+    }
+    const phases: Record<Phase, number> = { idle: 0, reclaimed: 0, confirmed: 0 };
+    const loaded: Array<ReturnType<typeof describe>> = [];
+    const open: Array<ReturnType<typeof describe>> = [];
+    let partial = 0;
+    for (const [t, st] of this.state) {
+      phases[st.phase] += 1;
+      if (st.anchor === 'partial') partial += 1;
+      if (st.phase !== 'idle') open.push(describe(t, st));
+      else if (st.belowCount >= VWAP_RECLAIM.below_bars_min) loaded.push(describe(t, st));
+    }
+    loaded.sort((a, b) => b.below_count - a.below_count);
+    return {
+      tracked: this.state.size,
+      partial_anchors: partial,
+      started_at: this.startedAt,
+      phases,
+      knobs: VWAP_RECLAIM,
+      open_episodes: open,
+      loaded: loaded.slice(0, 40),
+      loaded_total: loaded.length,
+    };
+  }
+
   // Drop per-session state (the midnight-ET sidecar respawn). VWAP itself
   // rolls on the 04:00 session key inside addBar, so this is just hygiene.
   reset(): void {

@@ -94,6 +94,17 @@ router.get('/ema-debug', authMiddleware, (req, res) => {
   res.json({ data: { ticker, layers: tickfeed.emaSnapshot(ticker) } });
 });
 
+// GET /api/screener/vwap-debug[?ticker=X] — live ↑ VWAP reclaim tracker
+// state. Without a ticker: phase counts, open episodes and the "loaded"
+// names (≥5 closed 1m candles under VWAP — one close over the line from a
+// reclaim). With one: that symbol's anchor, tape, VWAP, below-count, phase.
+// Compare `vwap` with TV's Session VWAP on the same chart; residual gap =
+// feed-visible (EQUS.MINI) vs consolidated volume + a partial anchor.
+router.get('/vwap-debug', authMiddleware, (req, res) => {
+  const ticker = typeof req.query.ticker === 'string' && req.query.ticker.trim() ? req.query.ticker.toUpperCase() : undefined;
+  res.json({ data: tickfeed.vwapDebug(ticker) });
+});
+
 // GET /api/screener/cycles — paginated history.
 router.get('/cycles', authMiddleware, async (req, res) => {
   const limit = Math.min(parseInt(String(req.query.limit ?? '50'), 10) || 50, 200);
