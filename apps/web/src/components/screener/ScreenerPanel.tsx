@@ -138,7 +138,7 @@ export function ScreenerPanel({ payload, connected }: ScreenerPanelProps) {
               stopPropagation
               style={{ color: '#fff', fontWeight: 600 }}
             />
-            {row.is_fresh_news && <span title="Fresh news this cycle"> 🚨</span>}
+            {row.is_fresh_news && <span> 🚨</span>}
             {row.vwap_reclaim && (
               <Tooltip title="Reclaimed VWAP this cycle — crossed from below to above">
                 <span style={{ color: '#52c41a', fontWeight: 700, marginLeft: 4 }}>↑VWAP</span>

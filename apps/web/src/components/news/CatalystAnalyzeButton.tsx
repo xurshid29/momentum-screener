@@ -61,7 +61,6 @@ export function CatalystAnalyzeButton({ articleId, initial, size = 14 }: Props) 
     >
       <button
         type="button"
-        title={data ? `Catalyst: ${data.impact_score}` : 'Analyze with AI'}
         onClick={(e) => e.stopPropagation()}
         style={{
           background: 'transparent',

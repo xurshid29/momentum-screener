@@ -185,7 +185,6 @@ function WatchlistItem({
       <Button
         type="text"
         size="small"
-        title="Remove from watchlist"
         icon={<CloseOutlined style={{ fontSize: 10, color: '#888' }} />}
         onClick={(e) => { e.stopPropagation(); onRemove(entry.ticker); }}
         style={{ width: 22, height: 22, padding: 0, alignSelf: 'center', marginRight: 2, flex: '0 0 auto' }}

@@ -140,7 +140,7 @@ export function ContinuationTable({ rows: allRows, payload, onOpenCatalyst }: Pr
                 style={{ color: '#fff', fontWeight: 600 }}
               />
               {live?.is_fresh_news && (
-                <span title="Fresh news this cycle"> 🚨</span>
+                <span> 🚨</span>
               )}
               {hasRecentNews && (
                 <CatalystBadge

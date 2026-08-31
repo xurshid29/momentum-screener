@@ -1,6 +1,7 @@
 // Catalyst marker for a screener / sidebar row. Tier-colored fire icon
-// signals strength at a glance; tooltip carries the precise score, type,
-// and reason; clicking opens the catalyst/news modal upstream.
+// signals strength at a glance; clicking opens the catalyst/news modal
+// upstream (which carries the precise score, type and reason — hover
+// tooltips were retired dashboard-wide 2026-08-31).
 //
 //   ≥70  🔥🔥 red    — major catalyst
 //   40+  🔥    orange — strong
@@ -18,12 +19,8 @@ import { FireBadge } from './FireBadge';
 // 🚀 hype marker thresholds:
 //   HYPE_SHOW  — show the rocket at all (notable buzzword/crowd pull)
 //   HYPE_HIGH  — colour it orange (strong hype)
-//   QUALITY_LOW — below this catalyst quality, a high-hype name is a "pump
-//                 candidate" (the STI case: buzzword PR that draws a crowd
-//                 without substance) → stronger tooltip warning.
 const HYPE_SHOW = 50;
 const HYPE_HIGH = 60;
-const QUALITY_LOW = 50;
 
 interface Props {
   score: number | null;
@@ -35,7 +32,9 @@ interface Props {
                     // 12 for the compact Ignition sidebar.
 }
 
-export function CatalystBadge({ score, hype, reason, type, onOpen, size = 18 }: Props) {
+// `reason`/`type` stay in Props (callers still pass them; the modal shows
+// them) but are no longer read here since the hover tooltip went away.
+export function CatalystBadge({ score, hype, onOpen, size = 18 }: Props) {
   // stopPropagation so opening the modal doesn't also re-select the row.
   const open = (e: MouseEvent) => {
     e.stopPropagation();
@@ -46,15 +45,9 @@ export function CatalystBadge({ score, hype, reason, type, onOpen, size = 18 }: 
   // hyped case (STI) isn't hidden. A high-hype + low-quality name is a "pump
   // candidate" (catch the spike, don't hold); otherwise it's just elevated
   // crowd interest. The rocket dims slightly below HYPE_HIGH.
-  const lowQuality = score == null || score < QUALITY_LOW;
   const pump =
     hype != null && hype >= HYPE_SHOW ? (
       <span
-        title={
-          hype >= HYPE_HIGH && lowQuality
-            ? `Pump candidate — hype ${hype}, low catalyst quality. Catch the spike, don't hold. Click for news.`
-            : `Hype ${hype} — elevated crowd/pump potential. Click for news.`
-        }
         onClick={open}
         style={{
           marginLeft: 4,
@@ -72,7 +65,6 @@ export function CatalystBadge({ score, hype, reason, type, onOpen, size = 18 }: 
       <>
         {pump}
         <span
-          title="Catalyst score pending — click for news"
           onClick={open}
           style={{ marginLeft: 4, opacity: 0.55, cursor: 'pointer', fontSize: size <= 12 ? 11 : undefined }}
         >
@@ -82,11 +74,10 @@ export function CatalystBadge({ score, hype, reason, type, onOpen, size = 18 }: 
     );
   }
   if (score < 15) return pump;
-  const tooltip = `${score} · ${type ?? ''}${reason ? ` — ${reason}` : ''} · click for news`.trim();
   return (
     <>
       {pump}
-      <span title={tooltip} onClick={open} style={{ marginLeft: 4, cursor: 'pointer' }}>
+      <span onClick={open} style={{ marginLeft: 4, cursor: 'pointer' }}>
         <FireBadge score={score} size={size} />
       </span>
     </>

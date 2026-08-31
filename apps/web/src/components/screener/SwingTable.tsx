@@ -71,7 +71,7 @@ export function SwingTable({ rows: allRows, onOpenCatalyst }: Props) {
               stopPropagation
               style={{ color: '#fff', fontWeight: 600 }}
             />
-            {row.is_fresh_news && <span title="Fresh news this cycle"> 🚨</span>}
+            {row.is_fresh_news && <span> 🚨</span>}
             {row.has_today_news && (
               <CatalystBadge
                 score={row.catalyst?.score ?? null}

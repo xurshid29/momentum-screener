@@ -112,3 +112,13 @@ body {
 .ema-confirm-fresh {
   animation: ema-confirm-pulse 1.4s ease-in-out infinite alternate;
 }
+
+/* No hover tooltips anywhere (operator's call, 2026-08-31). Every antd
+   <Tooltip> — the Table header "Click to sort" tip included — renders into
+   an .ant-tooltip portal; hiding the portal retires them all without
+   touching the ~70 call sites (reversible: delete this rule). Popover and
+   Popconfirm are click UIs and keep working. Native title= attributes were
+   removed at their call sites the same day. */
+.ant-tooltip {
+  display: none !important;
+}

@@ -476,14 +476,9 @@ function VwapItem({ item, selected, onSelect }: { item: VwapReclaimItem; selecte
   if (item.episode > 1) meta.push(`#${item.episode}`);
   meta.push(`${ago} ago`);
   const pct = item.pct_vs_vwap;
-  const title = `Reclaimed $${item.reclaim_price.toFixed(2)} after ${item.below_bars} closed 1m candles under VWAP` +
-    ` · peak +${item.peak_pct.toFixed(1)}% above` +
-    (item.anchor === 'partial' ? ' · VWAP anchored after 04:00 ET (late subscription / mid-session boot)' : ' · session VWAP from 04:00 ET') +
-    ` · via ${item.source}`;
   return (
     <div
       onClick={() => onSelect(item.ticker)}
-      title={title}
       style={{
         display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
         padding: '5px 8px', borderBottom: `1px solid ${s.row}`, cursor: 'pointer',
@@ -568,7 +563,6 @@ function RadarItem({ item, selected, onSelect, warned }: {
         </span>
       </div>
       <div
-        title={item.title}
         style={{
           fontSize: 10,
           color: '#a89bc0',
@@ -653,7 +647,7 @@ function IgnitionItem({
               </span>
             )}
             {row.is_fresh_news && (
-              <span title="Fresh news this cycle" style={{ marginLeft: 4, fontSize: 11 }}>🚨</span>
+              <span style={{ marginLeft: 4, fontSize: 11 }}>🚨</span>
             )}
             {row.has_today_news && (
               <CatalystBadge
@@ -695,7 +689,6 @@ function IgnitionItem({
       <Button
         type="text"
         size="small"
-        title="Hide for today"
         icon={<CloseOutlined style={{ fontSize: 10, color: '#888' }} />}
         onClick={(e) => { e.stopPropagation(); onHide(row.ticker); }}
         style={{ width: 22, height: 22, padding: 0, alignSelf: 'center', marginRight: 2, flex: '0 0 auto' }}
