@@ -288,9 +288,11 @@ function DetailsTab({ ticker, meta, news }: DetailsTabProps) {
         <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 20 }}>{sub}</Text>
       )}
 
-      {/* 6 columns × 2 rows. Items listed top-to-bottom within each column,
-          then left-to-right across columns. Shs Out intentionally omitted —
-          Float carries the same trading signal. */}
+      {/* 2 rows, column-major: items fill top-to-bottom within each column,
+          left-to-right across columns; the column count follows the item
+          count. A null pads a half-empty column so related pairs stay
+          together. Shs Out intentionally omitted — Float carries the same
+          trading signal. */}
       <StatsGrid
         items={[
           { label: 'Market Cap',    value: fmtMcap(meta?.mcap_m) },
@@ -311,6 +313,7 @@ function DetailsTab({ ticker, meta, news }: DetailsTabProps) {
           { label: 'RVol Day',      value: fmtRelVol(meta?.rel_volume) },
           { label: 'RVol 5m',       value: fmtBigPct(meta?.rel_vol_5min) },
           { label: 'RVol 1m',       value: fmtBigPct(meta?.rel_vol_1min) },
+          null, // pad — keeps the Insider and Inst pairs in their own columns
           { label: 'Insider Own',   value: fmtPct(meta?.insider_own_pct) },
           { label: 'Insider Trans', value: <Coloured color={colorInsiderTrans(num(meta?.insider_trans_pct))}>{fmtPct(meta?.insider_trans_pct)}</Coloured> },
           { label: 'Inst Own',      value: fmtPct(meta?.inst_own_pct) },
@@ -384,16 +387,19 @@ function colorInstTrans(v: number | null): string | undefined {
 }
 
 interface StatsGridProps {
-  items: { label: string; value: React.ReactNode }[];
+  // null = an intentionally empty slot (pads a half-filled column).
+  items: ({ label: string; value: React.ReactNode } | null)[];
 }
 
 function StatsGrid({ items }: StatsGridProps) {
-  // 6 columns × 2 rows, column-major layout. Each "column" is a label+value
-  // pair; pairs are separated by a fixed-width spacer so the gap between pairs
-  // reads wider than the in-pair gap. A `1fr` filler trailing the last pair
-  // absorbs leftover panel width.
-  const COLUMNS = 6;
+  // 2-row column-major layout. Each "column" is a label+value pair; pairs are
+  // separated by a fixed-width spacer so the gap between pairs reads wider
+  // than the in-pair gap. A `1fr` filler trailing the last pair absorbs
+  // leftover panel width. COLUMNS is derived from the item count — a
+  // hard-coded 6 once stranded the 13th stat (Inst Trans) in an implicit
+  // grid column past the filler, glued to the panel's right edge.
   const ROWS = 2;
+  const COLUMNS = Math.max(1, Math.ceil(items.length / ROWS));
   const trackParts: string[] = [];
   for (let i = 0; i < COLUMNS; i++) {
     trackParts.push('max-content', 'max-content');
@@ -413,6 +419,7 @@ function StatsGrid({ items }: StatsGridProps) {
       }}
     >
       {items.map((it, i) => {
+        if (!it) return null;
         const colGroup = Math.floor(i / ROWS);
         const row = (i % ROWS) + 1;
         const labelCol = colGroup * 3 + 1;
