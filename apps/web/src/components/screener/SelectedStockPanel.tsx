@@ -310,14 +310,13 @@ function DetailsTab({ ticker, meta, news }: DetailsTabProps) {
           { label: 'Avg Vol',       value: fmtVolume(meta?.avg_volume) },
           { label: 'Short Float',   value: <Coloured color={colorShortFloat(num(meta?.short_float_pct))}>{fmtPct(meta?.short_float_pct)}</Coloured> },
           { label: 'Short Ratio',   value: fmtNumber(meta?.short_ratio, 2) },
-          { label: 'RVol Day',      value: fmtRelVol(meta?.rel_volume) },
-          { label: 'RVol 5m',       value: fmtBigPct(meta?.rel_vol_5min) },
-          { label: 'RVol 1m',       value: fmtBigPct(meta?.rel_vol_1min) },
-          null, // pad — keeps the Insider and Inst pairs in their own columns
           { label: 'Insider Own',   value: fmtPct(meta?.insider_own_pct) },
           { label: 'Insider Trans', value: <Coloured color={colorInsiderTrans(num(meta?.insider_trans_pct))}>{fmtPct(meta?.insider_trans_pct)}</Coloured> },
           { label: 'Inst Own',      value: fmtPct(meta?.inst_own_pct) },
           { label: 'Inst Trans',    value: <Coloured color={colorInstTrans(num(meta?.inst_trans_pct))}>{fmtPct(meta?.inst_trans_pct)}</Coloured> },
+          { label: 'RVol Day',      value: fmtRelVol(meta?.rel_volume) },
+          { label: 'RVol 5m',       value: fmtBigPct(meta?.rel_vol_5min) },
+          { label: 'RVol 1m',       value: fmtBigPct(meta?.rel_vol_1min) },
         ]}
       />
 
